@@ -50,7 +50,7 @@
       background: #fff;
     }
 
-    /* Controls panel (IDs REQUIRED by docs/src/index.js) */
+    /* Controls panel (DOM only; index.js wires listeners) */
     #controlPanel {
       position: fixed;
       top: 16px;
@@ -246,7 +246,7 @@
       display:none;
     }
 
-    /* Zero-leakage 3D mode */
+    /* Zero-leakage 3D mode (driven by views.js; harmless if not set) */
     body[data-view="3d"] .page { display: none !important; }
     body[data-view="3d"] #controlPanel { display: none !important; }
 
@@ -267,7 +267,7 @@
   </style>
 </head>
 <body data-view="3d">
-  <!-- View: 3D Scene -->
+  <!-- Exactly one canvas with id="renderCanvas" -->
   <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
   <div id="statusOverlay">status...</div>
 
@@ -280,7 +280,7 @@
     </select>
   </div>
 
-  <!-- Controls panel (DOM only; index.js wires listeners) -->
+  <!-- Controls panel (must include all IDs queried by docs/src/index.js) -->
   <aside id="controlPanel" aria-label="Controls">
     <details open>
       <summary>
@@ -495,7 +495,7 @@
     </div>
   </div>
 
-  <!-- Scripts at END of body so DOM exists before index.js runs -->
+  <!-- Required script order at END of body -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script type="module" src="./src/index.js"></script>
   <script type="module">
