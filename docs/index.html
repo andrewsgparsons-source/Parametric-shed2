@@ -50,8 +50,17 @@
       background: #fff;
     }
 
-    /* Controls panel (must exist; JS in index.js wires listeners by ID) */
-    #controlPanel {
+    /* Some builds of index.js expect a UI container to exist */
+    #ui-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2147480000;
+      display: none; /* index.js may toggle this */
+    }
+
+    /* Controls container (some versions of index.js expect #controls) */
+    #controls {
       position: fixed;
       top: 16px;
       left: 16px;
@@ -59,6 +68,9 @@
       pointer-events: auto;
       max-width: min(420px, calc(100vw - 32px));
     }
+
+    /* Required controls panel */
+    #controlPanel { width: 100%; }
 
     #controlPanel details {
       background: #fff;
@@ -88,12 +100,7 @@
       background: #fff;
     }
 
-    #controlPanel form {
-      display: grid;
-      gap: 10px;
-      margin: 0;
-    }
-
+    #controlPanel form { display: grid; gap: 10px; margin: 0; }
     #controlPanel fieldset {
       border: 1px solid #e7e7e7;
       border-radius: 10px;
@@ -101,7 +108,6 @@
       margin: 0;
       min-width: 0;
     }
-
     #controlPanel legend {
       padding: 0 6px;
       font-size: 12px;
@@ -110,30 +116,10 @@
       text-transform: uppercase;
       letter-spacing: 0.02em;
     }
-
-    #controlPanel .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      align-items: center;
-    }
-
-    #controlPanel .row3 {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 8px;
-      align-items: center;
-    }
-
-    #controlPanel label {
-      display: grid;
-      gap: 4px;
-      font-size: 12px;
-      color: #222;
-    }
-
-    #controlPanel input[type="number"],
-    #controlPanel select {
+    #controlPanel .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; }
+    #controlPanel .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: center; }
+    #controlPanel label { display: grid; gap: 4px; font-size: 12px; color: #222; }
+    #controlPanel input[type="number"], #controlPanel select {
       width: 100%;
       padding: 8px 10px;
       border: 1px solid #d9d9d9;
@@ -142,29 +128,11 @@
       background: #fff;
       box-sizing: border-box;
     }
+    #controlPanel .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 4px; }
+    #controlPanel .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #222; }
+    #controlPanel .hint { font-size: 11px; color: #666; margin: 6px 0 0 0; }
 
-    #controlPanel .checks {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px 10px;
-      margin-top: 4px;
-    }
-
-    #controlPanel .check {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      font-size: 13px;
-      color: #222;
-    }
-
-    #controlPanel .hint {
-      font-size: 11px;
-      color: #666;
-      margin: 6px 0 0 0;
-    }
-
-    /* “page” layout (Base/Walls cutting lists) */
+    /* Cutting-list pages */
     .page {
       position: fixed;
       inset: 0;
@@ -178,7 +146,6 @@
       z-index: 1000;
     }
 
-    /* Shared cutting-list look & feel */
     .schedule-section { margin-bottom: 30px; }
     h2 { margin: 0 0 20px 0; text-align: center; }
     h4 {
@@ -190,7 +157,6 @@
       font-size: 14px;
       text-transform: uppercase;
     }
-
     table {
       width: 100%;
       border-collapse: collapse;
@@ -198,14 +164,7 @@
       margin-bottom: 10px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     }
-
-    th, td {
-      padding: 12px;
-      text-align: left;
-      border-bottom: 1px solid #eee;
-      font-size: 13px;
-    }
-
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }
     th { background: #f8f9fa; color: #555; }
     .sticky-table thead th { position: sticky; top: 80px; z-index: 1; }
     .totals-row td { font-weight: bold; }
@@ -218,7 +177,6 @@
       justify-content: flex-end;
       margin: 8px 0 16px 0;
     }
-
     #bomToolbar select, #bomToolbar button {
       padding: 6px 10px;
       border: 1px solid #ddd;
@@ -245,16 +203,13 @@
       display:none;
     }
 
-    /* Zero-leakage 3D mode */
-    body[data-view="3d"] .page { display: none !important; }
-
-    /* Controls visibility rule: ONLY in 3D */
-    body[data-view="base"]  #controlPanel,
-    body[data-view="walls"] #controlPanel { display: none !important; }
-    body[data-view="3d"] #controlPanel { display: block; }
+    /* Controls visible ONLY in 3D */
+    body[data-view="base"]  #controls,
+    body[data-view="walls"] #controls { display:none !important; }
+    body[data-view="3d"] #controls { display:block; }
 
     @media print {
-      #topbar, #renderCanvas, #statusOverlay, #controlPanel { display: none !important; }
+      #topbar, #renderCanvas, #statusOverlay, #controls { display: none !important; }
       body, html { overflow: visible !important; height: auto !important; background: #fff !important; }
       .page {
         padding: 0 10mm !important;
@@ -269,12 +224,11 @@
     }
   </style>
 </head>
+
 <body data-view="3d">
-  <!-- View: 3D Scene (exactly one canvas with this ID) -->
   <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
   <div id="statusOverlay">status...</div>
 
-  <!-- View switcher -->
   <div id="topbar">
     <select id="viewSelect" aria-label="Select view">
       <option value="3d" selected>3D Scene View</option>
@@ -283,141 +237,144 @@
     </select>
   </div>
 
-  <!-- Controls panel (must contain all IDs used by docs/src/index.js) -->
-  <aside id="controlPanel" aria-label="Controls">
-    <details open>
-      <summary>
-        Controls
-        <span style="font-weight:600;font-size:12px;color:#666;">(toggle)</span>
-      </summary>
+  <!-- IMPORTANT: placeholder some index.js variants expect -->
+  <div id="ui-layer" aria-hidden="true"></div>
 
-      <div class="inner">
-        <form aria-label="Shed controls">
-          <fieldset>
-            <legend>Visibility</legend>
-            <div class="checks" role="group" aria-label="Visibility toggles">
-              <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
-              <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
-              <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
-              <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
-              <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
-            </div>
-            <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
-          </fieldset>
+  <div id="controls" aria-label="Controls">
+    <aside id="controlPanel" aria-label="Controls panel">
+      <details open>
+        <summary>
+          Controls
+          <span style="font-weight:600;font-size:12px;color:#666;">(toggle)</span>
+        </summary>
 
-          <fieldset>
-            <legend>Walls</legend>
-            <div class="row">
-              <label>
-                Variant
-                <select id="wallsVariant">
-                  <option value="insulated" selected>insulated</option>
-                  <option value="basic">basic</option>
-                </select>
-              </label>
-              <label>
-                Height (mm)
-                <input id="wallHeight" type="number" inputmode="numeric" min="100" step="10" value="2400" />
-              </label>
-            </div>
+        <div class="inner">
+          <form aria-label="Shed controls">
+            <fieldset>
+              <legend>Visibility</legend>
+              <div class="checks" role="group" aria-label="Visibility toggles">
+                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
+                <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
+                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
+                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
+                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
+              </div>
+              <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
+            </fieldset>
 
-            <div class="checks" role="group" aria-label="Wall parts">
-              <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
-              <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
-              <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
-              <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
-            </div>
+            <fieldset>
+              <legend>Walls</legend>
+              <div class="row">
+                <label>
+                  Variant
+                  <select id="wallsVariant">
+                    <option value="insulated" selected>insulated</option>
+                    <option value="basic">basic</option>
+                  </select>
+                </label>
+                <label>
+                  Height (mm)
+                  <input id="wallHeight" type="number" inputmode="numeric" min="100" step="10" value="2400" />
+                </label>
+              </div>
 
-            <div class="row3" style="margin-top:10px;">
-              <label class="check" style="grid-column: 1 / -1;">
-                <input id="doorEnabled" type="checkbox" />
-                Front Door Enabled
-              </label>
+              <div class="checks" role="group" aria-label="Wall parts">
+                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
+                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
+                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
+                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
+              </div>
 
-              <label>
-                Door X (mm)
-                <input id="doorX" type="number" inputmode="numeric" min="0" step="10" value="800" />
-              </label>
+              <div class="row3" style="margin-top:10px;">
+                <label class="check" style="grid-column: 1 / -1;">
+                  <input id="doorEnabled" type="checkbox" />
+                  Front Door Enabled
+                </label>
 
-              <label>
-                Door W (mm)
-                <input id="doorW" type="number" inputmode="numeric" min="100" step="10" value="900" />
-              </label>
+                <label>
+                  Door X (mm)
+                  <input id="doorX" type="number" inputmode="numeric" min="0" step="10" value="800" />
+                </label>
 
-              <label>
-                Door H (mm)
-                <input id="doorH" type="number" inputmode="numeric" min="100" step="10" value="2000" />
-              </label>
-            </div>
-          </fieldset>
+                <label>
+                  Door W (mm)
+                  <input id="doorW" type="number" inputmode="numeric" min="100" step="10" value="900" />
+                </label>
 
-          <fieldset>
-            <legend>Dimensions</legend>
-            <div class="row">
-              <label>
-                Mode
-                <select id="dimMode">
-                  <option value="base" selected>base</option>
-                  <option value="frame">frame</option>
-                  <option value="roof">roof</option>
-                </select>
-              </label>
-              <div></div>
-            </div>
+                <label>
+                  Door H (mm)
+                  <input id="doorH" type="number" inputmode="numeric" min="100" step="10" value="2000" />
+                </label>
+              </div>
+            </fieldset>
 
-            <div class="row">
-              <label>
-                W (mm)
-                <input id="wInput" type="number" inputmode="numeric" min="1" step="10" value="3000" />
-              </label>
+            <fieldset>
+              <legend>Dimensions</legend>
+              <div class="row">
+                <label>
+                  Mode
+                  <select id="dimMode">
+                    <option value="base" selected>base</option>
+                    <option value="frame">frame</option>
+                    <option value="roof">roof</option>
+                  </select>
+                </label>
+                <div></div>
+              </div>
 
-              <label>
-                D (mm)
-                <input id="dInput" type="number" inputmode="numeric" min="1" step="10" value="4000" />
-              </label>
-            </div>
-          </fieldset>
+              <div class="row">
+                <label>
+                  W (mm)
+                  <input id="wInput" type="number" inputmode="numeric" min="1" step="10" value="3000" />
+                </label>
 
-          <fieldset>
-            <legend>Roof Overhang (mm)</legend>
-            <div class="row">
-              <label>
-                Uniform
-                <input id="roofOverUniform" type="number" inputmode="numeric" min="0" step="1" value="0" />
-              </label>
-              <div></div>
-            </div>
+                <label>
+                  D (mm)
+                  <input id="dInput" type="number" inputmode="numeric" min="1" step="10" value="4000" />
+                </label>
+              </div>
+            </fieldset>
 
-            <div class="row">
-              <label>
-                Front
-                <input id="roofOverFront" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
-              </label>
+            <fieldset>
+              <legend>Roof Overhang (mm)</legend>
+              <div class="row">
+                <label>
+                  Uniform
+                  <input id="roofOverUniform" type="number" inputmode="numeric" min="0" step="1" value="0" />
+                </label>
+                <div></div>
+              </div>
 
-              <label>
-                Back
-                <input id="roofOverBack" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
-              </label>
-            </div>
+              <div class="row">
+                <label>
+                  Front
+                  <input id="roofOverFront" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
+                </label>
 
-            <div class="row">
-              <label>
-                Left
-                <input id="roofOverLeft" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
-              </label>
+                <label>
+                  Back
+                  <input id="roofOverBack" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
+                </label>
+              </div>
 
-              <label>
-                Right
-                <input id="roofOverRight" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
-              </label>
-            </div>
-          </fieldset>
-        </form>
-      </div>
-    </details>
-  </aside>
+              <div class="row">
+                <label>
+                  Left
+                  <input id="roofOverLeft" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
+                </label>
 
-  <!-- View: Base Cutting List -->
+                <label>
+                  Right
+                  <input id="roofOverRight" type="number" inputmode="numeric" min="0" step="1" placeholder="(blank = uniform)" />
+                </label>
+              </div>
+            </fieldset>
+          </form>
+        </div>
+      </details>
+    </aside>
+  </div>
+
   <div id="bomPage" class="page" aria-hidden="true">
     <h2 tabindex="-1">Master Cutting & Assembly Schedule</h2>
 
@@ -478,7 +435,6 @@
     </div>
   </div>
 
-  <!-- View: Walls Cutting List -->
   <div id="wallsBomPage" class="page" aria-hidden="true">
     <h2 tabindex="-1">Walls Cutting List</h2>
     <div class="schedule-section">
@@ -498,9 +454,9 @@
     </div>
   </div>
 
-  <!-- Required script order at END of body -->
+  <!-- REQUIRED script order at END of body -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
-  <script type="module" src="src/index.js"></script>
+  <script type="module" src="./src/index.js"></script>
   <script type="module">
     import { initViews } from './src/views.js';
     initViews();
