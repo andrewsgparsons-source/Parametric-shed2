@@ -1,11 +1,11 @@
-<script type="module">
 // FILE: docs/src/index.js
-// NO-DRIFT: Orchestration only. Keeps existing parameters, dimensions, and element logic stable.
+// NO-DRIFT: Orchestration only. Extends door UI to support multiple doors without changing base/BOM algorithms.
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;
 window.__dbg.initFinished = false;
 
+// Avoid newer syntax that can break on some Android WebViews (no ??=).
 function dbgInitDefaults() {
   if (window.__dbg.engine === undefined) window.__dbg.engine = null;
   if (window.__dbg.scene === undefined) window.__dbg.scene = null;
@@ -40,6 +40,7 @@ import { renderBOM } from "./bom/index.js";
       return;
     }
 
+    // Boot renderer
     let ctx = null;
     try {
       ctx = boot(canvas);
@@ -52,6 +53,7 @@ import { renderBOM } from "./bom/index.js";
     window.__dbg.scene = (ctx && ctx.scene) ? ctx.scene : null;
     window.__dbg.camera = (ctx && ctx.camera) ? ctx.camera : null;
 
+    // Frames counter
     try {
       const eng = window.__dbg.engine;
       if (eng && eng.onEndFrameObservable && typeof eng.onEndFrameObservable.add === "function") {
@@ -60,8 +62,6 @@ import { renderBOM } from "./bom/index.js";
     } catch (e) {}
 
     const store = createStateStore(DEFAULTS);
-
-    const viewSelect = document.getElementById("viewSelect");
 
     const vWallsEl = document.getElementById("vWalls");
     const vBaseEl = document.getElementById("vBase");
@@ -87,13 +87,13 @@ import { renderBOM } from "./bom/index.js";
     const wallsVariantEl = document.getElementById("wallsVariant");
     const wallHeightEl = document.getElementById("wallHeight");
 
-    // Doors (existing IDs retained)
+    // Existing door control IDs (still used)
     const doorEnabledEl = document.getElementById("doorEnabled");
     const doorXEl = document.getElementById("doorX");
     const doorWEl = document.getElementById("doorW");
     const doorHEl = document.getElementById("doorH");
 
-    // Doors (new multi-door UI)
+    // New multi-door UI
     const doorListEl = document.getElementById("doorList");
     const doorAddBtn = document.getElementById("doorAddBtn");
     const doorRemoveBtn = document.getElementById("doorRemoveBtn");
@@ -148,7 +148,6 @@ import { renderBOM } from "./bom/index.js";
 
     function resume3D() {
       const engine = window.__dbg.engine;
-      const scene = window.__dbg.scene;
       const camera = window.__dbg.camera;
 
       canvas.style.display = "block";
@@ -160,7 +159,6 @@ import { renderBOM } from "./bom/index.js";
 
       try { if (engine && typeof engine.resize === "function") engine.resize(); } catch (e) {}
       try { if (camera && typeof camera.attachControl === "function") camera.attachControl(canvas, true); } catch (e) {}
-      try { if (scene && typeof scene.render === "function") scene.render(); } catch (e) {}
     }
 
     function safeDispose() {
@@ -198,33 +196,10 @@ import { renderBOM } from "./bom/index.js";
       }
     }
 
-    function getWallThicknessMm(state) {
-      const variant = state?.walls?.variant || "insulated";
-      const secH = state?.walls?.[variant]?.section?.h;
-      const h = Math.floor(Number(secH));
-      if (Number.isFinite(h) && h > 0) return h;
-      return (variant === "basic") ? 75 : 100;
-    }
-
-    function wallRunLengthMm(state, wall) {
-      const R = resolveDims(state);
-      const fw = Math.max(1, Math.floor(R.frame.w_mm));
-      const fd = Math.max(1, Math.floor(R.frame.d_mm));
-      const thk = getWallThicknessMm(state);
-
-      if (wall === "front" || wall === "back") return fw;
-      // Left/Right run between front/back (corner-safe)
-      return Math.max(1, fd - 2 * thk);
-    }
-
-    function clampDoorOffset(offset, doorW, wallLen) {
-      const maxX = Math.max(0, wallLen - doorW);
-      return Math.max(0, Math.min(maxX, offset));
-    }
-
+    // ---- Multi-door helpers (no drift elsewhere) ----
     function getDoors(state) {
-      const arr = state?.walls?.openings;
-      return Array.isArray(arr) ? arr : [];
+      const arr = state && state.walls && Array.isArray(state.walls.openings) ? state.walls.openings : [];
+      return arr;
     }
 
     function findDoor(state, id) {
@@ -279,37 +254,55 @@ import { renderBOM } from "./bom/index.js";
       upsertDoor({ ...cur, ...patch });
     }
 
+    function currentWallLength(state, wallName) {
+      const R = resolveDims(state);
+      const fw = Math.max(1, Math.floor(R.frame.w_mm));
+      const fd = Math.max(1, Math.floor(R.frame.d_mm));
+      if (wallName === "left" || wallName === "right") return fd;
+      return fw;
+    }
+
+    function clampDoorX(x, doorW, wallLen) {
+      const maxX = Math.max(0, wallLen - doorW);
+      return Math.max(0, Math.min(maxX, x));
+    }
+
     function rebuildDoorList(state) {
       if (!doorListEl) return;
       const doors = getDoors(state);
-
       const curId = ensureSelectedDoor(state);
 
-      const opts = doors.map(d => {
-        const wall = d?.wall || "front";
-        const label = `${d.id} (${wall})`;
-        const sel = (d.id === curId) ? ' selected' : '';
-        return `<option value="${escapeAttr(d.id)}"${sel}>${escapeHtml(label)}</option>`;
-      });
+      if (doors.length === 0) {
+        doorListEl.innerHTML = `<option value="" selected>(no doors)</option>`;
+        doorListEl.disabled = true;
+        if (doorRemoveBtn) doorRemoveBtn.disabled = true;
+        return;
+      }
 
-      doorListEl.innerHTML = opts.join("") || `<option value="" selected>(no doors)</option>`;
-      doorListEl.disabled = doors.length === 0;
-      if (doorRemoveBtn) doorRemoveBtn.disabled = doors.length === 0;
+      doorListEl.disabled = false;
+      if (doorRemoveBtn) doorRemoveBtn.disabled = false;
+
+      doorListEl.innerHTML = doors.map(d => {
+        const wall = (d && d.wall) ? d.wall : "front";
+        const label = `${d.id} (${wall})`;
+        const sel = d.id === curId ? " selected" : "";
+        return `<option value="${escapeAttr(d.id)}"${sel}>${escapeHtml(label)}</option>`;
+      }).join("");
     }
 
     function syncDoorUi(state) {
       const id = ensureSelectedDoor(state);
       const d = id ? findDoor(state, id) : null;
 
-      if (doorWallEl) doorWallEl.value = d?.wall || "front";
+      if (doorWallEl) doorWallEl.value = d && d.wall ? d.wall : "front";
+      if (doorEnabledEl) doorEnabledEl.checked = !!(d && d.enabled);
 
-      if (doorEnabledEl) doorEnabledEl.checked = !!d?.enabled;
-
-      if (doorXEl) doorXEl.value = String(d?.x_mm ?? 0);
-      if (doorWEl) doorWEl.value = String(d?.width_mm ?? 900);
-      if (doorHEl) doorHEl.value = String(d?.height_mm ?? 2000);
+      if (doorXEl) doorXEl.value = String((d && d.x_mm != null) ? d.x_mm : 0);
+      if (doorWEl) doorWEl.value = String((d && d.width_mm != null) ? d.width_mm : 900);
+      if (doorHEl) doorHEl.value = String((d && d.height_mm != null) ? d.height_mm : 2000);
     }
 
+    // ---- UI sync ----
     function syncUiFromState(state) {
       try {
         if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
@@ -387,7 +380,7 @@ import { renderBOM } from "./bom/index.js";
         "LastError: " + err;
     }
 
-    // Visibility listeners (unchanged)
+    // ---- Existing listeners (unchanged) ----
     if (vWallsEl) {
       vWallsEl.addEventListener("change", (e) => {
         const s = store.getState();
@@ -398,6 +391,7 @@ import { renderBOM } from "./bom/index.js";
         else store.setState({ vis: { walls: on } });
       });
     }
+
     if (vBaseEl) vBaseEl.addEventListener("change", (e) => store.setState({ vis: { base: !!e.target.checked } }));
     if (vFrameEl) vFrameEl.addEventListener("change", (e) => store.setState({ vis: { frame: !!e.target.checked } }));
     if (vInsEl) vInsEl.addEventListener("change", (e) => store.setState({ vis: { ins: !!e.target.checked } }));
@@ -458,7 +452,7 @@ import { renderBOM } from "./bom/index.js";
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", () => store.setState({ walls: { variant: wallsVariantEl.value } }));
     if (wallHeightEl) wallHeightEl.addEventListener("input", () => store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } }));
 
-    // Multi-door wiring
+    // ---- Multi-door UI events ----
     if (doorListEl) {
       doorListEl.addEventListener("change", () => {
         selectedDoorId = doorListEl.value || null;
@@ -470,15 +464,15 @@ import { renderBOM } from "./bom/index.js";
       doorAddBtn.addEventListener("click", () => {
         const s = store.getState();
         const doors = getDoors(s);
-        const used = new Set(doors.map(d => d?.id).filter(Boolean));
+        const used = new Set(doors.map(d => d && d.id).filter(Boolean));
         let i = 1;
         while (used.has("door" + i)) i++;
         const id = "door" + i;
 
         const wall = "front";
-        const wallLen = wallRunLengthMm(s, wall);
+        const wallLen = currentWallLength(s, wall);
         const width_mm = 900;
-        const x_mm = clampDoorOffset(Math.floor((wallLen - width_mm) / 2), width_mm, wallLen);
+        const x_mm = clampDoorX(Math.floor((wallLen - width_mm) / 2), width_mm, wallLen);
 
         upsertDoor({
           id,
@@ -511,11 +505,10 @@ import { renderBOM } from "./bom/index.js";
         if (!cur) return;
 
         const wall = doorWallEl.value || "front";
-        const wallLen = wallRunLengthMm(s, wall);
+        const wallLen = currentWallLength(s, wall);
         const w = asPosInt(cur.width_mm, 900);
         const centered = Math.floor((wallLen - w) / 2);
-        const clamped = clampDoorOffset(centered, w, wallLen);
-        upsertDoor({ ...cur, wall, x_mm: clamped });
+        upsertDoor({ ...cur, wall, x_mm: clampDoorX(centered, w, wallLen) });
       });
     }
 
@@ -534,11 +527,10 @@ import { renderBOM } from "./bom/index.js";
         }
 
         const wall = cur.wall || "front";
-        const wallLen = wallRunLengthMm(s, wall);
+        const wallLen = currentWallLength(s, wall);
         const doorW = asPosInt(cur.width_mm, 900);
         const centered = Math.floor((wallLen - doorW) / 2);
-        const clamped = clampDoorOffset(centered, doorW, wallLen);
-        upsertDoor({ ...cur, enabled: true, x_mm: clamped });
+        upsertDoor({ ...cur, enabled: true, x_mm: clampDoorX(centered, doorW, wallLen) });
       });
     }
 
@@ -551,10 +543,10 @@ import { renderBOM } from "./bom/index.js";
         if (!cur) return;
 
         const wall = cur.wall || "front";
-        const wallLen = wallRunLengthMm(s, wall);
+        const wallLen = currentWallLength(s, wall);
         const doorW = asPosInt(cur.width_mm, 900);
         const x = asNonNegInt(doorXEl.value, cur.x_mm || 0);
-        upsertDoor({ ...cur, x_mm: clampDoorOffset(x, doorW, wallLen) });
+        upsertDoor({ ...cur, x_mm: clampDoorX(x, doorW, wallLen) });
       });
     }
 
@@ -567,9 +559,9 @@ import { renderBOM } from "./bom/index.js";
         if (!cur) return;
 
         const wall = cur.wall || "front";
-        const wallLen = wallRunLengthMm(s, wall);
+        const wallLen = currentWallLength(s, wall);
         const w = asPosInt(doorWEl.value, cur.width_mm || 900);
-        const x = clampDoorOffset(cur.x_mm || 0, w, wallLen);
+        const x = clampDoorX(cur.x_mm || 0, w, wallLen);
         upsertDoor({ ...cur, width_mm: w, x_mm: x });
       });
     }
@@ -612,4 +604,3 @@ import { renderBOM } from "./bom/index.js";
     window.__dbg.initFinished = false;
   }
 })();
-</script>
