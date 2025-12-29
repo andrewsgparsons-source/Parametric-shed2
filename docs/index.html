@@ -6,7 +6,7 @@
   <title>Parametric Shed — Views</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { --primary:#007bff; --panel:#ffffff; --bg:#f0f2f5; --shadow: 0 4px 14px rgba(0,0,0,0.18); }
+    :root { --panel:#ffffff; --bg:#f0f2f5; --shadow: 0 4px 14px rgba(0,0,0,0.18); }
 
     html, body {
       width: 100%; height: 100%; margin: 0;
@@ -17,41 +17,49 @@
 
     /* 3D canvas */
     #renderCanvas {
-      position: fixed; inset: 0; width: 100vw; height: 100vh;
-      display: block; outline: none;
+      position: fixed; inset: 0;
+      width: 100vw; height: 100vh;
+      display: block;
+      outline: none;
       background: transparent;
     }
 
-    /* Top-right view selector (always visible) */
+    /* Top-right view selector */
     #topbar {
       position: fixed; top: 16px; right: 16px;
       z-index: 2147483000;
       display: flex; gap: 8px; align-items: center;
       pointer-events: auto;
     }
+
     #viewSelect {
-      padding: 10px 14px; border-radius: 8px; cursor: pointer; border: none;
-      box-shadow: var(--shadow); font-weight: 600; background: #fff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: none;
+      box-shadow: var(--shadow);
+      font-weight: 600;
+      background: #fff;
     }
 
-    /* Compact controls panel (expected by existing JS) */
-    #controlsPanel {
+    /* Controls panel (expected by docs/src/index.js) */
+    #controlPanel {
       position: fixed;
       top: 16px;
       left: 16px;
-      z-index: 2147482000;
+      z-index: 2147482500;
       pointer-events: auto;
       max-width: min(420px, calc(100vw - 32px));
     }
 
-    #controlsPanel details {
+    #controlPanel details {
       background: #fff;
       border-radius: 10px;
       box-shadow: var(--shadow);
       overflow: hidden;
     }
 
-    #controlsPanel summary {
+    #controlPanel summary {
       list-style: none;
       cursor: pointer;
       padding: 10px 12px;
@@ -63,30 +71,24 @@
       user-select: none;
       outline: none;
     }
-    #controlsPanel summary::-webkit-details-marker { display:none; }
+    #controlPanel summary::-webkit-details-marker { display: none; }
 
-    #controlsPanel .controlsInner {
+    #controlPanel .inner {
       padding: 10px 12px 12px 12px;
       max-height: min(70vh, 560px);
       overflow: auto;
       background: #fff;
     }
 
-    #controlsPanel form {
-      display: grid;
-      gap: 10px;
-      margin: 0;
-    }
-
-    #controlsPanel fieldset {
+    #controlPanel form { display: grid; gap: 10px; margin: 0; }
+    #controlPanel fieldset {
       border: 1px solid #e7e7e7;
       border-radius: 10px;
       padding: 10px;
       margin: 0;
       min-width: 0;
     }
-
-    #controlsPanel legend {
+    #controlPanel legend {
       padding: 0 6px;
       font-size: 12px;
       font-weight: 800;
@@ -95,29 +97,13 @@
       letter-spacing: 0.02em;
     }
 
-    #controlsPanel .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      align-items: center;
-    }
+    #controlPanel .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; }
+    #controlPanel .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: center; }
 
-    #controlsPanel .row3 {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 8px;
-      align-items: center;
-    }
+    #controlPanel label { display: grid; gap: 4px; font-size: 12px; color: #222; }
 
-    #controlsPanel label {
-      display: grid;
-      gap: 4px;
-      font-size: 12px;
-      color: #222;
-    }
-
-    #controlsPanel input[type="number"],
-    #controlsPanel select {
+    #controlPanel input[type="number"],
+    #controlPanel select {
       width: 100%;
       padding: 8px 10px;
       border: 1px solid #d9d9d9;
@@ -127,14 +113,14 @@
       box-sizing: border-box;
     }
 
-    #controlsPanel .checks {
+    #controlPanel .checks {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 6px 10px;
       margin-top: 4px;
     }
 
-    #controlsPanel .check {
+    #controlPanel .check {
       display: flex;
       gap: 8px;
       align-items: center;
@@ -142,40 +128,59 @@
       color: #222;
     }
 
-    #controlsPanel .hint {
+    #controlPanel .hint {
       font-size: 11px;
       color: #666;
       margin: 6px 0 0 0;
     }
 
-    /* Generic “page” layout (Views: Base & Walls cutting lists) */
+    /* “page” layout (Base/Walls cutting lists) */
     .page {
-      position: fixed; inset: 0; width: 100vw; height: 100vh;
-      background: var(--bg); display: none; overflow: auto;
-      padding: 80px 24px 24px; box-sizing: border-box; z-index: 1000;
+      position: fixed; inset: 0;
+      width: 100vw; height: 100vh;
+      background: var(--bg);
+      display: none;
+      overflow: auto;
+      padding: 80px 24px 24px;
+      box-sizing: border-box;
+      z-index: 1000;
     }
 
-    /* Shared cutting-list look & feel (mirrors Base layout) */
     .schedule-section { margin-bottom: 30px; }
     h2 { margin: 0 0 20px 0; text-align: center; }
     h4 {
       background: #333; color: #fff; padding: 10px; margin: 0;
       border-radius: 4px 4px 0 0; font-size: 14px; text-transform: uppercase;
     }
+
     table {
-      width: 100%; border-collapse: collapse; background: #fff; margin-bottom: 10px;
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      margin-bottom: 10px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #eee;
+      font-size: 13px;
+    }
     th { background: #f8f9fa; color: #555; }
     .sticky-table thead th { position: sticky; top: 80px; z-index: 1; }
     .totals-row td { font-weight: bold; }
     .subtle { color: #666; font-size: 12px; margin: 6px 0 12px 0; }
+
     #bomToolbar {
-      display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin: 8px 0 16px 0;
+      display: flex; gap: 8px; align-items: center; justify-content: flex-end;
+      margin: 8px 0 16px 0;
     }
     #bomToolbar select, #bomToolbar button {
-      padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer;
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
     }
 
     /* Diagnostics overlay (optional; default hidden) */
@@ -189,14 +194,18 @@
 
     /* Minimal data-view kill-switch for zero-leakage 3D */
     body[data-view="3d"] .page { display: none !important; }
-    body[data-view="3d"] #controlsPanel { display: none !important; }
+    body[data-view="3d"] #controlPanel { display: none !important; }
 
     @media print {
-      #topbar, #renderCanvas, #statusOverlay, #controlsPanel { display: none !important; }
+      #topbar, #renderCanvas, #statusOverlay, #controlPanel { display: none !important; }
       body, html { overflow: visible !important; height: auto !important; background: #fff !important; }
       .page {
-        padding: 0 10mm !important; box-shadow: none !important; background: #fff !important;
-        display: block !important; position: static !important; height: auto !important;
+        padding: 0 10mm !important;
+        box-shadow: none !important;
+        background: #fff !important;
+        display: block !important;
+        position: static !important;
+        height: auto !important;
       }
       #bomToolbar { display: none !important; }
       .sticky-table thead th { top: 0; }
@@ -204,11 +213,9 @@
   </style>
 </head>
 <body data-view="3d">
-  <!-- View: 3D Scene -->
   <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
   <div id="statusOverlay">status...</div>
 
-  <!-- View switcher -->
   <div id="topbar">
     <select id="viewSelect" aria-label="Select view">
       <option value="3d" selected>3D Scene View</option>
@@ -217,15 +224,13 @@
     </select>
   </div>
 
-  <!-- Controls panel (IDs required by docs/src/index.js) -->
-  <div id="controlsPanel" aria-label="Controls">
+  <aside id="controlPanel" aria-label="Controls">
     <details open>
       <summary>
         Controls
-        <span style="font-weight:600;font-size:12px;color:#666;">(hide/show)</span>
+        <span style="font-weight:600;font-size:12px;color:#666;">(toggle)</span>
       </summary>
-
-      <div class="controlsInner">
+      <div class="inner">
         <form aria-label="Shed controls">
           <fieldset>
             <legend>Visibility</legend>
@@ -236,7 +241,7 @@
               <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
               <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
             </div>
-            <p class="hint">Tip: Use keys 1/2/3 to switch views (when not typing).</p>
+            <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
           </fieldset>
 
           <fieldset>
@@ -267,7 +272,6 @@
                 <input id="doorEnabled" type="checkbox" />
                 Front Door Enabled
               </label>
-
               <label>
                 Door X (mm)
                 <input id="doorX" type="number" inputmode="numeric" min="0" step="10" value="800" />
@@ -344,9 +348,8 @@
         </form>
       </div>
     </details>
-  </div>
+  </aside>
 
-  <!-- View: Base Cutting List -->
   <div id="bomPage" class="page" aria-hidden="true">
     <h2 tabindex="-1">Master Cutting & Assembly Schedule</h2>
 
@@ -407,7 +410,6 @@
     </div>
   </div>
 
-  <!-- View: Walls Cutting List -->
   <div id="wallsBomPage" class="page" aria-hidden="true">
     <h2 tabindex="-1">Walls Cutting List</h2>
     <div class="schedule-section">
@@ -427,10 +429,8 @@
     </div>
   </div>
 
-  <!-- Babylon global FIRST -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
 
-  <!-- Modules in required order -->
   <script type="module" src="./src/index.js"></script>
   <script type="module">
     import { initViews } from './src/views.js';
