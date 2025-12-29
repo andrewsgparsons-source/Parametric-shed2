@@ -6,52 +6,77 @@
   <title>Parametric Shed — Views</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { --primary:#007bff; --panel:#ffffff; --bg:#f0f2f5; }
+    :root { --bg:#f0f2f5; --shadow: 0 4px 14px rgba(0,0,0,0.18); }
 
     html, body {
-      width: 100%; height: 100%; margin: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       background: #000;
+      overflow: hidden;
     }
 
-    /* 3D canvas */
-    #renderCanvas {
-      position: fixed; inset: 0; width: 100vw; height: 100vh;
-      display: none; outline: none;
+    #renderCanvas{
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+      display: block;
+      background: transparent;
       touch-action: none;
     }
 
-    /* Top-right view selector */
-    #topbar {
-      position: fixed; top: 16px; right: 16px;
+    #topbar{
+      position: fixed;
+      top: 16px;
+      right: 16px;
       z-index: 2147483000;
-      display: flex; gap: 8px; align-items: center;
+      display: flex;
+      gap: 8px;
+      align-items: center;
       pointer-events: auto;
     }
-    #viewSelect {
-      padding: 10px 14px; border-radius: 8px; cursor: pointer; border: none;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2); font-weight: 600; background: #fff;
+    #viewSelect{
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: none;
+      box-shadow: var(--shadow);
+      font-weight: 700;
+      background: #fff;
     }
 
-    /* Controls: visible ONLY in 3D */
-    #controlPanel {
-      position: fixed; top: 16px; left: 16px;
-      z-index: 2147482800;
-      width: min(440px, calc(100vw - 32px));
-      pointer-events: auto;
+    #ui-layer{
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2147480000;
       display: none;
     }
-    body[data-view="3d"] #controlPanel { display: block; }
-    body[data-view="base"] #controlPanel,
-    body[data-view="walls"] #controlPanel { display:none !important; }
 
-    #controlPanel details {
+    #controls{
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 2147482500;
+      pointer-events: auto;
+      max-width: min(420px, calc(100vw - 32px));
+    }
+
+    /* Controls visible ONLY in 3D */
+    body[data-view="base"]  #controls,
+    body[data-view="walls"] #controls { display:none !important; }
+    body[data-view="3d"] #controls { display:block; }
+
+    #controlPanel details{
       background: #fff;
       border-radius: 10px;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+      box-shadow: var(--shadow);
       overflow: hidden;
     }
-    #controlPanel summary {
+    #controlPanel summary{
       list-style: none;
       cursor: pointer;
       padding: 10px 12px;
@@ -63,21 +88,21 @@
       user-select: none;
       outline: none;
     }
-    #controlPanel summary::-webkit-details-marker { display:none; }
-    #controlPanel .inner {
-      padding: 10px 12px 12px;
-      max-height: min(72vh, 620px);
+    #controlPanel summary::-webkit-details-marker{ display:none; }
+    #controlPanel .inner{
+      padding: 10px 12px 12px 12px;
+      max-height: min(70vh, 560px);
       overflow: auto;
     }
-    #controlPanel form { display: grid; gap: 10px; margin: 0; }
-    #controlPanel fieldset {
+    #controlPanel form{ display:grid; gap:10px; margin:0; }
+    #controlPanel fieldset{
       border: 1px solid #e7e7e7;
       border-radius: 10px;
       padding: 10px;
       margin: 0;
       min-width: 0;
     }
-    #controlPanel legend {
+    #controlPanel legend{
       padding: 0 6px;
       font-size: 12px;
       font-weight: 900;
@@ -85,11 +110,11 @@
       text-transform: uppercase;
       letter-spacing: 0.02em;
     }
-    #controlPanel .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
-    #controlPanel .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: end; }
-    #controlPanel label { display: grid; gap: 4px; font-size: 12px; color: #222; }
-    #controlPanel input[type="number"], #controlPanel select, #controlPanel button {
-      width: 100%;
+    #controlPanel .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
+    #controlPanel .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; align-items:center; }
+    #controlPanel label{ display:grid; gap:4px; font-size:12px; color:#222; }
+    #controlPanel input[type="number"], #controlPanel select, #controlPanel button{
+      width:100%;
       padding: 8px 10px;
       border: 1px solid #d9d9d9;
       border-radius: 8px;
@@ -97,60 +122,101 @@
       background: #fff;
       box-sizing: border-box;
     }
-    #controlPanel button { cursor: pointer; }
-    #controlPanel .checks { display:grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 4px; }
-    #controlPanel .check { display:flex; gap:8px; align-items:center; font-size:13px; color:#222; }
-    #controlPanel .hint { font-size: 11px; color: #666; margin: 6px 0 0 0; }
+    #controlPanel button{
+      cursor: pointer;
+      font-weight: 700;
+    }
+    #controlPanel .checks{ display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:4px; }
+    #controlPanel .check{ display:flex; gap:8px; align-items:center; font-size:13px; color:#222; }
+    #controlPanel .hint{ font-size:11px; color:#666; margin:6px 0 0 0; }
 
-    /* Pages */
-    .page {
-      position: fixed; inset: 0; width: 100vw; height: 100vh;
-      background: var(--bg); display: none; overflow: auto;
-      padding: 80px 24px 24px; box-sizing: border-box; z-index: 1000;
+    .page{
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      background: var(--bg);
+      display: none;
+      overflow: auto;
+      padding: 80px 24px 24px;
+      box-sizing: border-box;
+      z-index: 1000;
     }
+    .schedule-section{ margin-bottom: 30px; }
+    h2{ margin: 0 0 20px 0; text-align:center; }
+    h4{
+      background:#333;
+      color:#fff;
+      padding:10px;
+      margin:0;
+      border-radius:4px 4px 0 0;
+      font-size:14px;
+      text-transform:uppercase;
+    }
+    table{
+      width:100%;
+      border-collapse:collapse;
+      background:#fff;
+      margin-bottom:10px;
+      box-shadow:0 2px 8px rgba(0,0,0,0.05);
+    }
+    th, td{ padding:12px; text-align:left; border-bottom:1px solid #eee; font-size:13px; }
+    th{ background:#f8f9fa; color:#555; }
+    .sticky-table thead th{ position:sticky; top:80px; z-index:1; }
+    .totals-row td{ font-weight:bold; }
+    .subtle{ color:#666; font-size:12px; margin:6px 0 12px 0; }
 
-    .schedule-section { margin-bottom: 30px; }
-    h2 { margin: 0 0 20px 0; text-align: center; }
-    h4 {
-      background: #333; color: #fff; padding: 10px; margin: 0;
-      border-radius: 4px 4px 0 0; font-size: 14px; text-transform: uppercase;
+    #bomToolbar{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      justify-content:flex-end;
+      margin:8px 0 16px 0;
     }
-    table {
-      width: 100%; border-collapse: collapse; background: #fff; margin-bottom: 10px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }
-    th { background: #f8f9fa; color: #555; }
-    .sticky-table thead th { position: sticky; top: 80px; z-index: 1; }
-    .totals-row td { font-weight: bold; }
-    .subtle { color: #666; font-size: 12px; margin: 6px 0 12px 0; }
-    #bomToolbar {
-      display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin: 8px 0 16px 0;
-    }
-    #bomToolbar select, #bomToolbar button {
-      padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer;
-      width: auto;
+    #bomToolbar select, #bomToolbar button{
+      padding:6px 10px;
+      border:1px solid #ddd;
+      border-radius:6px;
+      background:#fff;
+      cursor:pointer;
     }
 
     #statusOverlay{
-      position:fixed; top:10px; left:50%; transform:translateX(-50%);
-      z-index:2147483000; background:rgba(0,0,0,0.75); color:#fff;
-      padding:8px 10px; border-radius:8px; font:12px/1.3 monospace;
-      max-width:95vw; white-space:pre-wrap; pointer-events:none;
-      display:none;
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2147483000;
+      background: rgba(0,0,0,0.75);
+      color: #fff;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font: 12px/1.3 monospace;
+      max-width: 95vw;
+      white-space: pre-wrap;
+      pointer-events: none;
+      display: none;
     }
 
-    @media print {
-      #topbar, #renderCanvas, #statusOverlay, #controlPanel { display: none !important; }
-      body, html { overflow: visible !important; height: auto !important; }
-      .page { padding: 0 10mm !important; box-shadow: none !important; background: #fff !important; display: block !important; position: static !important; height: auto !important; }
-      #bomToolbar { display: none !important; }
-      .sticky-table thead th { top: 0; }
+    @media print{
+      #topbar, #renderCanvas, #statusOverlay, #controls { display:none !important; }
+      body, html { overflow: visible !important; height:auto !important; background:#fff !important; }
+      .page{
+        padding: 0 10mm !important;
+        box-shadow:none !important;
+        background:#fff !important;
+        display:block !important;
+        position:static !important;
+        height:auto !important;
+      }
+      #bomToolbar{ display:none !important; }
+      .sticky-table thead th{ top:0; }
     }
   </style>
 </head>
+
 <body data-view="3d">
-  <canvas id="renderCanvas" aria-hidden="false" tabindex="0"></canvas>
+  <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
   <div id="statusOverlay">status...</div>
 
   <div id="topbar">
@@ -161,127 +227,156 @@
     </select>
   </div>
 
-  <!-- Controls panel (required IDs + new Doors UI) -->
-  <aside id="controlPanel" aria-label="Controls panel">
-    <details open>
-      <summary>Controls <span style="font-weight:700;font-size:12px;color:#666;">(toggle)</span></summary>
-      <div class="inner">
-        <form aria-label="Shed controls">
-          <fieldset>
-            <legend>Visibility</legend>
-            <div class="checks" role="group" aria-label="Visibility toggles">
-              <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
-              <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
-              <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
-              <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
-              <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
-            </div>
-          </fieldset>
+  <div id="ui-layer" aria-hidden="true"></div>
 
-          <fieldset>
-            <legend>Wall parts</legend>
-            <div class="checks" role="group" aria-label="Wall parts toggles">
-              <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
-              <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
-              <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
-              <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
-            </div>
-            <div class="row" style="margin-top:10px;">
-              <label>
-                Variant
-                <select id="wallsVariant">
-                  <option value="insulated" selected>insulated</option>
-                  <option value="basic">basic</option>
-                </select>
-              </label>
-              <label>
-                Height (mm)
-                <input id="wallHeight" type="number" min="100" step="10" value="2400" />
-              </label>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Dimensions</legend>
-            <div class="row">
-              <label>
-                Mode
-                <select id="dimMode">
-                  <option value="base" selected>base</option>
-                  <option value="frame">frame</option>
-                  <option value="roof">roof</option>
-                </select>
-              </label>
-              <div></div>
-            </div>
-            <div class="row">
-              <label>Width (mm)<input id="wInput" type="number" min="1" step="10" value="3000" /></label>
-              <label>Depth (mm)<input id="dInput" type="number" min="1" step="10" value="4000" /></label>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Roof overhang (mm)</legend>
-            <div class="row">
-              <label>Uniform<input id="roofOverUniform" type="number" min="0" step="1" value="0" /></label>
-              <div></div>
-            </div>
-            <div class="row">
-              <label>Front<input id="roofOverFront" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-              <label>Back<input id="roofOverBack" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-            </div>
-            <div class="row">
-              <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-              <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Doors</legend>
-
-            <div class="row">
-              <label>
-                Door
-                <select id="doorList" aria-label="Select door"></select>
-              </label>
-              <div class="row" style="grid-template-columns:1fr 1fr; gap:8px;">
-                <button id="doorAddBtn" type="button">Add</button>
-                <button id="doorRemoveBtn" type="button">Remove</button>
+  <div id="controls" aria-label="Controls">
+    <aside id="controlPanel" aria-label="Controls panel">
+      <details open>
+        <summary>Controls <span style="font-weight:700;font-size:12px;color:#666;">(toggle)</span></summary>
+        <div class="inner">
+          <form aria-label="Shed controls">
+            <fieldset>
+              <legend>Visibility</legend>
+              <div class="checks" role="group" aria-label="Visibility toggles">
+                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
+                <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
+                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
+                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
+                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
               </div>
-            </div>
+              <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
+            </fieldset>
 
-            <div class="row" style="margin-top:8px;">
-              <label>
-                Wall
-                <select id="doorWall" aria-label="Door wall">
-                  <option value="front">front</option>
-                  <option value="back">back</option>
-                  <option value="left">left</option>
-                  <option value="right">right</option>
-                </select>
-              </label>
-              <label class="check" style="align-content:end;">
-                <input id="doorEnabled" type="checkbox" />
-                Enabled
-              </label>
-            </div>
+            <fieldset>
+              <legend>Walls</legend>
 
-            <div class="row3">
-              <label>X (mm)<input id="doorX" type="number" min="0" step="10" value="800" /></label>
-              <label>W (mm)<input id="doorW" type="number" min="100" step="10" value="900" /></label>
-              <label>H (mm)<input id="doorH" type="number" min="100" step="10" value="2000" /></label>
-            </div>
+              <div class="row">
+                <label>
+                  Stud/Plate Size
+                  <select id="wallSection" aria-label="Stud and plate size">
+                    <option value="50x75">50×75</option>
+                    <option value="50x100" selected>50×100</option>
+                  </select>
+                </label>
+                <label>
+                  Variant
+                  <select id="wallsVariant">
+                    <option value="insulated" selected>insulated</option>
+                    <option value="basic">basic</option>
+                  </select>
+                </label>
+              </div>
 
-            <p class="hint">X is measured along the chosen wall from that wall’s local start.</p>
-          </fieldset>
-        </form>
-      </div>
-    </details>
-  </aside>
+              <div class="row">
+                <label>
+                  Height (mm)
+                  <input id="wallHeight" type="number" min="100" step="10" value="2400" />
+                </label>
+                <div></div>
+              </div>
 
-  <!-- Base Cutting List -->
+              <div class="checks" role="group" aria-label="Wall parts">
+                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
+                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
+                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
+                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
+              </div>
+
+              <p class="hint">Corners never overlap: left/right panels shorten by wall thickness on both ends.</p>
+            </fieldset>
+
+            <!-- NEW: Door manager (keeps required IDs doorEnabled/doorX/doorW/doorH for existing wiring) -->
+            <fieldset>
+              <legend>Doors</legend>
+
+              <div class="row">
+                <label>
+                  Door
+                  <select id="doorSelect" aria-label="Select door"></select>
+                </label>
+                <label>
+                  Wall
+                  <select id="doorWall" aria-label="Door wall">
+                    <option value="front" selected>front</option>
+                    <option value="back">back</option>
+                    <option value="left">left</option>
+                    <option value="right">right</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="row">
+                <button type="button" id="doorAddBtn">Add Door</button>
+                <button type="button" id="doorRemoveBtn">Remove Door</button>
+              </div>
+
+              <div class="row3" style="margin-top:10px;">
+                <label class="check" style="grid-column:1 / -1;">
+                  <input id="doorEnabled" type="checkbox" />
+                  Door Enabled
+                </label>
+
+                <label>Door X (mm)<input id="doorX" type="number" min="0" step="10" value="800" /></label>
+                <label>Door W (mm)<input id="doorW" type="number" min="100" step="10" value="900" /></label>
+                <label>Door H (mm)<input id="doorH" type="number" min="100" step="10" value="2000" /></label>
+              </div>
+
+              <p class="hint">Doors affect insulated framing only (basic ignores doors). X is measured along the selected wall from its start.</p>
+            </fieldset>
+
+            <fieldset>
+              <legend>Dimensions</legend>
+              <div class="row">
+                <label>
+                  Mode
+                  <select id="dimMode">
+                    <option value="base" selected>base</option>
+                    <option value="frame">frame</option>
+                    <option value="roof">roof</option>
+                  </select>
+                </label>
+                <div></div>
+              </div>
+
+              <div class="row">
+                <label>
+                  Width (mm) — X direction
+                  <input id="wInput" type="number" min="1" step="10" value="3000" />
+                </label>
+                <label>
+                  Depth (mm) — Z direction
+                  <input id="dInput" type="number" min="1" step="10" value="4000" />
+                </label>
+              </div>
+              <p class="hint">
+                Tip: swapping Width/Depth changes the decking layout (by design). Orientation still auto-flips based on the dimensions.
+              </p>
+            </fieldset>
+
+            <fieldset>
+              <legend>Roof Overhang (mm)</legend>
+              <div class="row">
+                <label>Uniform<input id="roofOverUniform" type="number" min="0" step="1" value="0" /></label>
+                <div></div>
+              </div>
+              <div class="row">
+                <label>Front<input id="roofOverFront" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                <label>Back<input id="roofOverBack" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+              </div>
+              <div class="row">
+                <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+              </div>
+            </fieldset>
+          </form>
+        </div>
+      </details>
+    </aside>
+  </div>
+
+  <!-- View: Base Cutting List -->
   <div id="bomPage" class="page" aria-hidden="true">
-    <h2>Master Cutting &amp; Assembly Schedule</h2>
+    <h2 tabindex="-1">Master Cutting &amp; Assembly Schedule</h2>
 
     <div id="bomToolbar">
       <label for="unitsSelect" style="font-size:12px;color:#555;">Units:</label>
@@ -304,7 +399,7 @@
 
     <div class="schedule-section">
       <h4>3. OSB Decking Cutting List (8x4 Sheets)</h4>
-      <p class="subtle">Standard Sheets are full 1220×2440 (oriented per joists). Remainders are as in the 3D layout.</p>
+      <p class="subtle">Standard Sheets are full 1220×2440 (oriented per joists). Remainders are staggered as in the 3D layout.</p>
 
       <table class="sticky-table">
         <thead><tr><th colspan="4">Standard Sheets</th></tr></thead>
@@ -319,6 +414,7 @@
         <tbody id="osbRipBody"></tbody>
         <tfoot><tr class="totals-row"><td colspan="4" id="osbRipTotals"></td></tr></tfoot>
       </table>
+
       <p id="osbSummary" class="subtle"></p>
     </div>
 
@@ -340,9 +436,9 @@
     </div>
   </div>
 
-  <!-- Walls Cutting List -->
+  <!-- View: Walls Cutting List -->
   <div id="wallsBomPage" class="page" aria-hidden="true">
-    <h2>Walls Cutting List</h2>
+    <h2 tabindex="-1">Walls Cutting List</h2>
     <div class="schedule-section">
       <h4>Walls — Items</h4>
       <table class="sticky-table">
@@ -360,7 +456,6 @@
     </div>
   </div>
 
-  <!-- Scripts at end of body -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script type="module" src="./src/index.js"></script>
   <script type="module">
