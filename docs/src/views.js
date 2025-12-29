@@ -1,89 +1,93 @@
 // FILE: docs/src/views.js
 export function initViews() {
-  const canvas = document.getElementById("renderCanvas");
-  const basePage = document.getElementById("bomPage");
-  const wallsPage = document.getElementById("wallsBomPage");
-  const viewSelect = document.getElementById("viewSelect");
-  const topbar = document.getElementById("topbar");
-  const controlsPanel = document.getElementById("controlsPanel");
+  var canvas = document.getElementById("renderCanvas");
+  var basePage = document.getElementById("bomPage");
+  var wallsPage = document.getElementById("wallsBomPage");
+  var viewSelect = document.getElementById("viewSelect");
+  var topbar = document.getElementById("topbar");
+  var controlPanel = document.getElementById("controlPanel");
 
   if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
-  const VIEW_KEYS = ["3d", "base", "walls"];
-  const STORAGE_KEY = "viewMode";
+  var VIEWS = ["3d", "base", "walls"];
+  var STORAGE_KEY = "viewMode";
 
   function parseHashView(hash) {
-    const h = (hash || "").replace(/^#/, "");
-    const m = /(?:^|&)view=([^&]+)/.exec(h);
-    const v = m ? decodeURIComponent(m[1] || "") : "";
-    return VIEW_KEYS.includes(v) ? v : null;
+    var h = (hash || "").replace(/^#/, "");
+    var m = /(?:^|&)view=([^&]+)/.exec(h);
+    var v = m ? decodeURIComponent(m[1] || "") : "";
+    return VIEWS.indexOf(v) >= 0 ? v : null;
   }
 
   function setHashView(v) {
-    const cur = location.hash.replace(/^#/, "");
-    const params = new URLSearchParams(cur ? cur.split("&").filter(Boolean) : []);
+    var cur = (location.hash || "").replace(/^#/, "");
+    var params = new URLSearchParams(cur ? cur.split("&").filter(Boolean) : []);
     params.set("view", v);
-    const next = "#" + params.toString();
+    var next = "#" + params.toString();
     if (location.hash !== next) history.replaceState(null, "", next);
   }
 
   function getInitialView() {
-    const fromHash = parseHashView(location.hash);
+    var fromHash = parseHashView(location.hash);
     if (fromHash) return fromHash;
 
     try {
-      const fromStorage = localStorage.getItem(STORAGE_KEY);
-      if (VIEW_KEYS.includes(fromStorage)) return fromStorage;
-    } catch {}
+      var fromStorage = localStorage.getItem(STORAGE_KEY);
+      if (VIEWS.indexOf(fromStorage) >= 0) return fromStorage;
+    } catch (e) {}
 
     return "3d";
   }
 
   function isTypingTarget(el) {
     if (!el) return false;
-    const tag = (el.tagName || "").toLowerCase();
+    var tag = (el.tagName || "").toLowerCase();
     return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable === true;
+  }
+
+  function safeResize3D() {
+    try {
+      var eng = window.__dbg && window.__dbg.engine ? window.__dbg.engine : null;
+      if (eng && typeof eng.resize === "function") eng.resize();
+    } catch (e) {}
   }
 
   function safeAttach3D() {
     try {
-      const cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
       if (cam && typeof cam.attachControl === "function") cam.attachControl(canvas, true);
-    } catch {}
-    try {
-      const eng = window.__dbg && window.__dbg.engine ? window.__dbg.engine : null;
-      if (eng && typeof eng.resize === "function") eng.resize();
-    } catch {}
+    } catch (e) {}
+    safeResize3D();
   }
 
   function safeDetach3D() {
     try {
-      const cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
       if (cam && typeof cam.detachControl === "function") cam.detachControl();
-    } catch {}
+    } catch (e) {}
   }
 
   function focusActive(view) {
     if (view === "3d") {
-      try { viewSelect.focus({ preventScroll: true }); } catch {}
+      try { viewSelect.focus({ preventScroll: true }); } catch (e) {}
       return;
     }
-    const page = view === "base" ? basePage : wallsPage;
-    const heading = page.querySelector("h1,h2,[data-focus], [tabindex]") || page;
+    var page = view === "base" ? basePage : wallsPage;
+    var heading = page.querySelector("h1,h2,[data-focus], [tabindex]") || page;
     if (heading && typeof heading.focus === "function") {
       if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
-      try { heading.focus({ preventScroll: false }); } catch {}
+      try { heading.focus({ preventScroll: false }); } catch (e) {}
     }
   }
 
   function showOnly(view) {
-    const v = VIEW_KEYS.includes(view) ? view : "3d";
+    var v = VIEWS.indexOf(view) >= 0 ? view : "3d";
 
-    document.body.dataset.view = v;
+    document.body.setAttribute("data-view", v);
 
-    const is3d = v === "3d";
-    const isBase = v === "base";
-    const isWalls = v === "walls";
+    var is3d = v === "3d";
+    var isBase = v === "base";
+    var isWalls = v === "walls";
 
     canvas.style.display = is3d ? "block" : "none";
     canvas.setAttribute("aria-hidden", String(!is3d));
@@ -94,7 +98,7 @@ export function initViews() {
     wallsPage.style.display = isWalls ? "block" : "none";
     wallsPage.setAttribute("aria-hidden", String(!isWalls));
 
-    if (controlsPanel) controlsPanel.style.display = is3d ? "none" : "block";
+    if (controlPanel) controlPanel.style.display = is3d ? "none" : "block";
 
     viewSelect.value = v;
 
@@ -105,10 +109,18 @@ export function initViews() {
     focusActive(v);
   }
 
-  function purgeSidebars(root) {
-    const keep = new Set([canvas, topbar, controlsPanel, basePage, wallsPage].filter(Boolean));
+  function isProtected(el) {
+    if (!el) return false;
+    if (el === canvas || el.contains(canvas) || canvas.contains(el)) return true;
+    if (el === topbar || el.contains(topbar) || topbar.contains(el)) return true;
+    if (controlPanel && (el === controlPanel || el.contains(controlPanel) || controlPanel.contains(el))) return true;
+    if (el === basePage || el.contains(basePage) || basePage.contains(el)) return true;
+    if (el === wallsPage || el.contains(wallsPage) || wallsPage.contains(el)) return true;
+    return false;
+  }
 
-    const selectors = [
+  function purgeSidebars(root) {
+    var selectors = [
       "#ui-layer", "#controls",
       "[id*='sidebar' i]", "[class*='sidebar' i]",
       "[id*='panel' i]", "[class*='panel' i]",
@@ -118,102 +130,92 @@ export function initViews() {
     ];
 
     try {
-      root.querySelectorAll(selectors.join(",")).forEach((el) => {
-        if (!el) return;
-        for (const k of keep) {
-          if (k && (el === k || el.contains(k) || k.contains(el))) return;
-        }
-        try { el.remove(); } catch {}
+      root.querySelectorAll(selectors.join(",")).forEach(function (el) {
+        if (!el || isProtected(el)) return;
+        try { el.remove(); } catch (e) {}
       });
-    } catch {}
+    } catch (e) {}
 
     try {
-      const all = Array.from(root.querySelectorAll("body *"));
-      for (const el of all) {
-        if (!el) continue;
+      var all = Array.from(root.querySelectorAll("body *"));
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el || isProtected(el)) continue;
 
-        for (const k of keep) {
-          if (k && (el === k || el.contains(k) || k.contains(el))) {
-            continue;
-          }
-        }
-
-        const st = getComputedStyle(el);
+        var st = getComputedStyle(el);
         if (!st || st.display === "none") continue;
 
-        const pos = st.position;
+        var pos = st.position;
         if (pos !== "fixed" && pos !== "absolute") continue;
 
-        const rect = el.getBoundingClientRect();
+        var rect = el.getBoundingClientRect();
         if (!rect || rect.width === 0 || rect.height === 0) continue;
 
-        const nearRight = (window.innerWidth - rect.right) <= 2;
-        const bigEnough = rect.width >= 200 && rect.height >= 100;
+        var nearRight = (window.innerWidth - rect.right) <= 2;
+        var bigEnough = rect.width >= 200 && rect.height >= 100;
 
-        let z = 0;
-        const zRaw = st.zIndex;
+        var z = 0;
+        var zRaw = st.zIndex;
         if (zRaw && zRaw !== "auto") {
-          const zi = parseInt(zRaw, 10);
-          z = Number.isFinite(zi) ? zi : 0;
+          var zi = parseInt(zRaw, 10);
+          z = isFinite(zi) ? zi : 0;
         }
 
         if (nearRight && bigEnough && z >= 1000) {
-          if (el === topbar || el.contains(topbar)) continue;
-          if (el === canvas || el.contains(canvas)) continue;
-          if (controlsPanel && (el === controlsPanel || el.contains(controlsPanel))) continue;
-          try { el.remove(); } catch {}
+          try { el.remove(); } catch (e) {}
         }
       }
-    } catch {}
+    } catch (e) {}
   }
 
   function setView(view, reason) {
-    const v = VIEW_KEYS.includes(view) ? view : "3d";
+    var v = VIEWS.indexOf(view) >= 0 ? view : "3d";
     if (viewSelect.value !== v) viewSelect.value = v;
 
-    try { localStorage.setItem(STORAGE_KEY, v); } catch {}
+    try { localStorage.setItem(STORAGE_KEY, v); } catch (e) {}
     if (reason !== "hash") setHashView(v);
 
     showOnly(v);
   }
 
-  viewSelect.addEventListener("change", (e) => {
-    const v = e && e.target ? e.target.value : "3d";
+  viewSelect.addEventListener("change", function (e) {
+    var v = e && e.target ? e.target.value : "3d";
     setView(v, "select");
   });
 
-  window.addEventListener("hashchange", () => {
-    const v = parseHashView(location.hash);
+  window.addEventListener("hashchange", function () {
+    var v = parseHashView(location.hash);
     if (v) setView(v, "hash");
   });
 
-  window.addEventListener("keydown", (e) => {
+  window.addEventListener("keydown", function (e) {
     if (!e || e.defaultPrevented) return;
     if (isTypingTarget(document.activeElement)) return;
 
-    const k = e.key;
-    if (k === "1") setView("3d", "key");
-    else if (k === "2") setView("walls", "key");
-    else if (k === "3") setView("base", "key");
+    if (e.key === "1") setView("3d", "key");
+    else if (e.key === "2") setView("walls", "key");
+    else if (e.key === "3") setView("base", "key");
   });
 
-  window.addEventListener("resize", () => {
-    if (document.body.dataset.view === "3d") safeAttach3D();
+  window.addEventListener("resize", function () {
+    if (document.body.getAttribute("data-view") === "3d") safeResize3D();
     purgeSidebars(document);
   });
 
-  const mo = new MutationObserver((muts) => {
-    for (const m of muts) {
+  var mo = new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var m = muts[i];
       if (m.addedNodes && m.addedNodes.length) {
         purgeSidebars(document);
         break;
       }
     }
   });
+
   try {
     mo.observe(document.documentElement, { childList: true, subtree: true });
-  } catch {}
+  } catch (e) {}
 
-  const initial = getInitialView();
+  var initial = getInitialView();
   setView(initial, "init");
 }
