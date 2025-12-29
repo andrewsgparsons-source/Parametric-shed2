@@ -17,7 +17,7 @@
       overflow: hidden;
     }
 
-    /* 3D canvas */
+    /* Exactly one 3D canvas */
     #renderCanvas {
       position: fixed;
       inset: 0;
@@ -50,7 +50,7 @@
       background: #fff;
     }
 
-    /* Controls panel (DOM only; index.js wires listeners) */
+    /* Controls panel (must exist; JS in index.js wires listeners by ID) */
     #controlPanel {
       position: fixed;
       top: 16px;
@@ -79,7 +79,6 @@
       user-select: none;
       outline: none;
     }
-
     #controlPanel summary::-webkit-details-marker { display: none; }
 
     #controlPanel .inner {
@@ -246,9 +245,13 @@
       display:none;
     }
 
-    /* Zero-leakage 3D mode (driven by views.js; harmless if not set) */
+    /* Zero-leakage 3D mode */
     body[data-view="3d"] .page { display: none !important; }
-    body[data-view="3d"] #controlPanel { display: none !important; }
+
+    /* Controls visibility rule: ONLY in 3D */
+    body[data-view="base"]  #controlPanel,
+    body[data-view="walls"] #controlPanel { display: none !important; }
+    body[data-view="3d"] #controlPanel { display: block; }
 
     @media print {
       #topbar, #renderCanvas, #statusOverlay, #controlPanel { display: none !important; }
@@ -267,7 +270,7 @@
   </style>
 </head>
 <body data-view="3d">
-  <!-- Exactly one canvas with id="renderCanvas" -->
+  <!-- View: 3D Scene (exactly one canvas with this ID) -->
   <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
   <div id="statusOverlay">status...</div>
 
@@ -280,7 +283,7 @@
     </select>
   </div>
 
-  <!-- Controls panel (must include all IDs queried by docs/src/index.js) -->
+  <!-- Controls panel (must contain all IDs used by docs/src/index.js) -->
   <aside id="controlPanel" aria-label="Controls">
     <details open>
       <summary>
