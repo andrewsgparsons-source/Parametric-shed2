@@ -1,8 +1,8 @@
 // FILE: docs/src/elements/walls.js
 /**
  * Build four walls.
- * Behavior is unchanged EXCEPT stud/plate size is now read from state.walls.{variant}.section (w/h)
- * (defaults already exist in params.js). This enables the UI selector to swap between 50×75 and 50×100.
+ * Change: stud/plate section (50×75 or 50×100) is read from state.walls[variant].section (w/h).
+ * Everything else (spacing, door rules, per-wall flags, BOM structure) remains unchanged.
  */
 export function build3D(state, ctx) {
   const { scene, materials } = ctx;
@@ -18,14 +18,13 @@ export function build3D(state, ctx) {
     d: Math.max(1, Math.floor(state.d)),
   };
 
-  // NEW: read section from state, preserve defaults if missing
   const variantCfg = (state.walls && state.walls[variant]) ? state.walls[variant] : null;
   const section = (variantCfg && variantCfg.section) ? variantCfg.section : (variant === 'insulated' ? { w: 50, h: 100 } : { w: 50, h: 75 });
 
   const studW = Math.max(1, Math.floor(Number(section.w != null ? section.w : 50)));
   const studH = Math.max(1, Math.floor(Number(section.h != null ? section.h : (variant === 'insulated' ? 100 : 75))));
 
-  // spacing behavior unchanged
+  // spacing logic unchanged
   const spacing = (variant === 'insulated') ? 400 : null;
 
   const plateH = studH;
@@ -172,7 +171,6 @@ export function updateBOM(state) {
 
   const isIns = variant === 'insulated';
 
-  // NEW: read section from state
   const variantCfg = (state.walls && state.walls[variant]) ? state.walls[variant] : null;
   const section = (variantCfg && variantCfg.section) ? variantCfg.section : (isIns ? { w: 50, h: 100 } : { w: 50, h: 75 });
 
