@@ -1,247 +1,444 @@
-// FILE: docs/src/views.js
-// View-layer only: hash/storage routing + visibility + purge. No geometry/BOM/state changes.
+// FILE: docs/src/index.js
+// Orchestration only. Geometry/BOM/state algorithms unchanged.
+// Fixes: DOM-ready init + null-safe UI touches so render doesn't hard-crash.
 
-export function initViews() {
-  // If called too early, bail safely.
-  var canvas = document.getElementById("renderCanvas");
-  var basePage = document.getElementById("bomPage");
-  var wallsPage = document.getElementById("wallsBomPage");
-  var viewSelect = document.getElementById("viewSelect");
-  var topbar = document.getElementById("topbar");
+window.__dbg = window.__dbg || {};
+window.__dbg.initStarted = true;
+window.__dbg.initFinished = false;
 
-  var controls = document.getElementById("controls");
-  var controlPanel = document.getElementById("controlPanel");
-  var uiLayer = document.getElementById("ui-layer");
+function dbgInitDefaults() {
+  if (window.__dbg.engine === undefined) window.__dbg.engine = null;
+  if (window.__dbg.scene === undefined) window.__dbg.scene = null;
+  if (window.__dbg.camera === undefined) window.__dbg.camera = null;
+  if (window.__dbg.frames === undefined) window.__dbg.frames = 0;
+  if (window.__dbg.buildCalls === undefined) window.__dbg.buildCalls = 0;
+  if (window.__dbg.lastError === undefined) window.__dbg.lastError = null;
+}
+dbgInitDefaults();
 
-  if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
+window.addEventListener("error", function (e) {
+  window.__dbg.lastError = (e && e.message) ? e.message : String(e);
+});
+window.addEventListener("unhandledrejection", function (e) {
+  window.__dbg.lastError = (e && e.reason) ? String(e.reason) : "unhandledrejection";
+});
 
-  // ---- Hash helpers (NO URLSearchParams(location.hash)) ----
-  function readHashView() {
-    try {
-      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls)\b/i);
-      return m ? String(m[1]).toLowerCase() : null;
-    } catch (e) {
-      return null;
-    }
-  }
+import { createStateStore } from "./state.js";
+import { DEFAULTS, resolveDims } from "./params.js";
+import { boot, disposeAll } from "./renderer/babylon.js";
+import * as Base from "./elements/base.js";
+import * as Walls from "./elements/walls.js";
+import { renderBOM } from "./bom/index.js";
 
-  function writeHashView(v) {
-    try {
-      var u = new URL(window.location.href);
-      u.hash = "view=" + v;
-      history.replaceState(null, "", u.toString());
-    } catch (e) {}
-  }
+function $(id) { return document.getElementById(id); }
+function setDisplay(el, val) { if (el && el.style) el.style.display = val; }
+function setAriaHidden(el, hidden) { if (el) el.setAttribute("aria-hidden", String(!!hidden)); }
 
-  function readStoredView() {
-    try {
-      var v = localStorage.getItem("viewMode");
-      return (v === "3d" || v === "base" || v === "walls") ? v : null;
-    } catch (e) {
-      return null;
-    }
-  }
+function initApp() {
+  try {
+    var canvas = $("renderCanvas");
+    var statusOverlayEl = $("statusOverlay");
 
-  function writeStoredView(v) {
-    try { localStorage.setItem("viewMode", v); } catch (e) {}
-  }
-
-  // ---- Small utils ----
-  function isTypingTarget(el) {
-    if (!el) return false;
-    var tag = (el.tagName || "").toLowerCase();
-    return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable === true;
-  }
-
-  function setHidden(el, hidden) {
-    if (!el) return;
-    el.style.display = hidden ? "none" : "block";
-    el.setAttribute("aria-hidden", String(!!hidden));
-  }
-
-  function focusForView(view) {
-    if (view === "3d") {
-      try { viewSelect.focus({ preventScroll: true }); } catch (e) {}
+    if (!canvas) {
+      window.__dbg.lastError = "renderCanvas not found";
       return;
     }
 
-    var page = (view === "base") ? basePage : wallsPage;
-    var h = page.querySelector("h1,h2");
-    var target = h || page;
-
-    if (target && typeof target.focus === "function") {
-      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
-      try { target.focus({ preventScroll: false }); } catch (e) {}
+    // Boot renderer
+    var ctx = null;
+    try {
+      ctx = boot(canvas);
+    } catch (e) {
+      window.__dbg.lastError = "boot(canvas) failed: " + String(e && e.message ? e.message : e);
+      return;
     }
-  }
 
-  function safeAttachCamera() {
+    window.__dbg.engine = (ctx && ctx.engine) ? ctx.engine : null;
+    window.__dbg.scene = (ctx && ctx.scene) ? ctx.scene : null;
+    window.__dbg.camera = (ctx && ctx.camera) ? ctx.camera : null;
+
+    // Frames counter
     try {
-      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
-      if (cam && typeof cam.attachControl === "function") cam.attachControl(canvas, true);
+      var eng = window.__dbg.engine;
+      if (eng && eng.onEndFrameObservable && typeof eng.onEndFrameObservable.add === "function") {
+        eng.onEndFrameObservable.add(function () { window.__dbg.frames += 1; });
+      }
     } catch (e) {}
-    try {
-      var eng = window.__dbg && window.__dbg.engine ? window.__dbg.engine : null;
-      if (eng && typeof eng.resize === "function") eng.resize();
-    } catch (e) {}
-  }
 
-  function safeDetachCamera() {
-    try {
-      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
-      if (cam && typeof cam.detachControl === "function") cam.detachControl();
-    } catch (e) {}
-  }
+    var store = createStateStore(DEFAULTS);
 
-  // ---- Purge (never delete our UI) ----
-  function isProtected(el) {
-    if (!el) return false;
-    if (el === canvas || canvas.contains(el) || el.contains(canvas)) return true;
-    if (el === topbar || topbar.contains(el) || el.contains(topbar)) return true;
+    // UI elements (may be null; all usage must be guarded)
+    var vWallsEl = $("vWalls");
+    var vBaseEl = $("vBase");
+    var vFrameEl = $("vFrame");
+    var vInsEl = $("vIns");
+    var vDeckEl = $("vDeck");
 
-    if (controls && (el === controls || controls.contains(el) || el.contains(controls))) return true;
-    if (controlPanel && (el === controlPanel || controlPanel.contains(el) || el.contains(controlPanel))) return true;
-    if (uiLayer && (el === uiLayer || uiLayer.contains(el) || el.contains(uiLayer))) return true;
+    var vWallFrontEl = $("vWallFront");
+    var vWallBackEl = $("vWallBack");
+    var vWallLeftEl = $("vWallLeft");
+    var vWallRightEl = $("vWallRight");
 
-    if (el === basePage || basePage.contains(el) || el.contains(basePage)) return true;
-    if (el === wallsPage || wallsPage.contains(el) || el.contains(wallsPage)) return true;
+    var dimModeEl = $("dimMode");
+    var wInputEl = $("wInput");
+    var dInputEl = $("dInput");
 
-    return false;
-  }
+    var overUniformEl = $("roofOverUniform");
+    var overFrontEl = $("roofOverFront");
+    var overBackEl = $("roofOverBack");
+    var overLeftEl = $("roofOverLeft");
+    var overRightEl = $("roofOverRight");
 
-  function purgeSidebars(root) {
-    // Only target common 3rd-party overlays; DO NOT list #controls/#ui-layer here.
-    var selectors = [
-      "[id*='sidebar' i]", "[class*='sidebar' i]",
-      "[id*='panel' i]", "[class*='panel' i]",
-      "[id*='inspector' i]", "[class*='inspector' i]",
-      "[id*='gui' i]", "[class*='gui' i]",
-      ".dg.ac"
-    ];
+    var wallsVariantEl = $("wallsVariant");
+    var wallHeightEl = $("wallHeight");
 
-    try {
-      root.querySelectorAll(selectors.join(",")).forEach(function (el) {
-        if (!el || isProtected(el)) return;
-        try { el.remove(); } catch (e) {}
+    var doorEnabledEl = $("doorEnabled");
+    var doorXEl = $("doorX");
+    var doorWEl = $("doorW");
+    var doorHEl = $("doorH");
+
+    var asPosInt = function (v, def) {
+      var n = Math.floor(Number(v));
+      return Number.isFinite(n) && n > 0 ? n : def;
+    };
+    var asNonNegInt = function (v, def) {
+      if (def === undefined) def = 0;
+      var n = Math.floor(Number(v));
+      return Number.isFinite(n) && n >= 0 ? n : def;
+    };
+    var asNullableInt = function (v) {
+      if (v == null || v === "") return null;
+      var n = Math.floor(Number(v));
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+
+    function getWallsEnabled(state) {
+      var vis = state && state.vis ? state.vis : null;
+      if (vis && typeof vis.walls === "boolean") return vis.walls;
+      if (vis && typeof vis.wallsEnabled === "boolean") return vis.wallsEnabled;
+      return true;
+    }
+
+    function getWallParts(state) {
+      var vis = state && state.vis ? state.vis : null;
+
+      if (vis && vis.walls && typeof vis.walls === "object") {
+        return {
+          front: vis.walls.front !== false,
+          back: vis.walls.back !== false,
+          left: vis.walls.left !== false,
+          right: vis.walls.right !== false
+        };
+      }
+
+      if (vis && vis.wallsParts && typeof vis.wallsParts === "object") {
+        return {
+          front: vis.wallsParts.front !== false,
+          back: vis.wallsParts.back !== false,
+          left: vis.wallsParts.left !== false,
+          right: vis.wallsParts.right !== false
+        };
+      }
+
+      return { front: true, back: true, left: true, right: true };
+    }
+
+    function resume3D() {
+      var engine = window.__dbg.engine;
+      var camera = window.__dbg.camera;
+
+      setDisplay(canvas, "block");
+      setAriaHidden(canvas, false);
+
+      var bomPage = $("bomPage");
+      var wallsPage = $("wallsBomPage");
+      setDisplay(bomPage, "none");
+      setDisplay(wallsPage, "none");
+      setAriaHidden(bomPage, true);
+      setAriaHidden(wallsPage, true);
+
+      try { if (engine && typeof engine.resize === "function") engine.resize(); } catch (e) {}
+      try { if (camera && typeof camera.attachControl === "function") camera.attachControl(canvas, true); } catch (e) {}
+    }
+
+    function currentFrontWallLength(state) {
+      var R = resolveDims(state);
+      return Math.max(1, Math.floor(R.frame.w_mm));
+    }
+
+    function clampDoorX(x, doorW, wallLen) {
+      var maxX = Math.max(0, wallLen - doorW);
+      return Math.max(0, Math.min(maxX, x));
+    }
+
+    function safeDispose() {
+      try {
+        try { disposeAll(ctx); return; } catch (e) {}
+        try { disposeAll(ctx && ctx.scene ? ctx.scene : null); return; } catch (e) {}
+        try { disposeAll(); } catch (e) {}
+      } catch (e) {}
+    }
+
+    function render(state) {
+      try {
+        window.__dbg.buildCalls += 1;
+
+        var R = resolveDims(state);
+        var baseState = Object.assign({}, state, { w: R.base.w_mm, d: R.base.d_mm });
+        var wallState = Object.assign({}, state, { w: R.frame.w_mm, d: R.frame.d_mm });
+
+        safeDispose();
+
+        if (Base && typeof Base.build3D === "function") Base.build3D(baseState, ctx);
+
+        if (getWallsEnabled(state)) {
+          if (Walls && typeof Walls.build3D === "function") Walls.build3D(wallState, ctx);
+        }
+
+        if (Walls && typeof Walls.updateBOM === "function") {
+          var wallsBom = Walls.updateBOM(wallState);
+          if (wallsBom && wallsBom.sections) renderBOM(wallsBom.sections);
+        }
+
+        if (Base && typeof Base.updateBOM === "function") Base.updateBOM(baseState);
+      } catch (e) {
+        window.__dbg.lastError = "render() failed: " + String(e && e.message ? e.message : e);
+      }
+    }
+
+    function syncUiFromState(state) {
+      try {
+        if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
+
+        if (wInputEl && dInputEl && state && state.dimInputs && state.dimMode) {
+          if (state.dimMode === "base") {
+            wInputEl.value = String(state.dimInputs.baseW_mm);
+            dInputEl.value = String(state.dimInputs.baseD_mm);
+          } else if (state.dimMode === "frame") {
+            wInputEl.value = String(state.dimInputs.frameW_mm);
+            dInputEl.value = String(state.dimInputs.frameD_mm);
+          } else {
+            wInputEl.value = String(state.dimInputs.roofW_mm);
+            dInputEl.value = String(state.dimInputs.roofD_mm);
+          }
+        } else {
+          if (wInputEl && state && state.w != null) wInputEl.value = String(state.w);
+          if (dInputEl && state && state.d != null) dInputEl.value = String(state.d);
+        }
+
+        if (state && state.overhang) {
+          if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
+          if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
+          if (overRightEl) overRightEl.value = state.overhang.right_mm == null ? "" : String(state.overhang.right_mm);
+          if (overFrontEl) overFrontEl.value = state.overhang.front_mm == null ? "" : String(state.overhang.front_mm);
+          if (overBackEl) overBackEl.value = state.overhang.back_mm == null ? "" : String(state.overhang.back_mm);
+        }
+
+        if (vBaseEl) vBaseEl.checked = !!(state && state.vis && state.vis.base);
+        if (vFrameEl) vFrameEl.checked = !!(state && state.vis && state.vis.frame);
+        if (vInsEl) vInsEl.checked = !!(state && state.vis && state.vis.ins);
+        if (vDeckEl) vDeckEl.checked = !!(state && state.vis && state.vis.deck);
+
+        if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
+
+        var parts = getWallParts(state);
+        if (vWallFrontEl) vWallFrontEl.checked = !!parts.front;
+        if (vWallBackEl) vWallBackEl.checked = !!parts.back;
+        if (vWallLeftEl) vWallLeftEl.checked = !!parts.left;
+        if (vWallRightEl) vWallRightEl.checked = !!parts.right;
+
+        if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
+        if (wallHeightEl && state && state.walls && state.walls.height_mm != null) wallHeightEl.value = String(state.walls.height_mm);
+
+        var door = state && state.walls && state.walls.openings ? state.walls.openings[0] : null;
+        if (door) {
+          if (doorEnabledEl) doorEnabledEl.checked = !!door.enabled;
+          if (doorXEl && door.x_mm != null) doorXEl.value = String(door.x_mm);
+          if (doorWEl && door.width_mm != null) doorWEl.value = String(door.width_mm);
+          if (doorHEl && door.height_mm != null) doorHEl.value = String(door.height_mm);
+        }
+      } catch (e) {
+        window.__dbg.lastError = "syncUiFromState failed: " + String(e && e.message ? e.message : e);
+      }
+    }
+
+    function updateOverlay() {
+      if (!statusOverlayEl) return;
+
+      var hasBabylon = typeof window.BABYLON !== "undefined";
+      var cw = canvas ? (canvas.clientWidth || 0) : 0;
+      var ch = canvas ? (canvas.clientHeight || 0) : 0;
+
+      var engine = window.__dbg.engine;
+      var scene = window.__dbg.scene;
+      var camera = window.__dbg.camera;
+
+      var meshes = (scene && scene.meshes) ? scene.meshes.length : 0;
+      var err = String(window.__dbg.lastError || "").slice(0, 200);
+
+      statusOverlayEl.textContent =
+        "BABYLON loaded: " + hasBabylon + "\n" +
+        "Canvas: " + cw + " x " + ch + "\n" +
+        "Engine: " + (!!engine) + "\n" +
+        "Scene: " + (!!scene) + "\n" +
+        "Camera: " + (!!camera) + "\n" +
+        "Frames: " + window.__dbg.frames + "\n" +
+        "BuildCalls: " + window.__dbg.buildCalls + "\n" +
+        "Meshes: " + meshes + "\n" +
+        "LastError: " + err;
+    }
+
+    // ---- listeners (null-safe) ----
+    if (vWallsEl) {
+      vWallsEl.addEventListener("change", function (e) {
+        var s = store.getState();
+        var on = !!(e && e.target && e.target.checked);
+
+        if (s && s.vis && typeof s.vis.walls === "boolean") store.setState({ vis: { walls: on } });
+        else if (s && s.vis && typeof s.vis.wallsEnabled === "boolean") store.setState({ vis: { wallsEnabled: on } });
+        else store.setState({ vis: { walls: on } });
       });
-    } catch (e) {}
+    }
 
-    // Right-edge heuristic removal
-    try {
-      var all = Array.from(root.querySelectorAll("body *"));
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        if (!el || isProtected(el)) continue;
+    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { store.setState({ vis: { base: !!e.target.checked } }); });
+    if (vFrameEl) vFrameEl.addEventListener("change", function (e) { store.setState({ vis: { frame: !!e.target.checked } }); });
+    if (vInsEl) vInsEl.addEventListener("change", function (e) { store.setState({ vis: { ins: !!e.target.checked } }); });
+    if (vDeckEl) vDeckEl.addEventListener("change", function (e) { store.setState({ vis: { deck: !!e.target.checked } }); });
 
-        var st = getComputedStyle(el);
-        if (!st || st.display === "none") continue;
-
-        var pos = st.position;
-        if (pos !== "fixed" && pos !== "absolute") continue;
-
-        var rect = el.getBoundingClientRect();
-        if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-
-        var nearRight = (window.innerWidth - rect.right) <= 2;
-        var bigEnough = rect.width >= 200 && rect.height >= 100;
-
-        var z = 0;
-        var zRaw = st.zIndex;
-        if (zRaw && zRaw !== "auto") {
-          var zi = parseInt(zRaw, 10);
-          z = isFinite(zi) ? zi : 0;
-        }
-
-        if (nearRight && bigEnough && z >= 1000) {
-          try { el.remove(); } catch (e) {}
-        }
+    function patchWallPart(key, value) {
+      var s = store.getState();
+      if (s && s.vis && s.vis.walls && typeof s.vis.walls === "object") {
+        store.setState({ vis: { walls: (function(){ var o={}; o[key]=value; return o; })() } });
+        return;
       }
-    } catch (e) {}
-  }
-
-  // Throttle purge to avoid hammering on MutationObserver storms.
-  var purgeQueued = false;
-  function requestPurge() {
-    if (purgeQueued) return;
-    purgeQueued = true;
-    requestAnimationFrame(function () {
-      purgeQueued = false;
-      purgeSidebars(document);
-    });
-  }
-
-  // ---- Core view application ----
-  function normalizeView(v) {
-    return (v === "3d" || v === "base" || v === "walls") ? v : "3d";
-  }
-
-  function applyView(view, reason) {
-    var v = normalizeView(view);
-
-    // Required for CSS rules
-    document.body.dataset.view = v;
-
-    // Exactly one visible at a time
-    setHidden(canvas, v !== "3d");
-    // Pages default to display:none; setHidden uses display:block which is fine for your .page containers too.
-    setHidden(basePage, v !== "base");
-    setHidden(wallsPage, v !== "walls");
-
-    // Keep selector consistent
-    if (viewSelect.value !== v) viewSelect.value = v;
-
-    // Persist + route
-    writeStoredView(v);
-    if (reason !== "hash") writeHashView(v);
-
-    // Camera control only when 3D
-    if (v === "3d") safeAttachCamera();
-    else safeDetachCamera();
-
-    requestPurge();
-    focusForView(v);
-  }
-
-  // ---- Events ----
-  viewSelect.addEventListener("change", function (e) {
-    var v = e && e.target ? e.target.value : "3d";
-    applyView(v, "select");
-  });
-
-  window.addEventListener("hashchange", function () {
-    var hv = readHashView();
-    if (hv) applyView(hv, "hash");
-  });
-
-  window.addEventListener("keydown", function (e) {
-    if (!e || e.defaultPrevented) return;
-    if (isTypingTarget(document.activeElement)) return;
-
-    if (e.key === "1") applyView("3d", "key");
-    else if (e.key === "2") applyView("walls", "key");
-    else if (e.key === "3") applyView("base", "key");
-  });
-
-  window.addEventListener("resize", function () {
-    // Keep canvas full-screen (CSS handles size; Babylon needs resize)
-    if (document.body.dataset.view === "3d") safeAttachCamera();
-    requestPurge();
-  });
-
-  // Late injected overlays
-  try {
-    var mo = new MutationObserver(function (muts) {
-      for (var i = 0; i < muts.length; i++) {
-        if (muts[i] && muts[i].addedNodes && muts[i].addedNodes.length) {
-          requestPurge();
-          break;
-        }
+      if (s && s.vis && s.vis.wallsParts && typeof s.vis.wallsParts === "object") {
+        store.setState({ vis: { wallsParts: (function(){ var o={}; o[key]=value; return o; })() } });
+        return;
       }
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-  } catch (e) {}
+      store.setState({ _noop: Date.now() });
+    }
 
-  // ---- Init ----
-  var initial = readHashView() || readStoredView() || "3d";
-  applyView(initial, "init");
+    if (vWallFrontEl) vWallFrontEl.addEventListener("change", function (e) { patchWallPart("front", !!e.target.checked); });
+    if (vWallBackEl)  vWallBackEl.addEventListener("change",  function (e) { patchWallPart("back",  !!e.target.checked); });
+    if (vWallLeftEl)  vWallLeftEl.addEventListener("change",  function (e) { patchWallPart("left",  !!e.target.checked); });
+    if (vWallRightEl) vWallRightEl.addEventListener("change", function (e) { patchWallPart("right", !!e.target.checked); });
+
+    if (dimModeEl) {
+      dimModeEl.addEventListener("change", function () {
+        store.setState({ dimMode: dimModeEl.value });
+        syncUiFromState(store.getState());
+      });
+    }
+
+    function writeActiveDims() {
+      var s = store.getState();
+      var w = asPosInt(wInputEl ? wInputEl.value : null, 1000);
+      var d = asPosInt(dInputEl ? dInputEl.value : null, 1000);
+
+      if (s && s.dimInputs && s.dimMode) {
+        if (s.dimMode === "base") store.setState({ dimInputs: { baseW_mm: w, baseD_mm: d } });
+        else if (s.dimMode === "frame") store.setState({ dimInputs: { frameW_mm: w, frameD_mm: d } });
+        else store.setState({ dimInputs: { roofW_mm: w, roofD_mm: d } });
+      } else {
+        store.setState({ w: w, d: d });
+      }
+    }
+    if (wInputEl) wInputEl.addEventListener("input", writeActiveDims);
+    if (dInputEl) dInputEl.addEventListener("input", writeActiveDims);
+
+    if (overUniformEl) {
+      overUniformEl.addEventListener("input", function () {
+        var n = Math.max(0, Math.floor(Number(overUniformEl.value || 0)));
+        store.setState({ overhang: { uniform_mm: Number.isFinite(n) ? n : 0 } });
+      });
+    }
+    if (overLeftEl)  overLeftEl.addEventListener("input",  function () { store.setState({ overhang: { left_mm:  asNullableInt(overLeftEl.value) } }); });
+    if (overRightEl) overRightEl.addEventListener("input", function () { store.setState({ overhang: { right_mm: asNullableInt(overRightEl.value) } }); });
+    if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
+    if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
+
+    if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
+    if (wallHeightEl) wallHeightEl.addEventListener("input", function () { store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } }); });
+
+    function patchDoor(patch) {
+      var s = store.getState();
+      var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
+      if (!cur) return;
+      store.setState({ walls: { openings: [Object.assign({}, cur, patch)] } });
+    }
+
+    if (doorEnabledEl) {
+      doorEnabledEl.addEventListener("change", function () {
+        var s = store.getState();
+        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
+        if (!cur) return;
+
+        var enabled = !!doorEnabledEl.checked;
+        if (!enabled) {
+          patchDoor({ enabled: false });
+          return;
+        }
+
+        var wallLen = currentFrontWallLength(s);
+        var doorW = asPosInt(cur.width_mm, 900);
+        var centered = Math.floor((wallLen - doorW) / 2);
+        var clamped = clampDoorX(centered, doorW, wallLen);
+        patchDoor({ enabled: true, x_mm: clamped });
+      });
+    }
+
+    if (doorXEl) {
+      doorXEl.addEventListener("input", function () {
+        var s = store.getState();
+        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
+        if (!cur) return;
+
+        var wallLen = currentFrontWallLength(s);
+        var doorW = asPosInt(cur.width_mm, 900);
+        var x = asNonNegInt(doorXEl.value, cur.x_mm || 0);
+        patchDoor({ x_mm: clampDoorX(x, doorW, wallLen) });
+      });
+    }
+
+    if (doorWEl) {
+      doorWEl.addEventListener("input", function () {
+        var s = store.getState();
+        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
+        if (!cur) return;
+
+        var wallLen = currentFrontWallLength(s);
+        var w = asPosInt(doorWEl.value, cur.width_mm || 900);
+        var x = clampDoorX(cur.x_mm || 0, w, wallLen);
+        patchDoor({ width_mm: w, x_mm: x });
+      });
+    }
+
+    if (doorHEl) doorHEl.addEventListener("input", function () { patchDoor({ height_mm: asPosInt(doorHEl.value, 2000) }); });
+
+    // Start
+    store.onChange(function (s) {
+      syncUiFromState(s);
+      render(s);
+    });
+
+    setInterval(updateOverlay, 1000);
+    updateOverlay();
+
+    // Kick once
+    syncUiFromState(store.getState());
+    render(store.getState());
+    resume3D();
+
+    window.__dbg.initFinished = true;
+  } catch (e) {
+    window.__dbg.lastError = "initApp() failed: " + String(e && e.message ? e.message : e);
+    window.__dbg.initFinished = false;
+  }
+}
+
+// DOM-ready gate (fixes canvas=null timing + avoids early crashes)
+if (document.readyState === "loading") {
+  window.addEventListener("DOMContentLoaded", initApp, { once: true });
+} else {
+  initApp();
 }
