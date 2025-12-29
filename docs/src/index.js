@@ -1,6 +1,9 @@
 // FILE: docs/src/index.js
-// Orchestration only. Geometry/BOM/state algorithms unchanged.
-// Change: walls footprint = base + 25mm overhang EACH side (total +50mm in W/D) and walls sit on top of deck.
+// Orchestration only.
+// Changes included:
+//  - walls footprint remains: base + 25mm per side and walls sit on top of deck (as you had working)
+//  - NEW: wall stud/plate size control via #wallSection (50x75 or 50x100), applied to BOTH variants.
+// No other geometry/BOM/state behavior is changed.
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;
@@ -34,17 +37,23 @@ function $(id) { return document.getElementById(id); }
 function setDisplay(el, val) { if (el && el.style) el.style.display = val; }
 function setAriaHidden(el, hidden) { if (el) el.setAttribute("aria-hidden", String(!!hidden)); }
 
-// Wall footprint overhang relative to BASE (per side)
-var WALL_OVERHANG_MM = 25;
+var WALL_OVERHANG_MM = 25;   // per side
+var WALL_RISE_MM = 168;      // deck top = 159 + 9
 
-// Base.build3D deck is centered at y=159mm with height 18mm => top surface at 168mm
-var DECK_TOP_MM = 168;
+function shiftWallMeshes(scene, dx_mm, dy_mm, dz_mm) {
+  if (!scene || !scene.meshes) return;
+  var dx = (dx_mm || 0) / 1000;
+  var dy = (dy_mm || 0) / 1000;
+  var dz = (dz_mm || 0) / 1000;
 
-function getWallOuterDimsFromState(state) {
-  var R = resolveDims(state);
-  var w = Math.max(1, Math.floor(R.base.w_mm + (2 * WALL_OVERHANG_MM)));
-  var d = Math.max(1, Math.floor(R.base.d_mm + (2 * WALL_OVERHANG_MM)));
-  return { w_mm: w, d_mm: d };
+  for (var i = 0; i < scene.meshes.length; i++) {
+    var m = scene.meshes[i];
+    if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
+    if (typeof m.name !== "string" || m.name.indexOf("wall-") !== 0) continue;
+    m.position.x += dx;
+    m.position.y += dy;
+    m.position.z += dz;
+  }
 }
 
 function initApp() {
@@ -57,7 +66,6 @@ function initApp() {
       return;
     }
 
-    // Boot renderer
     var ctx = null;
     try {
       ctx = boot(canvas);
@@ -70,7 +78,6 @@ function initApp() {
     window.__dbg.scene = (ctx && ctx.scene) ? ctx.scene : null;
     window.__dbg.camera = (ctx && ctx.camera) ? ctx.camera : null;
 
-    // Frames counter
     try {
       var eng = window.__dbg.engine;
       if (eng && eng.onEndFrameObservable && typeof eng.onEndFrameObservable.add === "function") {
@@ -80,7 +87,6 @@ function initApp() {
 
     var store = createStateStore(DEFAULTS);
 
-    // UI elements (may be null; all usage must be guarded)
     var vWallsEl = $("vWalls");
     var vBaseEl = $("vBase");
     var vFrameEl = $("vFrame");
@@ -102,6 +108,7 @@ function initApp() {
     var overLeftEl = $("roofOverLeft");
     var overRightEl = $("roofOverRight");
 
+    var wallSectionEl = $("wallSection"); // NEW
     var wallsVariantEl = $("wallsVariant");
     var wallHeightEl = $("wallHeight");
 
@@ -174,6 +181,13 @@ function initApp() {
       try { if (camera && typeof camera.attachControl === "function") camera.attachControl(canvas, true); } catch (e) {}
     }
 
+    function getWallOuterDimsFromState(state) {
+      var R = resolveDims(state);
+      var w = Math.max(1, Math.floor(R.base.w_mm + (2 * WALL_OVERHANG_MM)));
+      var d = Math.max(1, Math.floor(R.base.d_mm + (2 * WALL_OVERHANG_MM)));
+      return { w_mm: w, d_mm: d };
+    }
+
     function currentFrontWallLength(state) {
       var dims = getWallOuterDimsFromState(state);
       return Math.max(1, Math.floor(dims.w_mm));
@@ -197,17 +211,11 @@ function initApp() {
         window.__dbg.buildCalls += 1;
 
         var R = resolveDims(state);
+
         var baseState = Object.assign({}, state, { w: R.base.w_mm, d: R.base.d_mm });
 
-        // Walls: base + 25mm overhang each side (total +50mm), then globally offset:
-        //   X/Z by -25mm so it overhangs evenly around base,
-        //   Y by DECK_TOP_MM so bottom plate sits on top of deck.
         var wallDims = getWallOuterDimsFromState(state);
-        var wallState = Object.assign({}, state, {
-          w: wallDims.w_mm,
-          d: wallDims.d_mm,
-          __wallOffset_mm: { x_mm: -WALL_OVERHANG_MM, y_mm: DECK_TOP_MM, z_mm: -WALL_OVERHANG_MM }
-        });
+        var wallState = Object.assign({}, state, { w: wallDims.w_mm, d: wallDims.d_mm });
 
         safeDispose();
 
@@ -215,6 +223,7 @@ function initApp() {
 
         if (getWallsEnabled(state)) {
           if (Walls && typeof Walls.build3D === "function") Walls.build3D(wallState, ctx);
+          shiftWallMeshes(ctx.scene, -WALL_OVERHANG_MM, WALL_RISE_MM, -WALL_OVERHANG_MM);
         }
 
         if (Walls && typeof Walls.updateBOM === "function") {
@@ -272,6 +281,16 @@ function initApp() {
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
         if (wallHeightEl && state && state.walls && state.walls.height_mm != null) wallHeightEl.value = String(state.walls.height_mm);
 
+        // NEW: derive section size from either variant config; we keep both synced so either works.
+        if (wallSectionEl && state && state.walls) {
+          var h = null;
+          try {
+            if (state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
+            else if (state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
+          } catch (e) {}
+          wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
+        }
+
         var door = state && state.walls && state.walls.openings ? state.walls.openings[0] : null;
         if (door) {
           if (doorEnabledEl) doorEnabledEl.checked = !!door.enabled;
@@ -310,7 +329,6 @@ function initApp() {
         "LastError: " + err;
     }
 
-    // ---- listeners (unchanged behavior) ----
     if (vWallsEl) {
       vWallsEl.addEventListener("change", function (e) {
         var s = store.getState();
@@ -379,6 +397,22 @@ function initApp() {
     if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
     if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
 
+    // NEW: section size control (DOM only + state patch)
+    function sectionHFromSelectValue(v) {
+      return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
+    }
+    if (wallSectionEl) {
+      wallSectionEl.addEventListener("change", function () {
+        var h = sectionHFromSelectValue(wallSectionEl.value);
+        store.setState({
+          walls: {
+            insulated: { section: { w: 50, h: h } },
+            basic: { section: { w: 50, h: h } }
+          }
+        });
+      });
+    }
+
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
     if (wallHeightEl) wallHeightEl.addEventListener("input", function () { store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } }); });
 
@@ -437,7 +471,6 @@ function initApp() {
 
     if (doorHEl) doorHEl.addEventListener("input", function () { patchDoor({ height_mm: asPosInt(doorHEl.value, 2000) }); });
 
-    // Start
     store.onChange(function (s) {
       syncUiFromState(s);
       render(s);
@@ -446,7 +479,6 @@ function initApp() {
     setInterval(updateOverlay, 1000);
     updateOverlay();
 
-    // Kick once
     syncUiFromState(store.getState());
     render(store.getState());
     resume3D();
@@ -458,7 +490,6 @@ function initApp() {
   }
 }
 
-// DOM-ready gate
 if (document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", initApp, { once: true });
 } else {
