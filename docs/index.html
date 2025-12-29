@@ -113,7 +113,7 @@
     #controlPanel .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
     #controlPanel .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; align-items:center; }
     #controlPanel label{ display:grid; gap:4px; font-size:12px; color:#222; }
-    #controlPanel input[type="number"], #controlPanel select, #controlPanel button{
+    #controlPanel input[type="number"], #controlPanel select{
       width:100%;
       padding: 8px 10px;
       border: 1px solid #d9d9d9;
@@ -121,10 +121,6 @@
       font-size: 13px;
       background: #fff;
       box-sizing: border-box;
-    }
-    #controlPanel button{
-      cursor: pointer;
-      font-weight: 700;
     }
     #controlPanel .checks{ display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:4px; }
     #controlPanel .check{ display:flex; gap:8px; align-items:center; font-size:13px; color:#222; }
@@ -282,46 +278,16 @@
                 <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
               </div>
 
-              <p class="hint">Corners never overlap: left/right panels shorten by wall thickness on both ends.</p>
-            </fieldset>
-
-            <!-- NEW: Door manager (keeps required IDs doorEnabled/doorX/doorW/doorH for existing wiring) -->
-            <fieldset>
-              <legend>Doors</legend>
-
-              <div class="row">
-                <label>
-                  Door
-                  <select id="doorSelect" aria-label="Select door"></select>
-                </label>
-                <label>
-                  Wall
-                  <select id="doorWall" aria-label="Door wall">
-                    <option value="front" selected>front</option>
-                    <option value="back">back</option>
-                    <option value="left">left</option>
-                    <option value="right">right</option>
-                  </select>
-                </label>
-              </div>
-
-              <div class="row">
-                <button type="button" id="doorAddBtn">Add Door</button>
-                <button type="button" id="doorRemoveBtn">Remove Door</button>
-              </div>
-
               <div class="row3" style="margin-top:10px;">
                 <label class="check" style="grid-column:1 / -1;">
                   <input id="doorEnabled" type="checkbox" />
-                  Door Enabled
+                  Front Door Enabled
                 </label>
 
                 <label>Door X (mm)<input id="doorX" type="number" min="0" step="10" value="800" /></label>
                 <label>Door W (mm)<input id="doorW" type="number" min="100" step="10" value="900" /></label>
                 <label>Door H (mm)<input id="doorH" type="number" min="100" step="10" value="2000" /></label>
               </div>
-
-              <p class="hint">Doors affect insulated framing only (basic ignores doors). X is measured along the selected wall from its start.</p>
             </fieldset>
 
             <fieldset>
@@ -338,6 +304,8 @@
                 <div></div>
               </div>
 
+              <!-- IMPORTANT: These are the SAME inputs as before (IDs unchanged).
+                   This text change prevents accidental swapping that causes different OSB layouts. -->
               <div class="row">
                 <label>
                   Width (mm) — X direction
