@@ -114,10 +114,12 @@ export function build3D(state, ctx) {
     mat.diffuseColor = new BABYLON.Color3(0.8, 0.7, 0.6);
 
     // Canonical decking layout:
-    // A = joist span (shorter), B = rim length (longer). OSB long side (2440) always runs along B.
+    // A = shortest span (joists span A)
+    // B = longest (OSB 2440 always runs along B, i.e. perpendicular to joists)
     const extA = L.joistSpan;
     const extB = L.rimLen;
-    const piecesAB = computeDeckPiecesAB(extA, extB);
+
+    const piecesAB = computeDeckPiecesAB_NoStagger(extA, extB);
 
     for (const p of piecesAB) {
       const mapped = mapABtoXZ(p, L.isWShort);
@@ -189,10 +191,10 @@ export function updateBOM(state) {
   document.getElementById('timberTableBody').innerHTML = timberHtml;
   document.getElementById('timberTotals').textContent = `Total pieces: ${timberCount}`;
 
-  // ----- OSB Decking (mirrors build3D; rotation-invariant) -----
+  // ----- OSB Decking (mirrors build3D; no stagger; rotation-invariant) -----
   const extA = L.joistSpan;
   const extB = L.rimLen;
-  const piecesAB = computeDeckPiecesAB(extA, extB);
+  const piecesAB = computeDeckPiecesAB_NoStagger(extA, extB);
 
   const osbMap = {};
   for (const p of piecesAB) {
@@ -208,7 +210,6 @@ export function updateBOM(state) {
   const sheetShort = CONFIG.decking.w; // 1220
   const sheetLong = CONFIG.decking.d;  // 2440
 
-  // A/B always uses 1220 along A and 2440 along B. In X/Z it may appear rotated depending on isWShort.
   const fullPieceXZ = mapABtoXZ({ a0: 0, b0: 0, aLen: sheetShort, bLen: sheetLong }, L.isWShort);
   const fullKey = `${Math.round(fullPieceXZ.wX)}x${Math.round(fullPieceXZ.dZ)}`;
 
@@ -306,7 +307,7 @@ export function updateBOM(state) {
   });
   document.getElementById('gridBody').innerHTML = gridHtml || `<tr><td colspan="4">None</td></tr>`;
 
-  // ----- OSB Minimum Sheet Summary (area-based; unchanged intent) -----
+  // ----- OSB Minimum Sheet Summary (area-based) -----
   let totalOSBArea = 0;
   Object.keys(osbMap).forEach(key => {
     const [wStr, hStr] = key.split('x');
@@ -353,75 +354,54 @@ export function updateBOM(state) {
   }
 }
 
-function computeDeckPiecesAB(extA, extB) {
-  const sheetA = CONFIG.decking.w; // 1220
-  const sheetB = CONFIG.decking.d; // 2440
+function computeDeckPiecesAB_NoStagger(extA, extB) {
+  const sheetA = CONFIG.decking.w; // 1220 (across joists span axis A)
+  const sheetB = CONFIG.decking.d; // 2440 (perpendicular to joists, along axis B)
+
+  const cols = Math.floor(extA / sheetA);
+  const rows = Math.floor(extB / sheetB);
+
+  const rectA = cols * sheetA;
+  const rectB = rows * sheetB;
+
+  const remA = Math.max(0, extA - rectA);
+  const remB = Math.max(0, extB - rectB);
 
   const pieces = [];
 
-  const fullCols = Math.floor(extA / sheetA);
-  const fullRows = Math.floor(extB / sheetB);
-  const rectA = fullCols * sheetA;
-  const rectB = fullRows * sheetB;
-
-  // Full sheets grid
-  for (let r = 0; r < fullRows; r++) {
-    for (let c = 0; c < fullCols; c++) {
+  // Full sheets
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
       pieces.push({ a0: c * sheetA, b0: r * sheetB, aLen: sheetA, bLen: sheetB });
     }
   }
 
-  // Remainder bands beyond rectB (mirror of old "z >= rectD" pass)
-  {
-    let rowIndex = 0;
-    for (let b = rectB; b < extB; b += sheetB) {
-      const bLen = Math.min(sheetB, extB - b);
-      const offset = (rowIndex % 2 === 1) ? (sheetA / 2) : 0;
-
-      for (let a = -offset; a < extA; a += sheetA) {
-        const drawAStart = Math.max(0, a);
-        const drawAEnd = Math.min(extA, a + sheetA);
-        const aLen = Math.round(drawAEnd - drawAStart);
-        const bl = Math.round(bLen);
-        if (aLen > 10 && bl > 10) {
-          pieces.push({ a0: Math.round(drawAStart), b0: Math.round(b), aLen, bLen: bl });
-        }
-      }
-
-      rowIndex++;
+  // Remainder column (remA × 2440) for each full row
+  if (remA > 0) {
+    for (let r = 0; r < rows; r++) {
+      pieces.push({ a0: rectA, b0: r * sheetB, aLen: remA, bLen: sheetB });
     }
   }
 
-  // Remainder area beyond rectA within rectB rows (mirror of old "x >= rectW" pass)
-  {
-    let rowIndex = 0;
-    for (let b = 0; b < rectB; b += sheetB) {
-      const bLen = Math.min(sheetB, rectB - b);
-      const offset = (rowIndex % 2 === 1) ? (sheetA / 2) : 0;
-
-      for (let a = rectA - offset; a < extA; a += sheetA) {
-        const drawAStart = Math.max(rectA, a);
-        const drawAEnd = Math.min(extA, a + sheetA);
-        const aLen = Math.round(drawAEnd - drawAStart);
-        const bl = Math.round(bLen);
-        if (aLen > 10 && bl > 10) {
-          pieces.push({ a0: Math.round(drawAStart), b0: Math.round(b), aLen, bLen: bl });
-        }
-      }
-
-      rowIndex++;
+  // Remainder row (1220 × remB) for each full col
+  if (remB > 0) {
+    for (let c = 0; c < cols; c++) {
+      pieces.push({ a0: c * sheetA, b0: rectB, aLen: sheetA, bLen: remB });
     }
+  }
+
+  // Corner remainder (remA × remB)
+  if (remA > 0 && remB > 0) {
+    pieces.push({ a0: rectA, b0: rectB, aLen: remA, bLen: remB });
   }
 
   return pieces;
 }
 
 function mapABtoXZ(p, isWShort) {
-  // If width is shorter: A->X, B->Z (joists span X; OSB long runs Z).
-  // Else: A->Z, B->X (joists span Z; OSB long runs X).
-  if (isWShort) {
-    return { x0: p.a0, z0: p.b0, wX: p.aLen, dZ: p.bLen };
-  }
+  // A = joist span (shorter), B = rim length (longer)
+  // If width is shorter: A->X, B->Z. Else: A->Z, B->X.
+  if (isWShort) return { x0: p.a0, z0: p.b0, wX: p.aLen, dZ: p.bLen };
   return { x0: p.b0, z0: p.a0, wX: p.bLen, dZ: p.aLen };
 }
 
