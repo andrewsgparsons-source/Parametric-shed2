@@ -5,20 +5,17 @@ export function initViews() {
   var wallsPage = document.getElementById("wallsBomPage");
   var viewSelect = document.getElementById("viewSelect");
   var topbar = document.getElementById("topbar");
-  var controlPanel = document.getElementById("controlPanel");
   var controls = document.getElementById("controls");
+  var controlPanel = document.getElementById("controlPanel");
   var uiLayer = document.getElementById("ui-layer");
 
   if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
-  // SAFE hash helpers (NO URLSearchParams on location.hash)
   function readHashView() {
     try {
       var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls)\b/i);
       return m ? String(m[1] || "").toLowerCase() : null;
-    } catch (e) {
-      return null;
-    }
+    } catch (e) { return null; }
   }
 
   function writeHashView(v) {
@@ -32,9 +29,8 @@ export function initViews() {
   function readStoredView() {
     try {
       var v = localStorage.getItem("viewMode");
-      if (v === "3d" || v === "base" || v === "walls") return v;
-    } catch (e) {}
-    return null;
+      return (v === "3d" || v === "base" || v === "walls") ? v : null;
+    } catch (e) { return null; }
   }
 
   function writeStoredView(v) {
@@ -81,19 +77,18 @@ export function initViews() {
 
   function isProtected(el) {
     if (!el) return false;
-    if (el === canvas || el.contains(canvas) || canvas.contains(el)) return true;
-    if (el === topbar || el.contains(topbar) || topbar.contains(el)) return true;
-    if (controls && (el === controls || el.contains(controls) || controls.contains(el))) return true;
-    if (controlPanel && (el === controlPanel || el.contains(controlPanel) || controlPanel.contains(el))) return true;
-    if (uiLayer && (el === uiLayer || el.contains(uiLayer) || uiLayer.contains(el))) return true;
-    if (el === basePage || el.contains(basePage) || basePage.contains(el)) return true;
-    if (el === wallsPage || el.contains(wallsPage) || wallsPage.contains(el)) return true;
+    if (el === canvas || canvas.contains(el) || el.contains(canvas)) return true;
+    if (el === topbar || topbar.contains(el) || el.contains(topbar)) return true;
+    if (controls && (el === controls || controls.contains(el) || el.contains(controls))) return true;
+    if (controlPanel && (el === controlPanel || controlPanel.contains(el) || el.contains(controlPanel))) return true;
+    if (uiLayer && (el === uiLayer || uiLayer.contains(el) || el.contains(uiLayer))) return true;
+    if (el === basePage || basePage.contains(el) || el.contains(basePage)) return true;
+    if (el === wallsPage || wallsPage.contains(el) || el.contains(wallsPage)) return true;
     return false;
   }
 
   function purgeSidebars(root) {
     var selectors = [
-      // Do NOT include '#ui-layer' or '#controls' here (index.js may use them)
       "[id*='sidebar' i]", "[class*='sidebar' i]",
       "[id*='panel' i]", "[class*='panel' i]",
       "[id*='inspector' i]", "[class*='inspector' i]",
@@ -108,7 +103,6 @@ export function initViews() {
       });
     } catch (e) {}
 
-    // Right-edge heuristic
     try {
       var all = Array.from(root.querySelectorAll("body *"));
       for (var i = 0; i < all.length; i++) {
@@ -142,9 +136,8 @@ export function initViews() {
   }
 
   function applyView(view, reason) {
-    var v = (view === "base" || view === "walls" || view === "3d") ? view : "3d";
+    var v = (view === "3d" || view === "base" || view === "walls") ? view : "3d";
 
-    // REQUIRED: drives CSS rules
     document.body.dataset.view = v;
 
     var is3d = v === "3d";
@@ -196,17 +189,18 @@ export function initViews() {
     purgeSidebars(document);
   });
 
-  var mo = new MutationObserver(function (muts) {
-    for (var i = 0; i < muts.length; i++) {
-      var m = muts[i];
-      if (m.addedNodes && m.addedNodes.length) {
-        purgeSidebars(document);
-        break;
+  try {
+    var mo = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var m = muts[i];
+        if (m.addedNodes && m.addedNodes.length) {
+          purgeSidebars(document);
+          break;
+        }
       }
-    }
-  });
-
-  try { mo.observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
 
   var initial = readHashView() || readStoredView() || "3d";
   applyView(initial, "init");
