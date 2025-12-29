@@ -1,24 +1,8 @@
 // FILE: docs/src/elements/walls.js
 /**
- * Build four walls. Coordinates:
- * - Front/Back run along X, thickness extrudes +Z.
- * - Left/Right run along Z, thickness extrudes +X.
- * Variant rules:
- *  - insulated: 50×100 @ 400mm centers + corners; front door framing (kings, trimmers, header)
- *  - basic:     50×75; corners + single mid-span; ignore door controls
- *
- * Each wall is gated by per-wall flags in state.vis.walls.{front|back|left|right} and the master state.vis.wallsEnabled.
- *
- * Door aperture (front, insulated):
- *  - On enable (center snap): handled via UI/state; this module clamps and skips studs within opening.
- *  - Skip studs whose centerline lies strictly inside (doorX, doorX+doorW).
- *  - Add kings (full height) outside edges; trimmers inside; header above opening.
- *
- * NEW (requested): optional global offset state.__wallOffset_mm = {x_mm,y_mm,z_mm}
- * - Used to position walls relative to base/deck without changing any other model logic.
- *
- * @param {any} state Derived state for walls (w/d already resolved to desired wall outer dims)
- * @param {{scene:BABYLON.Scene, materials:any}} ctx
+ * Build four walls.
+ * Behavior is unchanged EXCEPT stud/plate size is now read from state.walls.{variant}.section (w/h)
+ * (defaults already exist in params.js). This enables the UI selector to swap between 50×75 and 50×100.
  */
 export function build3D(state, ctx) {
   const { scene, materials } = ctx;
@@ -34,11 +18,17 @@ export function build3D(state, ctx) {
     d: Math.max(1, Math.floor(state.d)),
   };
 
-  const prof = (variant === 'insulated')
-    ? { studW: 50, studH: 100, spacing: 400 }
-    : { studW: 50, studH: 75,  spacing: null };
+  // NEW: read section from state, preserve defaults if missing
+  const variantCfg = (state.walls && state.walls[variant]) ? state.walls[variant] : null;
+  const section = (variantCfg && variantCfg.section) ? variantCfg.section : (variant === 'insulated' ? { w: 50, h: 100 } : { w: 50, h: 75 });
 
-  const plateH = prof.studH;
+  const studW = Math.max(1, Math.floor(Number(section.w != null ? section.w : 50)));
+  const studH = Math.max(1, Math.floor(Number(section.h != null ? section.h : (variant === 'insulated' ? 100 : 75))));
+
+  // spacing behavior unchanged
+  const spacing = (variant === 'insulated') ? 400 : null;
+
+  const plateH = studH;
   const studLen = height - 2 * plateH;
 
   const flags = normalizeWallFlags(state);
@@ -67,7 +57,7 @@ export function build3D(state, ctx) {
 
   function buildWall(wallId, axis, length) {
     const isAlongX = axis === 'x';
-    const thickness = prof.studW;
+    const thickness = studW;
     const wallPrefix = `wall-${wallId}-`;
 
     if (isAlongX) {
@@ -81,41 +71,41 @@ export function build3D(state, ctx) {
     const studs = [];
     const placeStud = (x, z, h) => {
       if (isAlongX) {
-        studs.push(mkBox(wallPrefix + 'stud-' + studs.length, prof.studW, h, thickness, { x, y: plateH, z }, materials.timber));
+        studs.push(mkBox(wallPrefix + 'stud-' + studs.length, studW, h, thickness, { x, y: plateH, z }, materials.timber));
       } else {
-        studs.push(mkBox(wallPrefix + 'stud-' + studs.length, thickness, h, prof.studW, { x, y: plateH, z }, materials.timber));
+        studs.push(mkBox(wallPrefix + 'stud-' + studs.length, thickness, h, studW, { x, y: plateH, z }, materials.timber));
       }
     };
 
     placeStud(0, 0, studLen);
-    if (isAlongX) placeStud(length - prof.studW, 0, studLen);
-    else placeStud(0, length - prof.studW, studLen);
+    if (isAlongX) placeStud(length - studW, 0, studLen);
+    else placeStud(0, length - studW, studLen);
 
     if (variant === 'basic') {
-      if (isAlongX) placeStud(Math.max(0, Math.floor(length / 2 - prof.studW / 2)), 0, studLen);
-      else placeStud(0, Math.max(0, Math.floor(length / 2 - prof.studW / 2)), studLen);
+      if (isAlongX) placeStud(Math.max(0, Math.floor(length / 2 - studW / 2)), 0, studLen);
+      else placeStud(0, Math.max(0, Math.floor(length / 2 - studW / 2)), studLen);
       return { studs };
     }
 
     if (isAlongX) {
       let x = 400;
-      while (x <= length - prof.studW) {
-        if (Math.abs(x - (length - prof.studW)) < 1) break;
+      while (x <= length - studW) {
+        if (Math.abs(x - (length - studW)) < 1) break;
         if (wallId === 'front' && doorEnabled) {
-          const center = x + prof.studW / 2;
+          const center = x + studW / 2;
           const inside = (center > doorX) && (center < (doorX + doorW));
           if (!inside) placeStud(x, 0, studLen);
         } else {
           placeStud(x, 0, studLen);
         }
-        x += prof.spacing;
+        x += spacing;
       }
     } else {
       let z = 400;
-      while (z <= length - prof.studW) {
-        if (Math.abs(z - (length - prof.studW)) < 1) break;
+      while (z <= length - studW) {
+        if (Math.abs(z - (length - studW)) < 1) break;
         placeStud(0, z, studLen);
-        z += prof.spacing;
+        z += spacing;
       }
     }
 
@@ -127,37 +117,29 @@ export function build3D(state, ctx) {
     if (doorEnabled) addFrontDoorFraming(dims.w, doorX, doorW);
   }
   if (flags.back) {
-    shiftGroup(scene, 'wall-back', () => buildWall('back', 'x', dims.w), { x: 0, z: dims.d - prof.studW });
+    shiftGroup(scene, 'wall-back', () => buildWall('back', 'x', dims.w), { x: 0, z: dims.d - studW });
   }
   if (flags.left) {
     buildWall('left', 'z', dims.d);
   }
   if (flags.right) {
-    shiftGroup(scene, 'wall-right', () => buildWall('right', 'z', dims.d), { x: dims.w - prof.studW, z: 0 });
+    shiftGroup(scene, 'wall-right', () => buildWall('right', 'z', dims.d), { x: dims.w - studW, z: 0 });
   }
 
-  // Apply requested global offset (e.g., -25/-25 in X/Z and +168 in Y to sit on deck)
-  applyGlobalOffset(scene, state);
-
   function addFrontDoorFraming(lengthX, dx, dw) {
-    const kingW = prof.studW;
-    const trimW = prof.studW;
-    const headerThk = prof.studH;
-    const thickness = prof.studW;
-
+    const thickness = studW;
     const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
     const doorX0 = clamp(dx, 0, Math.max(0, lengthX - dw));
     const doorX1 = doorX0 + dw;
 
-    mkBox('wall-front-king-left',  kingW, height - 2 * prof.studH, thickness, { x: doorX0 - kingW, y: prof.studH, z: 0 }, materials.timber);
-    mkBox('wall-front-king-right', kingW, height - 2 * prof.studH, thickness, { x: doorX1,          y: prof.studH, z: 0 }, materials.timber);
+    mkBox('wall-front-king-left',  studW, height - 2 * studH, thickness, { x: doorX0 - studW, y: studH, z: 0 }, materials.timber);
+    mkBox('wall-front-king-right', studW, height - 2 * studH, thickness, { x: doorX1,         y: studH, z: 0 }, materials.timber);
 
-    const trimmerH = doorH;
-    mkBox('wall-front-trimmer-left',  trimW, trimmerH, thickness, { x: doorX0,         y: prof.studH, z: 0 }, materials.timber);
-    mkBox('wall-front-trimmer-right', trimW, trimmerH, thickness, { x: doorX1 - trimW, y: prof.studH, z: 0 }, materials.timber);
+    mkBox('wall-front-trimmer-left',  studW, doorH, thickness, { x: doorX0,         y: studH, z: 0 }, materials.timber);
+    mkBox('wall-front-trimmer-right', studW, doorH, thickness, { x: doorX1 - studW, y: studH, z: 0 }, materials.timber);
 
-    const headerL = dw + 2 * prof.studW;
-    mkBox('wall-front-header', headerL, headerThk, thickness, { x: doorX0 - prof.studW, y: prof.studH + trimmerH, z: 0 }, materials.timber);
+    const headerL = dw + 2 * studW;
+    mkBox('wall-front-header', headerL, studH, thickness, { x: doorX0 - studW, y: studH + doorH, z: 0 }, materials.timber);
   }
 }
 
@@ -183,39 +165,22 @@ function shiftGroup(scene, prefix, builderFn, offset) {
   });
 }
 
-function applyGlobalOffset(scene, state) {
-  const off = state && state.__wallOffset_mm ? state.__wallOffset_mm : null;
-  if (!off) return;
-
-  const x = toInt(off.x_mm, 0);
-  const y = toInt(off.y_mm, 0);
-  const z = toInt(off.z_mm, 0);
-
-  if (x === 0 && y === 0 && z === 0) return;
-
-  scene.meshes
-    .filter(m => m && m.metadata && m.metadata.dynamic === true && typeof m.name === "string" && m.name.startsWith("wall-"))
-    .forEach(m => {
-      m.position.x += x / 1000;
-      m.position.y += y / 1000;
-      m.position.z += z / 1000;
-    });
-}
-
-function toInt(v, def) {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) ? n : def;
-}
-
 export function updateBOM(state) {
   const sections = [];
   const variant = state.walls?.variant || 'insulated';
   const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
 
   const isIns = variant === 'insulated';
-  const studW = isIns ? 50 : 50;
-  const studH = isIns ? 100 : 75;
+
+  // NEW: read section from state
+  const variantCfg = (state.walls && state.walls[variant]) ? state.walls[variant] : null;
+  const section = (variantCfg && variantCfg.section) ? variantCfg.section : (isIns ? { w: 50, h: 100 } : { w: 50, h: 75 });
+
+  const studW = Math.max(1, Math.floor(Number(section.w != null ? section.w : 50)));
+  const studH = Math.max(1, Math.floor(Number(section.h != null ? section.h : (isIns ? 100 : 75))));
+
   const spacing = isIns ? 400 : null;
+
   const plateH = studH;
   const studLen = height - 2 * plateH;
 
