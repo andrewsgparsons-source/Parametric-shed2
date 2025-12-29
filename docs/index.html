@@ -246,7 +246,6 @@
             <fieldset>
               <legend>Walls</legend>
 
-              <!-- NEW: Stud/Plate size selector -->
               <div class="row">
                 <label>
                   Stud/Plate Size
@@ -304,10 +303,22 @@
                 </label>
                 <div></div>
               </div>
+
+              <!-- IMPORTANT: These are the SAME inputs as before (IDs unchanged).
+                   This text change prevents accidental swapping that causes different OSB layouts. -->
               <div class="row">
-                <label>W (mm)<input id="wInput" type="number" min="1" step="10" value="3000" /></label>
-                <label>D (mm)<input id="dInput" type="number" min="1" step="10" value="4000" /></label>
+                <label>
+                  Width (mm) — X direction
+                  <input id="wInput" type="number" min="1" step="10" value="3000" />
+                </label>
+                <label>
+                  Depth (mm) — Z direction
+                  <input id="dInput" type="number" min="1" step="10" value="4000" />
+                </label>
               </div>
+              <p class="hint">
+                Tip: swapping Width/Depth changes the decking layout (by design). Orientation still auto-flips based on the dimensions.
+              </p>
             </fieldset>
 
             <fieldset>
