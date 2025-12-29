@@ -10,20 +10,10 @@ export function initViews() {
   if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
   function readHashView() {
-    try {
-      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls)\b/i);
-      return m ? String(m[1] || "").toLowerCase() : null;
-    } catch (e) {
-      return null;
-    }
+    try { const m=(window.location.hash||"").match(/(?:^|[&#])view=(3d|base|walls)\b/i); return m?m[1].toLowerCase():null; } catch { return null; }
   }
-
   function writeHashView(v) {
-    try {
-      var u = new URL(window.location.href);
-      u.hash = "view=" + v;
-      history.replaceState(null, "", u.toString());
-    } catch (e) {}
+    try { const u=new URL(window.location.href); u.hash=`view=${v}`; history.replaceState(null,"",u.toString()); } catch {}
   }
 
   function readStoredView() {
@@ -138,7 +128,7 @@ export function initViews() {
   function applyView(view, reason) {
     var v = (view === "base" || view === "walls" || view === "3d") ? view : "3d";
 
-    document.body.setAttribute("data-view", v);
+    document.body.dataset.view = v;
 
     var is3d = v === "3d";
     var isBase = v === "base";
@@ -153,7 +143,7 @@ export function initViews() {
     wallsPage.style.display = isWalls ? "block" : "none";
     wallsPage.setAttribute("aria-hidden", String(!isWalls));
 
-    if (controlPanel) controlPanel.style.display = is3d ? "none" : "block";
+    if (controlPanel && controlPanel.style) controlPanel.style.display = "";
 
     if (viewSelect.value !== v) viewSelect.value = v;
 
@@ -187,7 +177,7 @@ export function initViews() {
   });
 
   window.addEventListener("resize", function () {
-    if (document.body.getAttribute("data-view") === "3d") safeAttach3D();
+    if (document.body.dataset.view === "3d") safeAttach3D();
     purgeSidebars(document);
   });
 
