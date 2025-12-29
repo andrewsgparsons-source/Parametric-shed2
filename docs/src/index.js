@@ -110,10 +110,17 @@ function initApp() {
     var wallsVariantEl = $("wallsVariant");
     var wallHeightEl = $("wallHeight");
 
+    var doorSelectEl = $("doorSelect");
+    var doorAddBtnEl = $("doorAddBtn");
+    var doorDelBtnEl = $("doorDelBtn");
+    var doorWallEl = $("doorWall");
+
     var doorEnabledEl = $("doorEnabled");
     var doorXEl = $("doorX");
     var doorWEl = $("doorW");
     var doorHEl = $("doorH");
+
+    var activeDoorId = null;
 
     var asPosInt = function (v, def) {
       var n = Math.floor(Number(v));
@@ -186,14 +193,79 @@ function initApp() {
       return { w_mm: w, d_mm: d };
     }
 
-    function currentFrontWallLength(state) {
+    function getDoorWallThickness(state) {
+      var h = null;
+      try {
+        if (state && state.walls && state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
+        else if (state && state.walls && state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
+      } catch (e) {}
+      var n = Math.floor(Number(h));
+      return Number.isFinite(n) && n > 0 ? n : 100;
+    }
+
+    function wallLenForDoor(state, wallKey) {
       var dims = getWallOuterDimsFromState(state);
+      var thk = getDoorWallThickness(state);
+      if (wallKey === "left" || wallKey === "right") return Math.max(1, Math.floor(dims.d_mm - 2 * thk));
       return Math.max(1, Math.floor(dims.w_mm));
     }
 
     function clampDoorX(x, doorW, wallLen) {
       var maxX = Math.max(0, wallLen - doorW);
       return Math.max(0, Math.min(maxX, x));
+    }
+
+    function getDoors(state) {
+      var arr = state && state.walls && Array.isArray(state.walls.openings) ? state.walls.openings : [];
+      return arr;
+    }
+
+    function ensureActiveDoorId(state) {
+      var doors = getDoors(state);
+      if (!doors.length) { activeDoorId = null; return; }
+      if (activeDoorId && doors.some(function (d) { return d && d.id === activeDoorId; })) return;
+      activeDoorId = doors[0] && doors[0].id ? doors[0].id : null;
+      if (!activeDoorId) activeDoorId = "door1";
+    }
+
+    function getActiveDoor(state) {
+      ensureActiveDoorId(state);
+      var doors = getDoors(state);
+      for (var i = 0; i < doors.length; i++) {
+        var d = doors[i];
+        if (d && d.id === activeDoorId) return d;
+      }
+      return doors.length ? doors[0] : null;
+    }
+
+    function patchDoor(patch) {
+      var s = store.getState();
+      var doors = getDoors(s);
+      if (!doors.length) return;
+
+      ensureActiveDoorId(s);
+
+      var updated = doors.map(function (d) {
+        if (!d) return d;
+        if (d.id !== activeDoorId) return d;
+        return Object.assign({}, d, patch);
+      });
+
+      store.setState({ walls: { openings: updated } });
+    }
+
+    function newDoorId(state) {
+      var doors = getDoors(state);
+      var maxN = 0;
+      for (var i = 0; i < doors.length; i++) {
+        var id = doors[i] && doors[i].id ? String(doors[i].id) : "";
+        var m = id.match(/^door(\d+)$/i);
+        if (m) {
+          var n = parseInt(m[1], 10);
+          if (isFinite(n)) maxN = Math.max(maxN, n);
+        }
+      }
+      return "door" + String(maxN + 1);
     }
 
     function safeDispose() {
@@ -288,9 +360,31 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
-        var door = state && state.walls && state.walls.openings ? state.walls.openings[0] : null;
+        // Doors (multiple)
+        if (doorSelectEl) {
+          ensureActiveDoorId(state);
+          var doors = getDoors(state);
+
+          var prev = doorSelectEl.value || "";
+          var html = "";
+          for (var i = 0; i < doors.length; i++) {
+            var d = doors[i];
+            if (!d) continue;
+            var id = String(d.id != null ? d.id : ("door" + String(i + 1)));
+            var wall = String(d.wall || "front");
+            html += '<option value="' + id + '">' + id + " (" + wall + ")</option>";
+          }
+          doorSelectEl.innerHTML = html;
+          if (activeDoorId) doorSelectEl.value = activeDoorId;
+          else if (prev) doorSelectEl.value = prev;
+
+          if (doorDelBtnEl) doorDelBtnEl.disabled = doors.length <= 1;
+        }
+
+        var door = getActiveDoor(state);
         if (door) {
           if (doorEnabledEl) doorEnabledEl.checked = !!door.enabled;
+          if (doorWallEl) doorWallEl.value = String(door.wall || "front");
           if (doorXEl && door.x_mm != null) doorXEl.value = String(door.x_mm);
           if (doorWEl && door.width_mm != null) doorWEl.value = String(door.width_mm);
           if (doorHEl && door.height_mm != null) doorHEl.value = String(door.height_mm);
@@ -356,139 +450,4 @@ function initApp() {
     }
 
     if (vWallFrontEl) vWallFrontEl.addEventListener("change", function (e) { patchWallPart("front", !!e.target.checked); });
-    if (vWallBackEl)  vWallBackEl.addEventListener("change",  function (e) { patchWallPart("back",  !!e.target.checked); });
-    if (vWallLeftEl)  vWallLeftEl.addEventListener("change",  function (e) { patchWallPart("left",  !!e.target.checked); });
-    if (vWallRightEl) vWallRightEl.addEventListener("change", function (e) { patchWallPart("right", !!e.target.checked); });
-
-    if (dimModeEl) {
-      dimModeEl.addEventListener("change", function () {
-        store.setState({ dimMode: dimModeEl.value });
-        syncUiFromState(store.getState());
-      });
-    }
-
-    function writeActiveDims() {
-      var s = store.getState();
-      var w = asPosInt(wInputEl ? wInputEl.value : null, 1000);
-      var d = asPosInt(dInputEl ? dInputEl.value : null, 1000);
-
-      if (s && s.dimInputs && s.dimMode) {
-        if (s.dimMode === "base") store.setState({ dimInputs: { baseW_mm: w, baseD_mm: d } });
-        else if (s.dimMode === "frame") store.setState({ dimInputs: { frameW_mm: w, frameD_mm: d } });
-        else store.setState({ dimInputs: { roofW_mm: w, roofD_mm: d } });
-      } else {
-        store.setState({ w: w, d: d });
-      }
-    }
-    if (wInputEl) wInputEl.addEventListener("input", writeActiveDims);
-    if (dInputEl) dInputEl.addEventListener("input", writeActiveDims);
-
-    if (overUniformEl) {
-      overUniformEl.addEventListener("input", function () {
-        var n = Math.max(0, Math.floor(Number(overUniformEl.value || 0)));
-        store.setState({ overhang: { uniform_mm: Number.isFinite(n) ? n : 0 } });
-      });
-    }
-    if (overLeftEl)  overLeftEl.addEventListener("input",  function () { store.setState({ overhang: { left_mm:  asNullableInt(overLeftEl.value) } }); });
-    if (overRightEl) overRightEl.addEventListener("input", function () { store.setState({ overhang: { right_mm: asNullableInt(overRightEl.value) } }); });
-    if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
-    if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
-
-    // NEW: Stud/Plate size -> updates BOTH variants' section.h (50×75 or 50×100)
-    function sectionHFromSelectValue(v) {
-      return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
-    }
-    if (wallSectionEl) {
-      wallSectionEl.addEventListener("change", function () {
-        var h = sectionHFromSelectValue(wallSectionEl.value);
-        store.setState({
-          walls: {
-            insulated: { section: { w: 50, h: h } },
-            basic: { section: { w: 50, h: h } }
-          }
-        });
-      });
-    }
-
-    if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
-    if (wallHeightEl) wallHeightEl.addEventListener("input", function () { store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } }); });
-
-    function patchDoor(patch) {
-      var s = store.getState();
-      var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
-      if (!cur) return;
-      store.setState({ walls: { openings: [Object.assign({}, cur, patch)] } });
-    }
-
-    if (doorEnabledEl) {
-      doorEnabledEl.addEventListener("change", function () {
-        var s = store.getState();
-        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
-        if (!cur) return;
-
-        var enabled = !!doorEnabledEl.checked;
-        if (!enabled) {
-          patchDoor({ enabled: false });
-          return;
-        }
-
-        var wallLen = currentFrontWallLength(s);
-        var doorW = asPosInt(cur.width_mm, 900);
-        var centered = Math.floor((wallLen - doorW) / 2);
-        var clamped = clampDoorX(centered, doorW, wallLen);
-        patchDoor({ enabled: true, x_mm: clamped });
-      });
-    }
-
-    if (doorXEl) {
-      doorXEl.addEventListener("input", function () {
-        var s = store.getState();
-        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
-        if (!cur) return;
-
-        var wallLen = currentFrontWallLength(s);
-        var doorW = asPosInt(cur.width_mm, 900);
-        var x = asNonNegInt(doorXEl.value, cur.x_mm || 0);
-        patchDoor({ x_mm: clampDoorX(x, doorW, wallLen) });
-      });
-    }
-
-    if (doorWEl) {
-      doorWEl.addEventListener("input", function () {
-        var s = store.getState();
-        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
-        if (!cur) return;
-
-        var wallLen = currentFrontWallLength(s);
-        var w = asPosInt(doorWEl.value, cur.width_mm || 900);
-        var x = clampDoorX(cur.x_mm || 0, w, wallLen);
-        patchDoor({ width_mm: w, x_mm: x });
-      });
-    }
-
-    if (doorHEl) doorHEl.addEventListener("input", function () { patchDoor({ height_mm: asPosInt(doorHEl.value, 2000) }); });
-
-    store.onChange(function (s) {
-      syncUiFromState(s);
-      render(s);
-    });
-
-    setInterval(updateOverlay, 1000);
-    updateOverlay();
-
-    syncUiFromState(store.getState());
-    render(store.getState());
-    resume3D();
-
-    window.__dbg.initFinished = true;
-  } catch (e) {
-    window.__dbg.lastError = "initApp() failed: " + String(e && e.message ? e.message : e);
-    window.__dbg.initFinished = false;
-  }
-}
-
-if (document.readyState === "loading") {
-  window.addEventListener("DOMContentLoaded", initApp, { once: true });
-} else {
-  initApp();
-}
+    if (vWallBackEl)  vWallBackEl.addEventListener("change",  function (e) { patchWallPart
