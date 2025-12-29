@@ -17,7 +17,6 @@
       overflow: hidden;
     }
 
-    /* Exactly ONE 3D canvas */
     #renderCanvas{
       position: fixed;
       inset: 0;
@@ -29,7 +28,6 @@
       touch-action: none;
     }
 
-    /* Top-right view selector */
     #topbar{
       position: fixed;
       top: 16px;
@@ -50,7 +48,6 @@
       background: #fff;
     }
 
-    /* A “UI mount” some builds expect */
     #ui-layer{
       position: fixed;
       inset: 0;
@@ -59,7 +56,6 @@
       display: none;
     }
 
-    /* Controls container */
     #controls{
       position: fixed;
       top: 16px;
@@ -130,7 +126,6 @@
     #controlPanel .check{ display:flex; gap:8px; align-items:center; font-size:13px; color:#222; }
     #controlPanel .hint{ font-size:11px; color:#666; margin:6px 0 0 0; }
 
-    /* Cutting-list pages */
     .page{
       position: fixed;
       inset: 0;
@@ -182,7 +177,6 @@
       cursor:pointer;
     }
 
-    /* Diagnostics overlay */
     #statusOverlay{
       position: fixed;
       top: 10px;
@@ -197,7 +191,7 @@
       max-width: 95vw;
       white-space: pre-wrap;
       pointer-events: none;
-      display: none; /* index.js updates it; you can flip to block while debugging */
+      display: none;
     }
 
     @media print{
@@ -251,7 +245,16 @@
 
             <fieldset>
               <legend>Walls</legend>
+
+              <!-- NEW: stud/plate size control -->
               <div class="row">
+                <label>
+                  Stud/Plate Size
+                  <select id="wallSection" aria-label="Wall stud and plate size">
+                    <option value="50x75">50×75</option>
+                    <option value="50x100" selected>50×100</option>
+                  </select>
+                </label>
                 <label>
                   Variant
                   <select id="wallsVariant">
@@ -259,10 +262,14 @@
                     <option value="basic">basic</option>
                   </select>
                 </label>
+              </div>
+
+              <div class="row">
                 <label>
                   Height (mm)
                   <input id="wallHeight" type="number" min="100" step="10" value="2400" />
                 </label>
+                <div></div>
               </div>
 
               <div class="checks" role="group" aria-label="Wall parts">
@@ -326,7 +333,7 @@
 
   <!-- View: Base Cutting List -->
   <div id="bomPage" class="page" aria-hidden="true">
-    <h2 tabindex="-1">Master Cutting & Assembly Schedule</h2>
+    <h2 tabindex="-1">Master Cutting &amp; Assembly Schedule</h2>
 
     <div id="bomToolbar">
       <label for="unitsSelect" style="font-size:12px;color:#555;">Units:</label>
@@ -406,7 +413,6 @@
     </div>
   </div>
 
-  <!-- REQUIRED script order at END of body -->
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script type="module" src="./src/index.js"></script>
   <script type="module">
