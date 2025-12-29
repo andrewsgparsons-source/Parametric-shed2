@@ -47,11 +47,8 @@ export function build3D(state, ctx) {
 
   const flags = normalizeWallFlags(state);
 
-  const door = (state.walls?.openings || [])[0];
-  const doorEnabled = !!(door && door.enabled && variant === "insulated");
-  const doorW = doorEnabled ? Math.max(100, Math.floor(door.width_mm || 800)) : 0;
-  const unclampedDoorX = doorEnabled ? Math.floor(door.x_mm ?? 0) : 0;
-  const doorX = doorEnabled ? clamp(unclampedDoorX, 0, Math.max(0, dims.w - doorW)) : 0;
+  const allDoors = Array.isArray(state.walls?.openings) ? state.walls.openings : [];
+  const doorEnabled = (variant === "insulated");
 
   function mkBox(name, Lx, Ly, Lz, pos, mat) {
     const mesh = BABYLON.MeshBuilder.CreateBox(
@@ -152,9 +149,136 @@ export function build3D(state, ctx) {
     }
   }
 
+  function normalizeDoorsForWall(wallId, length) {
+    if (!doorEnabled) return [];
+    const out = [];
+    for (let i = 0; i < allDoors.length; i++) {
+      const d = allDoors[i];
+      if (!d || d.type !== "door" || !d.enabled) continue;
+      const w = String(d.wall || "front");
+      if (w !== wallId) continue;
+
+      const doorW = Math.max(100, Math.floor(d.width_mm || 800));
+      const xRaw = Math.floor(d.x_mm ?? 0);
+      const x0 = clamp(xRaw, 0, Math.max(0, length - doorW));
+      const x1 = x0 + doorW;
+
+      out.push({ door: d, x0, x1, w: doorW });
+    }
+    return out;
+  }
+
+  function isInsideAnyDoorCenter(center, doors) {
+    for (let i = 0; i < doors.length; i++) {
+      const dd = doors[i];
+      if (center > dd.x0 && center < dd.x1) return true;
+    }
+    return false;
+  }
+
+  function addDoorFraming(wallId, axis, origin, length, dd) {
+    const thickness = wallThk;
+    const door = dd.door;
+    const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
+    const doorX0 = clamp(dd.x0, 0, Math.max(0, length - dd.w));
+    const doorX1 = doorX0 + dd.w;
+    const id = String(door.id != null ? door.id : "door");
+
+    if (axis === "x") {
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-king-left",
+        prof.studW,
+        Math.max(1, height - 2 * plateY),
+        thickness,
+        { x: origin.x + (doorX0 - prof.studW), y: plateY, z: origin.z },
+        materials.timber
+      );
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-king-right",
+        prof.studW,
+        Math.max(1, height - 2 * plateY),
+        thickness,
+        { x: origin.x + doorX1, y: plateY, z: origin.z },
+        materials.timber
+      );
+
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-trimmer-left",
+        prof.studW,
+        doorH,
+        thickness,
+        { x: origin.x + doorX0, y: plateY, z: origin.z },
+        materials.timber
+      );
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-trimmer-right",
+        prof.studW,
+        doorH,
+        thickness,
+        { x: origin.x + (doorX1 - prof.studW), y: plateY, z: origin.z },
+        materials.timber
+      );
+
+      const headerL = dd.w + 2 * prof.studW;
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-header",
+        headerL,
+        prof.studH,
+        thickness,
+        { x: origin.x + (doorX0 - prof.studW), y: plateY + doorH, z: origin.z },
+        materials.timber
+      );
+    } else {
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-king-left",
+        thickness,
+        Math.max(1, height - 2 * plateY),
+        prof.studW,
+        { x: origin.x, y: plateY, z: origin.z + (doorX0 - prof.studW) },
+        materials.timber
+      );
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-king-right",
+        thickness,
+        Math.max(1, height - 2 * plateY),
+        prof.studW,
+        { x: origin.x, y: plateY, z: origin.z + doorX1 },
+        materials.timber
+      );
+
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-trimmer-left",
+        thickness,
+        doorH,
+        prof.studW,
+        { x: origin.x, y: plateY, z: origin.z + doorX0 },
+        materials.timber
+      );
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-trimmer-right",
+        thickness,
+        doorH,
+        prof.studW,
+        { x: origin.x, y: plateY, z: origin.z + (doorX1 - prof.studW) },
+        materials.timber
+      );
+
+      const headerL = dd.w + 2 * prof.studW;
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-header",
+        thickness,
+        prof.studH,
+        headerL,
+        { x: origin.x, y: plateY + doorH, z: origin.z + (doorX0 - prof.studW) },
+        materials.timber
+      );
+    }
+  }
+
   function buildWall(wallId, axis, length, origin) {
     const isAlongX = axis === "x";
     const wallPrefix = `wall-${wallId}-`;
+    const doors = normalizeDoorsForWall(wallId, length);
 
     // BASIC: if length > 2400mm, split into two panels (equal-ish, sum exact)
     if (variant === "basic" && length > 2400) {
@@ -199,19 +323,14 @@ export function build3D(state, ctx) {
       return;
     }
 
-    // Insulated @400 (unchanged)
+    // Insulated @400 (door exclusions per-wall)
     if (isAlongX) {
       let x = 400;
       while (x <= length - prof.studW) {
         if (Math.abs(x - (length - prof.studW)) < 1) break;
 
-        if (wallId === "front" && doorEnabled) {
-          const center = x + prof.studW / 2;
-          const inside = center > doorX && center < doorX + doorW;
-          if (!inside) placeStud(origin.x + x, origin.z, studLen);
-        } else {
-          placeStud(origin.x + x, origin.z, studLen);
-        }
+        const center = x + prof.studW / 2;
+        if (!isInsideAnyDoorCenter(center, doors)) placeStud(origin.x + x, origin.z, studLen);
 
         x += prof.spacing;
       }
@@ -219,68 +338,15 @@ export function build3D(state, ctx) {
       let z = 400;
       while (z <= length - prof.studW) {
         if (Math.abs(z - (length - prof.studW)) < 1) break;
-        placeStud(origin.x, origin.z + z, studLen);
+
+        const center = z + prof.studW / 2;
+        if (!isInsideAnyDoorCenter(center, doors)) placeStud(origin.x, origin.z + z, studLen);
+
         z += prof.spacing;
       }
     }
 
-    if (wallId === "front" && doorEnabled) {
-      addFrontDoorFraming(origin, length, doorX, doorW);
-    }
-  }
-
-  function addFrontDoorFraming(origin, lengthX, dx, dw) {
-    const thickness = wallThk;
-    const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
-    const doorX0 = clamp(dx, 0, Math.max(0, lengthX - dw));
-    const doorX1 = doorX0 + dw;
-
-    // Kings: full height between plates
-    mkBox(
-      "wall-front-king-left",
-      prof.studW,
-      Math.max(1, height - 2 * plateY),
-      thickness,
-      { x: origin.x + (doorX0 - prof.studW), y: plateY, z: origin.z },
-      materials.timber
-    );
-    mkBox(
-      "wall-front-king-right",
-      prof.studW,
-      Math.max(1, height - 2 * plateY),
-      thickness,
-      { x: origin.x + doorX1, y: plateY, z: origin.z },
-      materials.timber
-    );
-
-    // Trimmers
-    mkBox(
-      "wall-front-trimmer-left",
-      prof.studW,
-      doorH,
-      thickness,
-      { x: origin.x + doorX0, y: plateY, z: origin.z },
-      materials.timber
-    );
-    mkBox(
-      "wall-front-trimmer-right",
-      prof.studW,
-      doorH,
-      thickness,
-      { x: origin.x + (doorX1 - prof.studW), y: plateY, z: origin.z },
-      materials.timber
-    );
-
-    // Header
-    const headerL = dw + 2 * prof.studW;
-    mkBox(
-      "wall-front-header",
-      headerL,
-      prof.studH,
-      thickness,
-      { x: origin.x + (doorX0 - prof.studW), y: plateY + doorH, z: origin.z },
-      materials.timber
-    );
+    for (let i = 0; i < doors.length; i++) addDoorFraming(wallId, axis, origin, length, doors[i]);
   }
 
   // Corner-safe lengths/origins:
@@ -346,6 +412,36 @@ export function updateBOM(state) {
   const flags = normalizeWallFlags(state);
   const walls = ["front", "back", "left", "right"].filter((w) => flags[w]);
 
+  const allDoors = Array.isArray(state.walls?.openings) ? state.walls.openings : [];
+  const doorEnabled = (variant === "insulated");
+
+  function doorsForWall(wallId, length) {
+    if (!doorEnabled) return [];
+    const out = [];
+    for (let i = 0; i < allDoors.length; i++) {
+      const d = allDoors[i];
+      if (!d || d.type !== "door" || !d.enabled) continue;
+      const w = String(d.wall || "front");
+      if (w !== wallId) continue;
+
+      const doorW = Math.max(100, Math.floor(d.width_mm || 800));
+      const xRaw = Math.floor(d.x_mm ?? 0);
+      const x0 = clamp(xRaw, 0, Math.max(0, length - doorW));
+      const x1 = x0 + doorW;
+
+      out.push({ door: d, x0, x1, w: doorW });
+    }
+    return out;
+  }
+
+  function isInsideAnyDoorCenter(center, doors) {
+    for (let i = 0; i < doors.length; i++) {
+      const dd = doors[i];
+      if (center > dd.x0 && center < dd.x1) return true;
+    }
+    return false;
+  }
+
   for (const wname of walls) {
     const L = lengths[wname];
 
@@ -370,23 +466,24 @@ export function updateBOM(state) {
       continue;
     }
 
-    // insulated (unchanged logic)
+    const doors = doorsForWall(wname, L);
+
     let count = 2;
     let run = 400;
     while (run <= L - prof.studW) {
       count += 1;
+      const center = run + prof.studW / 2;
+      if (isInsideAnyDoorCenter(center, doors)) count -= 1;
       run += prof.spacing;
     }
     sections.push([`Studs (${wname})`, count, studLen, prof.studW, "@400"]);
 
-    if (wname === "front") {
-      const door = (state.walls?.openings || [])[0];
-      if (door && door.enabled) {
-        const doorW = Math.max(100, Math.floor(door.width_mm || 800));
-        sections.push(["King Studs (front)", 2, Math.max(1, height - 2 * plateY), prof.studW, "door"]);
-        sections.push(["Trimmer Studs (front)", 2, Math.max(100, Math.floor(door.height_mm || 2000)), prof.studW, "door"]);
-        sections.push(["Header (front)", 1, doorW + 2 * prof.studW, prof.studH, "door"]);
-      }
+    for (let i = 0; i < doors.length; i++) {
+      const d = doors[i].door;
+      const id = String(d.id != null ? d.id : "door");
+      sections.push([`King Studs (${wname}) — ${id}`, 2, Math.max(1, height - 2 * plateY), prof.studW, "door"]);
+      sections.push([`Trimmer Studs (${wname}) — ${id}`, 2, Math.max(100, Math.floor(d.height_mm || 2000)), prof.studW, "door"]);
+      sections.push([`Header (${wname}) — ${id}`, 1, doors[i].w + 2 * prof.studW, prof.studH, "door"]);
     }
   }
 
