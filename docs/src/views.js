@@ -6,14 +6,27 @@ export function initViews() {
   var viewSelect = document.getElementById("viewSelect");
   var topbar = document.getElementById("topbar");
   var controlPanel = document.getElementById("controlPanel");
+  var controls = document.getElementById("controls");
+  var uiLayer = document.getElementById("ui-layer");
 
   if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
+  // SAFE hash helpers (NO URLSearchParams on location.hash)
   function readHashView() {
-    try { const m=(window.location.hash||"").match(/(?:^|[&#])view=(3d|base|walls)\b/i); return m?m[1].toLowerCase():null; } catch { return null; }
+    try {
+      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls)\b/i);
+      return m ? String(m[1] || "").toLowerCase() : null;
+    } catch (e) {
+      return null;
+    }
   }
+
   function writeHashView(v) {
-    try { const u=new URL(window.location.href); u.hash=`view=${v}`; history.replaceState(null,"",u.toString()); } catch {}
+    try {
+      var u = new URL(window.location.href);
+      u.hash = "view=" + v;
+      history.replaceState(null, "", u.toString());
+    } catch (e) {}
   }
 
   function readStoredView() {
@@ -70,7 +83,9 @@ export function initViews() {
     if (!el) return false;
     if (el === canvas || el.contains(canvas) || canvas.contains(el)) return true;
     if (el === topbar || el.contains(topbar) || topbar.contains(el)) return true;
+    if (controls && (el === controls || el.contains(controls) || controls.contains(el))) return true;
     if (controlPanel && (el === controlPanel || el.contains(controlPanel) || controlPanel.contains(el))) return true;
+    if (uiLayer && (el === uiLayer || el.contains(uiLayer) || uiLayer.contains(el))) return true;
     if (el === basePage || el.contains(basePage) || basePage.contains(el)) return true;
     if (el === wallsPage || el.contains(wallsPage) || wallsPage.contains(el)) return true;
     return false;
@@ -78,7 +93,7 @@ export function initViews() {
 
   function purgeSidebars(root) {
     var selectors = [
-      "#ui-layer", "#controls",
+      // Do NOT include '#ui-layer' or '#controls' here (index.js may use them)
       "[id*='sidebar' i]", "[class*='sidebar' i]",
       "[id*='panel' i]", "[class*='panel' i]",
       "[id*='inspector' i]", "[class*='inspector' i]",
@@ -93,6 +108,7 @@ export function initViews() {
       });
     } catch (e) {}
 
+    // Right-edge heuristic
     try {
       var all = Array.from(root.querySelectorAll("body *"));
       for (var i = 0; i < all.length; i++) {
@@ -128,6 +144,7 @@ export function initViews() {
   function applyView(view, reason) {
     var v = (view === "base" || view === "walls" || view === "3d") ? view : "3d";
 
+    // REQUIRED: drives CSS rules
     document.body.dataset.view = v;
 
     var is3d = v === "3d";
@@ -142,8 +159,6 @@ export function initViews() {
 
     wallsPage.style.display = isWalls ? "block" : "none";
     wallsPage.setAttribute("aria-hidden", String(!isWalls));
-
-    if (controlPanel && controlPanel.style) controlPanel.style.display = "";
 
     if (viewSelect.value !== v) viewSelect.value = v;
 
@@ -191,9 +206,7 @@ export function initViews() {
     }
   });
 
-  try {
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-  } catch (e) {}
+  try { mo.observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
 
   var initial = readHashView() || readStoredView() || "3d";
   applyView(initial, "init");
