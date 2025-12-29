@@ -1,309 +1,247 @@
-﻿// src/index.js
+// FILE: docs/src/views.js
+// View-layer only: hash/storage routing + visibility + purge. No geometry/BOM/state changes.
 
-import { createStateStore } from './state.js';
-import { DEFAULTS, resolveDims } from './params.js';
-import { boot, disposeAll } from './renderer/babylon.js';
-import * as Base from './elements/base.js';
-import * as Walls from './elements/walls.js';
-import { renderBOM } from './bom/index.js';
+export function initViews() {
+  // If called too early, bail safely.
+  var canvas = document.getElementById("renderCanvas");
+  var basePage = document.getElementById("bomPage");
+  var wallsPage = document.getElementById("wallsBomPage");
+  var viewSelect = document.getElementById("viewSelect");
+  var topbar = document.getElementById("topbar");
 
-// Bootstrap
-const canvas = document.getElementById('renderCanvas');
-const ctx = boot(canvas);
-const store = createStateStore(DEFAULTS);
+  var controls = document.getElementById("controls");
+  var controlPanel = document.getElementById("controlPanel");
+  var uiLayer = document.getElementById("ui-layer");
 
-// UI elements
-const viewSelect = document.getElementById('viewSelect');
+  if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
-const vWallsEl = document.getElementById('vWalls');
-const vBaseEl = document.getElementById('vBase');
-const vFrameEl = document.getElementById('vFrame');
-const vInsEl = document.getElementById('vIns');
-const vDeckEl = document.getElementById('vDeck');
-
-// Per-wall toggles
-const vWallFrontEl = document.getElementById('vWallFront');
-const vWallBackEl  = document.getElementById('vWallBack');
-const vWallLeftEl  = document.getElementById('vWallLeft');
-const vWallRightEl = document.getElementById('vWallRight');
-
-const dimModeEl = document.getElementById('dimMode');
-const wInputEl = document.getElementById('wInput');
-const dInputEl = document.getElementById('dInput');
-
-const overUniformEl = document.getElementById('roofOverUniform');
-const overFrontEl = document.getElementById('roofOverFront');
-const overBackEl = document.getElementById('roofOverBack');
-const overLeftEl = document.getElementById('roofOverLeft');
-const overRightEl = document.getElementById('roofOverRight');
-
-const wallsVariantEl = document.getElementById('wallsVariant');
-const wallHeightEl = document.getElementById('wallHeight');
-
-const doorEnabledEl = document.getElementById('doorEnabled');
-const doorXEl = document.getElementById('doorX');
-const doorWEl = document.getElementById('doorW');
-const doorHEl = document.getElementById('doorH');
-
-const stageEl = document.getElementById('stage');
-const bomWrapEl = document.getElementById('bomWrap');
-const bomPageEl = document.getElementById('bomPage');
-
-// Render function
-function render(state) {
-  // Resolve dimensions for both engines
-  const R = resolveDims(state);
-  const baseState = { ...state, w: R.base.w_mm,  d: R.base.d_mm };
-  const wallState = { ...state, w: R.frame.w_mm, d: R.frame.d_mm };
-
-  // View toggling (3 states)
-  const v = viewSelect.value;
-  const is3D = v === '3d';
-  const isWalls = v === 'walls-bom';
-  const isBase = v === 'base-bom';
-
-  stageEl.style.display = is3D ? '' : '';
-  canvas.style.display = is3D ? 'block' : 'none';
-  bomWrapEl.style.display = isWalls ? '' : 'none';
-  bomPageEl.style.display = isBase ? 'block' : 'none';
-
-  // Hide visibility rows when not 3D (base + walls)
-  document.querySelectorAll('.visRow').forEach(row => { row.style.display = is3D ? '' : 'none'; });
-  document.querySelectorAll('.vis-row').forEach(row => { row.style.display = is3D ? '' : 'none'; });
-
-  // Dispose dynamic meshes from previous frame
-  disposeAll(ctx.scene);
-
-  // Base 3D
-  Base.build3D(baseState, ctx);
-
-  // Determine if any wall is visible
-  const parts = state.vis?.walls || { front:true, back:true, left:true, right:true };
-  const anyWallOn = !!state.vis?.wallsEnabled && (parts.front || parts.back || parts.left || parts.right);
-
-  // Walls 3D
-  if (anyWallOn) {
-    Walls.build3D(wallState, ctx);
-  }
-
-  // Walls BOM
-  const bom = Walls.updateBOM(wallState);
-  renderBOM(bom.sections);
-
-  // Base BOM (writes directly to DOM IDs in #bomPage)
-  Base.updateBOM(baseState);
-}
-
-// Store subscription
-store.onChange(render);
-
-// Helpers
-const asPosInt = (v, def) => {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) && n > 0 ? n : def;
-};
-const asNonNegInt = (v, def = 0) => {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) && n >= 0 ? n : def;
-};
-const asNullableInt = (v) => {
-  if (v == null || v === '') return null;
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) && n >= 0 ? n : null;
-};
-
-// Resolve current front wall length (frame outer width)
-function currentFrontWallLength() {
-  const R = resolveDims(store.getState());
-  return Math.max(1, Math.floor(R.frame.w_mm));
-}
-
-// Clamp a door X within [0, wallLen - doorW]
-function clampDoorX(x, doorW) {
-  const L = currentFrontWallLength();
-  const maxX = Math.max(0, L - doorW);
-  return Math.max(0, Math.min(maxX, x));
-}
-
-// Sync inputs from state on mode switch
-function syncUiFromState(state) {
-  dimModeEl.value = state.dimMode;
-  if (state.dimMode === 'base') {
-    wInputEl.value = String(state.dimInputs.baseW_mm);
-    dInputEl.value = String(state.dimInputs.baseD_mm);
-  } else if (state.dimMode === 'frame') {
-    wInputEl.value = String(state.dimInputs.frameW_mm);
-    dInputEl.value = String(state.dimInputs.frameD_mm);
-  } else {
-    wInputEl.value = String(state.dimInputs.roofW_mm);
-    dInputEl.value = String(state.dimInputs.roofD_mm);
-  }
-
-  overUniformEl.value = String(state.overhang.uniform_mm ?? 0);
-  overLeftEl.value = state.overhang.left_mm == null ? '' : String(state.overhang.left_mm);
-  overRightEl.value = state.overhang.right_mm == null ? '' : String(state.overhang.right_mm);
-  overFrontEl.value = state.overhang.front_mm == null ? '' : String(state.overhang.front_mm);
-  overBackEl.value = state.overhang.back_mm == null ? '' : String(state.overhang.back_mm);
-
-  vBaseEl.checked = !!state.vis.base;
-  vFrameEl.checked = !!state.vis.frame;
-  vInsEl.checked = !!state.vis.ins;
-  vDeckEl.checked = !!state.vis.deck;
-
-  vWallsEl.checked = !!state.vis.wallsEnabled;
-
-  const parts = state.vis?.walls || { front:true, back:true, left:true, right:true };
-  vWallFrontEl.checked = !!parts.front;
-  vWallBackEl.checked  = !!parts.back;
-  vWallLeftEl.checked  = !!parts.left;
-  vWallRightEl.checked = !!parts.right;
-
-  wallsVariantEl.value = state.walls.variant;
-  wallHeightEl.value = String(state.walls.height_mm);
-
-  const door = state.walls.openings[0];
-  doorEnabledEl.checked = !!door.enabled;
-  doorXEl.value = String(door.x_mm);
-  doorWEl.value = String(door.width_mm);
-  doorHEl.value = String(door.height_mm);
-}
-
-// Event wiring
-
-viewSelect.addEventListener('change', () => {
-  render(store.getState());
-});
-
-// Walls master visibility toggles all parts
-vWallsEl.addEventListener('change', (e) => {
-  const on = !!e.target.checked;
-  store.setState({
-    vis: {
-      wallsEnabled: on,
-      walls: { front: on, back: on, left: on, right: on }
+  // ---- Hash helpers (NO URLSearchParams(location.hash)) ----
+  function readHashView() {
+    try {
+      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls)\b/i);
+      return m ? String(m[1]).toLowerCase() : null;
+    } catch (e) {
+      return null;
     }
+  }
+
+  function writeHashView(v) {
+    try {
+      var u = new URL(window.location.href);
+      u.hash = "view=" + v;
+      history.replaceState(null, "", u.toString());
+    } catch (e) {}
+  }
+
+  function readStoredView() {
+    try {
+      var v = localStorage.getItem("viewMode");
+      return (v === "3d" || v === "base" || v === "walls") ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeStoredView(v) {
+    try { localStorage.setItem("viewMode", v); } catch (e) {}
+  }
+
+  // ---- Small utils ----
+  function isTypingTarget(el) {
+    if (!el) return false;
+    var tag = (el.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable === true;
+  }
+
+  function setHidden(el, hidden) {
+    if (!el) return;
+    el.style.display = hidden ? "none" : "block";
+    el.setAttribute("aria-hidden", String(!!hidden));
+  }
+
+  function focusForView(view) {
+    if (view === "3d") {
+      try { viewSelect.focus({ preventScroll: true }); } catch (e) {}
+      return;
+    }
+
+    var page = (view === "base") ? basePage : wallsPage;
+    var h = page.querySelector("h1,h2");
+    var target = h || page;
+
+    if (target && typeof target.focus === "function") {
+      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      try { target.focus({ preventScroll: false }); } catch (e) {}
+    }
+  }
+
+  function safeAttachCamera() {
+    try {
+      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      if (cam && typeof cam.attachControl === "function") cam.attachControl(canvas, true);
+    } catch (e) {}
+    try {
+      var eng = window.__dbg && window.__dbg.engine ? window.__dbg.engine : null;
+      if (eng && typeof eng.resize === "function") eng.resize();
+    } catch (e) {}
+  }
+
+  function safeDetachCamera() {
+    try {
+      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      if (cam && typeof cam.detachControl === "function") cam.detachControl();
+    } catch (e) {}
+  }
+
+  // ---- Purge (never delete our UI) ----
+  function isProtected(el) {
+    if (!el) return false;
+    if (el === canvas || canvas.contains(el) || el.contains(canvas)) return true;
+    if (el === topbar || topbar.contains(el) || el.contains(topbar)) return true;
+
+    if (controls && (el === controls || controls.contains(el) || el.contains(controls))) return true;
+    if (controlPanel && (el === controlPanel || controlPanel.contains(el) || el.contains(controlPanel))) return true;
+    if (uiLayer && (el === uiLayer || uiLayer.contains(el) || el.contains(uiLayer))) return true;
+
+    if (el === basePage || basePage.contains(el) || el.contains(basePage)) return true;
+    if (el === wallsPage || wallsPage.contains(el) || el.contains(wallsPage)) return true;
+
+    return false;
+  }
+
+  function purgeSidebars(root) {
+    // Only target common 3rd-party overlays; DO NOT list #controls/#ui-layer here.
+    var selectors = [
+      "[id*='sidebar' i]", "[class*='sidebar' i]",
+      "[id*='panel' i]", "[class*='panel' i]",
+      "[id*='inspector' i]", "[class*='inspector' i]",
+      "[id*='gui' i]", "[class*='gui' i]",
+      ".dg.ac"
+    ];
+
+    try {
+      root.querySelectorAll(selectors.join(",")).forEach(function (el) {
+        if (!el || isProtected(el)) return;
+        try { el.remove(); } catch (e) {}
+      });
+    } catch (e) {}
+
+    // Right-edge heuristic removal
+    try {
+      var all = Array.from(root.querySelectorAll("body *"));
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el || isProtected(el)) continue;
+
+        var st = getComputedStyle(el);
+        if (!st || st.display === "none") continue;
+
+        var pos = st.position;
+        if (pos !== "fixed" && pos !== "absolute") continue;
+
+        var rect = el.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+
+        var nearRight = (window.innerWidth - rect.right) <= 2;
+        var bigEnough = rect.width >= 200 && rect.height >= 100;
+
+        var z = 0;
+        var zRaw = st.zIndex;
+        if (zRaw && zRaw !== "auto") {
+          var zi = parseInt(zRaw, 10);
+          z = isFinite(zi) ? zi : 0;
+        }
+
+        if (nearRight && bigEnough && z >= 1000) {
+          try { el.remove(); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Throttle purge to avoid hammering on MutationObserver storms.
+  var purgeQueued = false;
+  function requestPurge() {
+    if (purgeQueued) return;
+    purgeQueued = true;
+    requestAnimationFrame(function () {
+      purgeQueued = false;
+      purgeSidebars(document);
+    });
+  }
+
+  // ---- Core view application ----
+  function normalizeView(v) {
+    return (v === "3d" || v === "base" || v === "walls") ? v : "3d";
+  }
+
+  function applyView(view, reason) {
+    var v = normalizeView(view);
+
+    // Required for CSS rules
+    document.body.dataset.view = v;
+
+    // Exactly one visible at a time
+    setHidden(canvas, v !== "3d");
+    // Pages default to display:none; setHidden uses display:block which is fine for your .page containers too.
+    setHidden(basePage, v !== "base");
+    setHidden(wallsPage, v !== "walls");
+
+    // Keep selector consistent
+    if (viewSelect.value !== v) viewSelect.value = v;
+
+    // Persist + route
+    writeStoredView(v);
+    if (reason !== "hash") writeHashView(v);
+
+    // Camera control only when 3D
+    if (v === "3d") safeAttachCamera();
+    else safeDetachCamera();
+
+    requestPurge();
+    focusForView(v);
+  }
+
+  // ---- Events ----
+  viewSelect.addEventListener("change", function (e) {
+    var v = e && e.target ? e.target.value : "3d";
+    applyView(v, "select");
   });
-});
 
-// Base visibility toggles map exactly: base/frame/ins/deck
-vBaseEl.addEventListener('change', (e) => {
-  store.setState({ vis: { base: e.target.checked } });
-});
-vFrameEl.addEventListener('change', (e) => {
-  store.setState({ vis: { frame: e.target.checked } });
-});
-vInsEl.addEventListener('change', (e) => {
-  store.setState({ vis: { ins: e.target.checked } });
-});
-vDeckEl.addEventListener('change', (e) => {
-  store.setState({ vis: { deck: e.target.checked } });
-});
+  window.addEventListener("hashchange", function () {
+    var hv = readHashView();
+    if (hv) applyView(hv, "hash");
+  });
 
-// New per-wall visibility listeners (do not clobber siblings)
-vWallFrontEl.addEventListener('change', (e) => {
-  store.setState({ vis: { walls: { front: !!e.target.checked } } });
-});
-vWallBackEl.addEventListener('change', (e) => {
-  store.setState({ vis: { walls: { back: !!e.target.checked } } });
-});
-vWallLeftEl.addEventListener('change', (e) => {
-  store.setState({ vis: { walls: { left: !!e.target.checked } } });
-});
-vWallRightEl.addEventListener('change', (e) => {
-  store.setState({ vis: { walls: { right: !!e.target.checked } } });
-});
+  window.addEventListener("keydown", function (e) {
+    if (!e || e.defaultPrevented) return;
+    if (isTypingTarget(document.activeElement)) return;
 
-// Dimension Mode
-dimModeEl.addEventListener('change', () => {
-  store.setState({ dimMode: dimModeEl.value });
-  syncUiFromState(store.getState());
-});
+    if (e.key === "1") applyView("3d", "key");
+    else if (e.key === "2") applyView("walls", "key");
+    else if (e.key === "3") applyView("base", "key");
+  });
 
-// Active W/D write into active mode slots
-function writeActiveDims() {
-  const s = store.getState();
-  const w = asPosInt(wInputEl.value, (s.dimInputs.baseW_mm));
-  const d = asPosInt(dInputEl.value, (s.dimInputs.baseD_mm));
-  if (s.dimMode === 'base') {
-    store.setState({ dimInputs: { baseW_mm: w, baseD_mm: d } });
-  } else if (s.dimMode === 'frame') {
-    store.setState({ dimInputs: { frameW_mm: w, frameD_mm: d } });
-  } else {
-    store.setState({ dimInputs: { roofW_mm: w, roofD_mm: d } });
-  }
+  window.addEventListener("resize", function () {
+    // Keep canvas full-screen (CSS handles size; Babylon needs resize)
+    if (document.body.dataset.view === "3d") safeAttachCamera();
+    requestPurge();
+  });
+
+  // Late injected overlays
+  try {
+    var mo = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        if (muts[i] && muts[i].addedNodes && muts[i].addedNodes.length) {
+          requestPurge();
+          break;
+        }
+      }
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
+
+  // ---- Init ----
+  var initial = readHashView() || readStoredView() || "3d";
+  applyView(initial, "init");
 }
-wInputEl.addEventListener('input', writeActiveDims);
-dInputEl.addEventListener('input', writeActiveDims);
-
-// Overhangs
-overUniformEl.addEventListener('input', () => {
-  const n = Math.max(0, Math.floor(Number(overUniformEl.value || 0)));
-  store.setState({ overhang: { uniform_mm: Number.isFinite(n) ? n : 0 } });
-});
-overLeftEl.addEventListener('input', () => store.setState({ overhang: { left_mm: asNullableInt(overLeftEl.value) } }));
-overRightEl.addEventListener('input', () => store.setState({ overhang: { right_mm: asNullableInt(overRightEl.value) } }));
-overFrontEl.addEventListener('input', () => store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }));
-overBackEl.addEventListener('input', () => store.setState({ overhang: { back_mm: asNullableInt(overBackEl.value) } }));
-
-// Walls variant/height
-wallsVariantEl.addEventListener('change', () => {
-  store.setState({ walls: { variant: wallsVariantEl.value } });
-});
-wallHeightEl.addEventListener('input', () => {
-  store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
-});
-
-// --- Door controls & center snap ---
-
-// Enable/disable: on enable, snap to wall center by default (one-time)
-doorEnabledEl.addEventListener('change', () => {
-  const s = store.getState();
-  const enabled = !!doorEnabledEl.checked;
-  const cur = s.walls.openings[0];
-  if (enabled) {
-    const L = currentFrontWallLength();
-    const doorW = asPosInt(cur.width_mm, 900);
-    const centered = Math.floor((L - doorW) / 2);
-    const clamped = clampDoorX(centered, doorW);
-    const o = { ...cur, enabled: true, x_mm: clamped };
-    store.setState({ walls: { openings: [o] } });
-  } else {
-    const o = { ...cur, enabled: false };
-    store.setState({ walls: { openings: [o] } });
-  }
-});
-
-doorXEl.addEventListener('input', () => {
-  const s = store.getState();
-  const cur = s.walls.openings[0];
-  const doorW = asPosInt(cur.width_mm, 900);
-  const x = asNonNegInt(doorXEl.value, cur.x_mm);
-  const clamped = clampDoorX(x, doorW);
-  const o = { ...cur, x_mm: clamped };
-  store.setState({ walls: { openings: [o] } });
-});
-
-doorWEl.addEventListener('input', () => {
-  const s = store.getState();
-  const cur = s.walls.openings[0];
-  const w = asPosInt(doorWEl.value, cur.width_mm);
-  const clampedX = clampDoorX(cur.x_mm ?? 0, w);
-  const o = { ...cur, width_mm: w, x_mm: clampedX };
-  store.setState({ walls: { openings: [o] } });
-});
-
-doorHEl.addEventListener('input', () => {
-  const s = store.getState();
-  const cur = s.walls.openings[0];
-  const h = asPosInt(doorHEl.value, cur.height_mm);
-  // Re-clamp X when height changes per spec (idempotent)
-  const clampedX = clampDoorX(cur.x_mm ?? 0, asPosInt(cur.width_mm, 900));
-  const o = { ...cur, height_mm: h, x_mm: clampedX };
-  store.setState({ walls: { openings: [o] } });
-});
-
-// Initial seed + first render
-if (!wInputEl.value) wInputEl.value = String(store.getState().dimInputs.baseW_mm);
-if (!dInputEl.value) dInputEl.value = String(store.getState().dimInputs.baseD_mm);
-syncUiFromState(store.getState());
-render(store.getState());
