@@ -1,6 +1,6 @@
 // FILE: docs/src/index.js
 // Orchestration only. Geometry/BOM/state algorithms unchanged.
-// Fixes: DOM-ready init + null-safe UI touches so render doesn't hard-crash.
+// Change: walls footprint = base + 25mm overhang EACH side (total +50mm in W/D) and walls sit on top of deck.
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;
@@ -33,6 +33,19 @@ import { renderBOM } from "./bom/index.js";
 function $(id) { return document.getElementById(id); }
 function setDisplay(el, val) { if (el && el.style) el.style.display = val; }
 function setAriaHidden(el, hidden) { if (el) el.setAttribute("aria-hidden", String(!!hidden)); }
+
+// Wall footprint overhang relative to BASE (per side)
+var WALL_OVERHANG_MM = 25;
+
+// Base.build3D deck is centered at y=159mm with height 18mm => top surface at 168mm
+var DECK_TOP_MM = 168;
+
+function getWallOuterDimsFromState(state) {
+  var R = resolveDims(state);
+  var w = Math.max(1, Math.floor(R.base.w_mm + (2 * WALL_OVERHANG_MM)));
+  var d = Math.max(1, Math.floor(R.base.d_mm + (2 * WALL_OVERHANG_MM)));
+  return { w_mm: w, d_mm: d };
+}
 
 function initApp() {
   try {
@@ -162,8 +175,8 @@ function initApp() {
     }
 
     function currentFrontWallLength(state) {
-      var R = resolveDims(state);
-      return Math.max(1, Math.floor(R.frame.w_mm));
+      var dims = getWallOuterDimsFromState(state);
+      return Math.max(1, Math.floor(dims.w_mm));
     }
 
     function clampDoorX(x, doorW, wallLen) {
@@ -185,7 +198,16 @@ function initApp() {
 
         var R = resolveDims(state);
         var baseState = Object.assign({}, state, { w: R.base.w_mm, d: R.base.d_mm });
-        var wallState = Object.assign({}, state, { w: R.frame.w_mm, d: R.frame.d_mm });
+
+        // Walls: base + 25mm overhang each side (total +50mm), then globally offset:
+        //   X/Z by -25mm so it overhangs evenly around base,
+        //   Y by DECK_TOP_MM so bottom plate sits on top of deck.
+        var wallDims = getWallOuterDimsFromState(state);
+        var wallState = Object.assign({}, state, {
+          w: wallDims.w_mm,
+          d: wallDims.d_mm,
+          __wallOffset_mm: { x_mm: -WALL_OVERHANG_MM, y_mm: DECK_TOP_MM, z_mm: -WALL_OVERHANG_MM }
+        });
 
         safeDispose();
 
@@ -288,7 +310,7 @@ function initApp() {
         "LastError: " + err;
     }
 
-    // ---- listeners (null-safe) ----
+    // ---- listeners (unchanged behavior) ----
     if (vWallsEl) {
       vWallsEl.addEventListener("change", function (e) {
         var s = store.getState();
@@ -436,7 +458,7 @@ function initApp() {
   }
 }
 
-// DOM-ready gate (fixes canvas=null timing + avoids early crashes)
+// DOM-ready gate
 if (document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", initApp, { once: true });
 } else {
