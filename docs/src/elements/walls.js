@@ -4,9 +4,15 @@
  * - Front/Back run along X, thickness extrudes +Z.
  * - Left/Right run along Z, thickness extrudes +X.
  *
- * CHANGE (requested): Top + bottom plates are rotated 90° about their length axis so studs land on the plate's wider face.
- * Practically this means plate "vertical height" becomes the stud thickness (50), and wall thickness becomes the stud depth (75/100).
- * All other behavior (spacing rules, door logic, wall gating, BOM structure) remains the same.
+ * Plate orientation:
+ * - Top + bottom plates are rotated 90° about their length axis so studs land on the plate's wider face.
+ *   => plate vertical height = studW (50), wall thickness = studH (75/100).
+ *
+ * BASIC variant panelization (requested change):
+ * - If a basic wall length exceeds 2400mm, it is built as TWO separate panels whose lengths sum to the wall length,
+ *   split as evenly as possible (difference ≤ 1mm).
+ *
+ * Door logic remains insulated-only (basic ignores door controls).
  *
  * @param {any} state Derived state for walls (w/d already resolved to frame outer dims)
  * @param {{scene:BABYLON.Scene, materials:any}} ctx
@@ -25,14 +31,12 @@ export function build3D(state, ctx) {
     d: Math.max(1, Math.floor(state.d)),
   };
 
-  // Preserve existing variant semantics:
-  // insulated: 50×100 @ 400mm centers, basic: 50×75, no spacing.
-  // But if a section exists in state (from UI), use it.
+  // Variant profile: default behavior preserved; if section exists in state, use it.
   const prof = resolveProfile(state, variant);
 
-  // Plate rotated: vertical plate height is the "thin" dimension, wall thickness is the "wide" dimension.
-  const plateY = prof.studW;        // 50mm vertical
-  const wallThk = prof.studH;       // 75/100mm wall thickness (extrude axis)
+  // Plate rotated: vertical plate height is the thin dimension, wall thickness is the wide dimension.
+  const plateY = prof.studW;   // typically 50mm
+  const wallThk = prof.studH;  // 75 or 100mm
   const studLen = Math.max(1, height - 2 * plateY);
 
   const flags = normalizeWallFlags(state);
@@ -59,13 +63,57 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
+  function buildBasicPanel(wallPrefix, axis, panelLen, offsetAlong) {
+    const isAlongX = axis === 'x';
+
+    if (isAlongX) {
+      mkBox(wallPrefix + 'plate-bottom', panelLen, plateY, wallThk, { x: offsetAlong, y: 0, z: 0 }, materials.plate);
+      mkBox(wallPrefix + 'plate-top',    panelLen, plateY, wallThk, { x: offsetAlong, y: height - plateY, z: 0 }, materials.plate);
+    } else {
+      mkBox(wallPrefix + 'plate-bottom', wallThk, plateY, panelLen, { x: 0, y: 0, z: offsetAlong }, materials.plate);
+      mkBox(wallPrefix + 'plate-top',    wallThk, plateY, panelLen, { x: 0, y: height - plateY, z: offsetAlong }, materials.plate);
+    }
+
+    const placeStud = (x, z, h, idx) => {
+      if (isAlongX) {
+        mkBox(wallPrefix + 'stud-' + idx, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber);
+      } else {
+        mkBox(wallPrefix + 'stud-' + idx, wallThk, h, prof.studW, { x, y: plateY, z }, materials.timber);
+      }
+    };
+
+    // Corner studs for this panel + single mid stud (basic rule preserved per panel)
+    if (isAlongX) {
+      const x0 = offsetAlong;
+      const x1 = offsetAlong + panelLen - prof.studW;
+      const xm = Math.max(x0, Math.floor(offsetAlong + panelLen / 2 - prof.studW / 2));
+      placeStud(x0, 0, studLen, 0);
+      placeStud(x1, 0, studLen, 1);
+      placeStud(xm, 0, studLen, 2);
+    } else {
+      const z0 = offsetAlong;
+      const z1 = offsetAlong + panelLen - prof.studW;
+      const zm = Math.max(z0, Math.floor(offsetAlong + panelLen / 2 - prof.studW / 2));
+      placeStud(0, z0, studLen, 0);
+      placeStud(0, z1, studLen, 1);
+      placeStud(0, zm, studLen, 2);
+    }
+  }
+
   function buildWall(wallId, axis, length) {
     const isAlongX = axis === 'x';
     const wallPrefix = `wall-${wallId}-`;
 
-    // Plates rotated 90° about their length axis:
-    // Along X: length in X, thickness in Z, vertical height in Y
-    // Along Z: length in Z, thickness in X, vertical height in Y
+    // BASIC: if length > 2400mm, split into two panels (equal-ish, sum exact)
+    if (variant === 'basic' && length > 2400) {
+      const p1 = Math.floor(length / 2);
+      const p2 = length - p1; // difference ≤ 1
+      buildBasicPanel(wallPrefix + 'panel-1-', axis, p1, 0);
+      buildBasicPanel(wallPrefix + 'panel-2-', axis, p2, p1);
+      return;
+    }
+
+    // Plates (rotated 90° about length axis)
     if (isAlongX) {
       mkBox(wallPrefix + 'plate-bottom', length, plateY, wallThk, { x: 0, y: 0, z: 0 }, materials.plate);
       mkBox(wallPrefix + 'plate-top',    length, plateY, wallThk, { x: 0, y: height - plateY, z: 0 }, materials.plate);
@@ -76,37 +124,26 @@ export function build3D(state, ctx) {
 
     const studs = [];
     const placeStud = (x, z, h) => {
-      // Studs: 50 wide across the run, 75/100 in thickness, vertical length h
       if (isAlongX) {
-        studs.push(mkBox(
-          wallPrefix + 'stud-' + studs.length,
-          prof.studW, h, wallThk,
-          { x, y: plateY, z },
-          materials.timber
-        ));
+        studs.push(mkBox(wallPrefix + 'stud-' + studs.length, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber));
       } else {
-        studs.push(mkBox(
-          wallPrefix + 'stud-' + studs.length,
-          wallThk, h, prof.studW,
-          { x, y: plateY, z },
-          materials.timber
-        ));
+        studs.push(mkBox(wallPrefix + 'stud-' + studs.length, wallThk, h, prof.studW, { x, y: plateY, z }, materials.timber));
       }
     };
 
-    // Corner studs (unchanged placement intent)
+    // Corner studs
     placeStud(0, 0, studLen);
     if (isAlongX) placeStud(length - prof.studW, 0, studLen);
     else placeStud(0, length - prof.studW, studLen);
 
     if (variant === 'basic') {
-      // Basic keeps single mid stud (unchanged rule)
+      // Basic: single mid-span stud (unchanged)
       if (isAlongX) placeStud(Math.max(0, Math.floor(length / 2 - prof.studW / 2)), 0, studLen);
       else placeStud(0, Math.max(0, Math.floor(length / 2 - prof.studW / 2)), studLen);
-      return { studs };
+      return;
     }
 
-    // Insulated @400 (unchanged rule)
+    // Insulated @400 (unchanged)
     if (isAlongX) {
       let x = 400;
       while (x <= length - prof.studW) {
@@ -129,78 +166,46 @@ export function build3D(state, ctx) {
       }
     }
 
-    return { studs };
+    if (wallId === 'front' && doorEnabled) {
+      addFrontDoorFraming(length, doorX, doorW);
+    }
   }
 
-  // Front
+  // Build walls
   if (flags.front) {
     buildWall('front', 'x', dims.w);
-    if (doorEnabled) addFrontDoorFraming(dims.w, doorX, doorW);
   }
-
-  // Back: shift by wall thickness (was 50, now 75/100)
   if (flags.back) {
     shiftGroup(scene, 'wall-back', () => buildWall('back', 'x', dims.w), { x: 0, z: dims.d - wallThk });
   }
-
-  // Left
   if (flags.left) {
     buildWall('left', 'z', dims.d);
   }
-
-  // Right: shift by wall thickness (was 50, now 75/100)
   if (flags.right) {
     shiftGroup(scene, 'wall-right', () => buildWall('right', 'z', dims.d), { x: dims.w - wallThk, z: 0 });
   }
 
   function addFrontDoorFraming(lengthX, dx, dw) {
-    // Keep door logic identical; only plate/stud base changes to match rotated plates.
     const thickness = wallThk;
     const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
     const doorX0 = clamp(dx, 0, Math.max(0, lengthX - dw));
     const doorX1 = doorX0 + dw;
 
-    // Kings: full height between plates (use plateY, not studH)
-    mkBox(
-      'wall-front-king-left',
-      prof.studW, Math.max(1, height - 2 * plateY), thickness,
-      { x: doorX0 - prof.studW, y: plateY, z: 0 },
-      materials.timber
-    );
-    mkBox(
-      'wall-front-king-right',
-      prof.studW, Math.max(1, height - 2 * plateY), thickness,
-      { x: doorX1, y: plateY, z: 0 },
-      materials.timber
-    );
+    // Kings: full height between plates
+    mkBox('wall-front-king-left',  prof.studW, Math.max(1, height - 2 * plateY), thickness, { x: doorX0 - prof.studW, y: plateY, z: 0 }, materials.timber);
+    mkBox('wall-front-king-right', prof.studW, Math.max(1, height - 2 * plateY), thickness, { x: doorX1,           y: plateY, z: 0 }, materials.timber);
 
-    // Trimmers: from bottom plate up to header
-    mkBox(
-      'wall-front-trimmer-left',
-      prof.studW, doorH, thickness,
-      { x: doorX0, y: plateY, z: 0 },
-      materials.timber
-    );
-    mkBox(
-      'wall-front-trimmer-right',
-      prof.studW, doorH, thickness,
-      { x: doorX1 - prof.studW, y: plateY, z: 0 },
-      materials.timber
-    );
+    // Trimmers
+    mkBox('wall-front-trimmer-left',  prof.studW, doorH, thickness, { x: doorX0,           y: plateY, z: 0 }, materials.timber);
+    mkBox('wall-front-trimmer-right', prof.studW, doorH, thickness, { x: doorX1 - prof.studW, y: plateY, z: 0 }, materials.timber);
 
-    // Header: keep same thickness logic as before (vertical thickness = studH), but positioned from new plate base.
+    // Header
     const headerL = dw + 2 * prof.studW;
-    mkBox(
-      'wall-front-header',
-      headerL, prof.studH, thickness,
-      { x: doorX0 - prof.studW, y: plateY + doorH, z: 0 },
-      materials.timber
-    );
+    mkBox('wall-front-header', headerL, prof.studH, thickness, { x: doorX0 - prof.studW, y: plateY + doorH, z: 0 }, materials.timber);
   }
 }
 
 function resolveProfile(state, variant) {
-  // Default behavior preserved: insulated => 50×100 @400, basic => 50×75 no spacing.
   const defaults = (variant === 'insulated')
     ? { studW: 50, studH: 100, spacing: 400 }
     : { studW: 50, studH: 75, spacing: null };
@@ -217,7 +222,7 @@ function resolveProfile(state, variant) {
 
 function normalizeWallFlags(state) {
   const enabled = state.vis?.wallsEnabled !== false;
-  const parts = state.vis?.walls || { front:true, back:true, left:true, right:true };
+  const parts = state.vis?.walls || { front: true, back: true, left: true, right: true };
   return {
     front: enabled && parts.front !== false,
     back:  enabled && parts.back  !== false,
@@ -244,7 +249,6 @@ export function updateBOM(state) {
 
   const prof = resolveProfile(state, variant);
 
-  // Plate rotated: vertical plate height is studW (50)
   const plateY = prof.studW;
   const studLen = Math.max(1, height - 2 * plateY);
 
@@ -260,23 +264,36 @@ export function updateBOM(state) {
   for (const wname of walls) {
     const L = lengths[wname];
 
-    // Preserve BOM structure: [item, qty, L_mm, W_mm, notes]
-    sections.push(['Bottom Plate (' + wname + ')', 1, L, prof.studW, '']);
-    sections.push(['Top Plate (' + wname + ')', 1, L, prof.studW, '']);
+    if (variant === 'basic' && L > 2400) {
+      const p1 = Math.floor(L / 2);
+      const p2 = L - p1;
 
-    if (variant !== 'insulated') {
-      const studs = 2 + 1;
-      sections.push(['Studs (' + wname + ')', studs, studLen, prof.studW, 'basic']);
+      sections.push([`Bottom Plate (${wname}) — Panel 1`, 1, p1, prof.studW, 'basic']);
+      sections.push([`Bottom Plate (${wname}) — Panel 2`, 1, p2, prof.studW, 'basic']);
+      sections.push([`Top Plate (${wname}) — Panel 1`, 1, p1, prof.studW, 'basic']);
+      sections.push([`Top Plate (${wname}) — Panel 2`, 1, p2, prof.studW, 'basic']);
+
+      // 3 studs per panel
+      sections.push([`Studs (${wname})`, 6, studLen, prof.studW, 'basic (2 panels)']);
       continue;
     }
 
+    sections.push([`Bottom Plate (${wname})`, 1, L, prof.studW, '']);
+    sections.push([`Top Plate (${wname})`, 1, L, prof.studW, '']);
+
+    if (variant === 'basic') {
+      sections.push([`Studs (${wname})`, 3, studLen, prof.studW, 'basic']);
+      continue;
+    }
+
+    // insulated (unchanged logic)
     let count = 2;
     let run = 400;
     while (run <= L - prof.studW) {
       count += 1;
       run += prof.spacing;
     }
-    sections.push(['Studs (' + wname + ')', count, studLen, prof.studW, '@400']);
+    sections.push([`Studs (${wname})`, count, studLen, prof.studW, '@400']);
 
     if (wname === 'front') {
       const door = (state.walls?.openings || [])[0];
