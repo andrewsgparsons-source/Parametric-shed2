@@ -1,9 +1,7 @@
 // FILE: docs/src/index.js
 // Orchestration only.
-// Changes included:
-//  - walls footprint remains: base + 25mm per side and walls sit on top of deck (as you had working)
-//  - NEW: wall stud/plate size control via #wallSection (50x75 or 50x100), applied to BOTH variants.
-// No other geometry/BOM/state behavior is changed.
+// Adds stud/plate size selector (#wallSection) that updates state.walls.{insulated,basic}.section to 50×75 or 50×100.
+// Keeps all other behavior unchanged.
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;
@@ -37,8 +35,8 @@ function $(id) { return document.getElementById(id); }
 function setDisplay(el, val) { if (el && el.style) el.style.display = val; }
 function setAriaHidden(el, hidden) { if (el) el.setAttribute("aria-hidden", String(!!hidden)); }
 
-var WALL_OVERHANG_MM = 25;   // per side
-var WALL_RISE_MM = 168;      // deck top = 159 + 9
+var WALL_OVERHANG_MM = 25;
+var WALL_RISE_MM = 168;
 
 function shiftWallMeshes(scene, dx_mm, dy_mm, dz_mm) {
   if (!scene || !scene.meshes) return;
@@ -211,7 +209,6 @@ function initApp() {
         window.__dbg.buildCalls += 1;
 
         var R = resolveDims(state);
-
         var baseState = Object.assign({}, state, { w: R.base.w_mm, d: R.base.d_mm });
 
         var wallDims = getWallOuterDimsFromState(state);
@@ -281,7 +278,7 @@ function initApp() {
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
         if (wallHeightEl && state && state.walls && state.walls.height_mm != null) wallHeightEl.value = String(state.walls.height_mm);
 
-        // NEW: derive section size from either variant config; we keep both synced so either works.
+        // Reflect currently-selected section height into the dropdown.
         if (wallSectionEl && state && state.walls) {
           var h = null;
           try {
@@ -397,7 +394,7 @@ function initApp() {
     if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
     if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
 
-    // NEW: section size control (DOM only + state patch)
+    // NEW: Stud/Plate size -> updates BOTH variants' section.h (50×75 or 50×100)
     function sectionHFromSelectValue(v) {
       return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
     }
