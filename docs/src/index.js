@@ -1,7 +1,7 @@
 // FILE: docs/src/index.js
 // Orchestration only.
 // Adds stud/plate size selector (#wallSection) that updates state.walls.{insulated,basic}.section to 50×75 or 50×100.
-// Adds multi-door UI wiring (any number of doors, any wall) without changing geometry/BOM algorithms outside walls.js.
+// Keeps all other behavior unchanged.
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;
@@ -106,22 +106,14 @@ function initApp() {
     var overLeftEl = $("roofOverLeft");
     var overRightEl = $("roofOverRight");
 
-    var wallSectionEl = $("wallSection");
+    var wallSectionEl = $("wallSection"); // NEW
     var wallsVariantEl = $("wallsVariant");
     var wallHeightEl = $("wallHeight");
-
-    // Door editor (required IDs + new selector/wall/add/remove)
-    var doorSelectEl = $("doorSelect");
-    var doorWallEl = $("doorWall");
-    var doorAddBtnEl = $("doorAddBtn");
-    var doorRemoveBtnEl = $("doorRemoveBtn");
 
     var doorEnabledEl = $("doorEnabled");
     var doorXEl = $("doorX");
     var doorWEl = $("doorW");
     var doorHEl = $("doorH");
-
-    var selectedDoorId = null;
 
     var asPosInt = function (v, def) {
       var n = Math.floor(Number(v));
@@ -194,97 +186,14 @@ function initApp() {
       return { w_mm: w, d_mm: d };
     }
 
-    function getWallThicknessFromState(state) {
-      try {
-        var v = (state && state.walls && state.walls.variant) ? state.walls.variant : "insulated";
-        var cfg = state && state.walls ? state.walls[v] : null;
-        var h = cfg && cfg.section && cfg.section.h != null ? Math.floor(Number(cfg.section.h)) : null;
-        return (Number.isFinite(h) && h > 0) ? h : (v === "basic" ? 75 : 100);
-      } catch (e) {
-        return 100;
-      }
-    }
-
-    function wallLengthForDoor(state, door) {
+    function currentFrontWallLength(state) {
       var dims = getWallOuterDimsFromState(state);
-      var wallThk = getWallThicknessFromState(state);
-      var wall = String(door && door.wall ? door.wall : "front").toLowerCase();
-      if (wall === "left" || wall === "right") return Math.max(1, Math.floor(dims.d_mm - 2 * wallThk));
       return Math.max(1, Math.floor(dims.w_mm));
     }
 
     function clampDoorX(x, doorW, wallLen) {
       var maxX = Math.max(0, wallLen - doorW);
       return Math.max(0, Math.min(maxX, x));
-    }
-
-    function normalizeOpenings(state) {
-      var s = state || {};
-      var walls = s.walls || {};
-      var arr = walls.openings;
-      if (!Array.isArray(arr)) arr = [];
-      if (!arr.length) {
-        arr = [{ id: "door1", wall: "front", type: "door", enabled: false, x_mm: 800, width_mm: 900, height_mm: 2000 }];
-      }
-      return arr;
-    }
-
-    function nextDoorId(openings) {
-      var maxN = 0;
-      for (var i = 0; i < openings.length; i++) {
-        var id = String(openings[i] && openings[i].id ? openings[i].id : "");
-        var m = id.match(/(\d+)$/);
-        if (m) maxN = Math.max(maxN, parseInt(m[1], 10) || 0);
-      }
-      return "door" + String(maxN + 1);
-    }
-
-    function getSelectedDoor(state) {
-      var openings = normalizeOpenings(state);
-      if (selectedDoorId) {
-        for (var i = 0; i < openings.length; i++) {
-          if (String(openings[i].id) === String(selectedDoorId)) return openings[i];
-        }
-      }
-      return openings.length ? openings[0] : null;
-    }
-
-    function setOpenings(openings) {
-      store.setState({ walls: { openings: openings } });
-    }
-
-    function patchSelectedDoor(patch) {
-      var s = store.getState();
-      var openings = normalizeOpenings(s);
-      var cur = getSelectedDoor(s);
-      if (!cur) return;
-
-      var out = [];
-      for (var i = 0; i < openings.length; i++) {
-        var d = openings[i];
-        if (String(d.id) === String(cur.id)) out.push(Object.assign({}, d, patch));
-        else out.push(d);
-      }
-      setOpenings(out);
-    }
-
-    function syncDoorSelectOptions(state) {
-      if (!doorSelectEl) return;
-
-      var openings = normalizeOpenings(state);
-      var cur = getSelectedDoor(state);
-      if (!selectedDoorId && cur) selectedDoorId = cur.id;
-
-      var html = "";
-      for (var i = 0; i < openings.length; i++) {
-        var d = openings[i];
-        var wall = String(d.wall || "front");
-        var en = d.enabled ? "on" : "off";
-        html += '<option value="' + String(d.id) + '">' + String(d.id) + " (" + wall + ", " + en + ")</option>";
-      }
-      doorSelectEl.innerHTML = html;
-
-      if (cur) doorSelectEl.value = String(cur.id);
     }
 
     function safeDispose() {
@@ -379,12 +288,8 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
-        // Doors
-        syncDoorSelectOptions(state);
-
-        var door = getSelectedDoor(state);
+        var door = state && state.walls && state.walls.openings ? state.walls.openings[0] : null;
         if (door) {
-          if (doorWallEl) doorWallEl.value = String(door.wall || "front");
           if (doorEnabledEl) doorEnabledEl.checked = !!door.enabled;
           if (doorXEl && door.x_mm != null) doorXEl.value = String(door.x_mm);
           if (doorWEl && door.width_mm != null) doorWEl.value = String(door.width_mm);
@@ -489,7 +394,7 @@ function initApp() {
     if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
     if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
 
-    // Stud/Plate size -> updates BOTH variants' section.h (50×75 or 50×100)
+    // NEW: Stud/Plate size -> updates BOTH variants' section.h (50×75 or 50×100)
     function sectionHFromSelectValue(v) {
       return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
     }
@@ -508,117 +413,60 @@ function initApp() {
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
     if (wallHeightEl) wallHeightEl.addEventListener("input", function () { store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } }); });
 
-    // Door selection
-    if (doorSelectEl) {
-      doorSelectEl.addEventListener("change", function () {
-        selectedDoorId = String(doorSelectEl.value || "");
-        syncUiFromState(store.getState());
-      });
-    }
-
-    if (doorAddBtnEl) {
-      doorAddBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var openings = normalizeOpenings(s);
-        var id = nextDoorId(openings);
-        var wall = doorWallEl ? String(doorWallEl.value || "front") : "front";
-
-        var newDoor = {
-          id: id,
-          wall: wall,
-          type: "door",
-          enabled: true,
-          x_mm: 0,
-          width_mm: 900,
-          height_mm: 2000
-        };
-
-        var len = wallLengthForDoor(s, newDoor);
-        newDoor.x_mm = clampDoorX(Math.floor((len - newDoor.width_mm) / 2), newDoor.width_mm, len);
-
-        openings = openings.concat([newDoor]);
-        selectedDoorId = id;
-        setOpenings(openings);
-      });
-    }
-
-    if (doorRemoveBtnEl) {
-      doorRemoveBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var openings = normalizeOpenings(s);
-        var cur = getSelectedDoor(s);
-        if (!cur) return;
-
-        var out = [];
-        for (var i = 0; i < openings.length; i++) {
-          if (String(openings[i].id) !== String(cur.id)) out.push(openings[i]);
-        }
-
-        selectedDoorId = out.length ? out[0].id : null;
-        setOpenings(out);
-      });
-    }
-
-    if (doorWallEl) {
-      doorWallEl.addEventListener("change", function () {
-        var s = store.getState();
-        var cur = getSelectedDoor(s);
-        if (!cur) return;
-
-        var wall = String(doorWallEl.value || "front");
-        var len = wallLengthForDoor(s, Object.assign({}, cur, { wall: wall }));
-        var w = asPosInt(cur.width_mm, 900);
-        var centered = Math.floor((len - w) / 2);
-        patchSelectedDoor({ wall: wall, x_mm: clampDoorX(centered, w, len) });
-      });
+    function patchDoor(patch) {
+      var s = store.getState();
+      var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
+      if (!cur) return;
+      store.setState({ walls: { openings: [Object.assign({}, cur, patch)] } });
     }
 
     if (doorEnabledEl) {
       doorEnabledEl.addEventListener("change", function () {
         var s = store.getState();
-        var cur = getSelectedDoor(s);
+        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
         if (!cur) return;
 
         var enabled = !!doorEnabledEl.checked;
         if (!enabled) {
-          patchSelectedDoor({ enabled: false });
+          patchDoor({ enabled: false });
           return;
         }
 
-        var len = wallLengthForDoor(s, cur);
-        var w = asPosInt(cur.width_mm, 900);
-        var centered = Math.floor((len - w) / 2);
-        patchSelectedDoor({ enabled: true, x_mm: clampDoorX(centered, w, len) });
+        var wallLen = currentFrontWallLength(s);
+        var doorW = asPosInt(cur.width_mm, 900);
+        var centered = Math.floor((wallLen - doorW) / 2);
+        var clamped = clampDoorX(centered, doorW, wallLen);
+        patchDoor({ enabled: true, x_mm: clamped });
       });
     }
 
     if (doorXEl) {
       doorXEl.addEventListener("input", function () {
         var s = store.getState();
-        var cur = getSelectedDoor(s);
+        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
         if (!cur) return;
 
-        var len = wallLengthForDoor(s, cur);
-        var w = asPosInt(cur.width_mm, 900);
+        var wallLen = currentFrontWallLength(s);
+        var doorW = asPosInt(cur.width_mm, 900);
         var x = asNonNegInt(doorXEl.value, cur.x_mm || 0);
-        patchSelectedDoor({ x_mm: clampDoorX(x, w, len) });
+        patchDoor({ x_mm: clampDoorX(x, doorW, wallLen) });
       });
     }
 
     if (doorWEl) {
       doorWEl.addEventListener("input", function () {
         var s = store.getState();
-        var cur = getSelectedDoor(s);
+        var cur = s && s.walls && s.walls.openings ? s.walls.openings[0] : null;
         if (!cur) return;
 
-        var len = wallLengthForDoor(s, cur);
+        var wallLen = currentFrontWallLength(s);
         var w = asPosInt(doorWEl.value, cur.width_mm || 900);
-        var x = clampDoorX(cur.x_mm || 0, w, len);
-        patchSelectedDoor({ width_mm: w, x_mm: x });
+        var x = clampDoorX(cur.x_mm || 0, w, wallLen);
+        patchDoor({ width_mm: w, x_mm: x });
       });
     }
 
-    if (doorHEl) doorHEl.addEventListener("input", function () { patchSelectedDoor({ height_mm: asPosInt(doorHEl.value, 2000) }); });
+    if (doorHEl) doorHEl.addEventListener("input", function () { patchDoor({ height_mm: asPosInt(doorHEl.value, 2000) }); });
 
     store.onChange(function (s) {
       syncUiFromState(s);
@@ -627,14 +475,6 @@ function initApp() {
 
     setInterval(updateOverlay, 1000);
     updateOverlay();
-
-    // Ensure door select has something meaningful on first load
-    try {
-      var initial = store.getState();
-      var o = normalizeOpenings(initial);
-      selectedDoorId = (o && o[0] && o[0].id) ? o[0].id : null;
-      setOpenings(o);
-    } catch (e) {}
 
     syncUiFromState(store.getState());
     render(store.getState());
