@@ -68,7 +68,7 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  // Map A/B (short/long axes) into world X/Z for rafters
+  // Map A/B (short/long axes) into world X/Z
   function mapABtoXZ_ForRafter(a0, b0, aLen, bLen, isWShort) {
     // aLen is rafter length along short span axis
     // bLen is the rafter "thickness" along the placement axis
@@ -76,8 +76,49 @@ export function build3D(state, ctx) {
     return { x0: b0, z0: a0, lenX: bLen, lenZ: aLen };
   }
 
-  // Rafters (span along A, placed along B @600)
-  // Fix orientation when width > depth by always mapping from A/B into world axes.
+  function mapABtoXZ_ForRim(a0, b0, aLen, bLen, isWShort) {
+    // aLen is rim thickness along short span axis (A)
+    // bLen is rim run length along long axis (B)
+    if (isWShort) return { x0: a0, z0: b0, lenX: aLen, lenZ: bLen };
+    return { x0: b0, z0: a0, lenX: bLen, lenZ: aLen };
+  }
+
+  // ---- Rim Joists (front/back at ends of A; run along B) ----
+  // Must sit inside footprint and not protrude:
+  // - placed at A=0 edge and A=(A - thicknessA) edge.
+  const rimThkA_mm = data.rafterW_mm;
+  const rimRunB_mm = data.B_mm;
+  const rimBackA0_mm = Math.max(0, data.A_mm - rimThkA_mm);
+
+  // Front rim (A = 0)
+  {
+    const mapped = mapABtoXZ_ForRim(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+    mkBox(
+      "roof-rim-front",
+      mapped.lenX,
+      data.rafterD_mm,
+      mapped.lenZ,
+      { x: mapped.x0, y: data.baseY_mm, z: mapped.z0 },
+      joistMat,
+      { roof: "pent", part: "rim", edge: "front" }
+    );
+  }
+
+  // Back rim (A = A - thickness)
+  {
+    const mapped = mapABtoXZ_ForRim(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+    mkBox(
+      "roof-rim-back",
+      mapped.lenX,
+      data.rafterD_mm,
+      mapped.lenZ,
+      { x: mapped.x0, y: data.baseY_mm, z: mapped.z0 },
+      joistMat,
+      { roof: "pent", part: "rim", edge: "back" }
+    );
+  }
+
+  // ---- Rafters (span along A, placed along B @600) ----
   for (let i = 0; i < data.rafters.length; i++) {
     const r = data.rafters[i];
 
@@ -134,6 +175,15 @@ export function updateBOM(state) {
   const data = computeRoofData(state);
 
   const rows = [];
+
+  // Rim joists (2x)
+  rows.push({
+    item: "Roof Rim Joist",
+    qty: 2,
+    L: data.isWShort ? data.roofD_mm : data.roofW_mm,
+    W: data.rafterW_mm,
+    notes: "D (mm): " + String(data.rafterD_mm),
+  });
 
   // Rafters (grouped)
   rows.push({
@@ -259,12 +309,10 @@ function computeRoofData(state) {
   const spacing = 600;
 
   // Timber section from CONFIG, rotated orientation:
-  // Use rafterW_mm along horizontal thickness, rafterD_mm vertical.
+  // Here: horizontal thickness uses baseD; vertical uses baseW.
   const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w))); // typically 50
   const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d))); // typically 100
 
-  // Rotated 90°: swap which local axis gets baseW/baseD.
-  // Here: horizontal thickness uses baseD; vertical uses baseW.
   const rafterW_mm = baseD;
   const rafterD_mm = baseW;
 
@@ -290,7 +338,7 @@ function computeRoofData(state) {
   for (let i = 0; i < pos.length; i++) {
     const b0 = pos[i];
 
-    // Store world anchors as before (used elsewhere), but mapping in build3D is now authoritative.
+    // Store world anchors deterministically (used by build3D mapping)
     if (isWShort) {
       // A->X, B->Z
       rafters.push({
@@ -347,6 +395,8 @@ function computeRoofData(state) {
   return {
     roofW_mm: roofW,
     roofD_mm: roofD,
+    A_mm: A,
+    B_mm: B,
     baseY_mm: wallH,
     isWShort: isWShort,
     rafterW_mm,
