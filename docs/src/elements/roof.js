@@ -68,18 +68,37 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
+  // Map A/B (short/long axes) into world X/Z for rafters
+  function mapABtoXZ_ForRafter(a0, b0, aLen, bLen, isWShort) {
+    // aLen is rafter length along short span axis
+    // bLen is the rafter "thickness" along the placement axis
+    if (isWShort) return { x0: a0, z0: b0, lenX: aLen, lenZ: bLen };
+    return { x0: b0, z0: a0, lenX: bLen, lenZ: aLen };
+  }
+
   // Rafters (span along A, placed along B @600)
+  // Fix orientation when width > depth by always mapping from A/B into world axes.
   for (let i = 0; i < data.rafters.length; i++) {
     const r = data.rafters[i];
 
-    // Cross-section orientation (rotated): vertical = rafterD_mm, thickness = rafterW_mm
-    // A-axis is length.
+    // Recover B placement from stored world positions (deterministic, no new policy):
+    // - if isWShort: B->Z, so b0 is r.z0_mm
+    // - else:        B->X, so b0 is r.x0_mm
+    const b0_mm = data.isWShort ? Math.floor(r.z0_mm) : Math.floor(r.x0_mm);
+    const mapped = mapABtoXZ_ForRafter(
+      0,
+      b0_mm,
+      data.rafterLen_mm,
+      data.rafterW_mm,
+      data.isWShort
+    );
+
     mkBox(
       `roof-rafter-${i}`,
-      r.len_mm,
+      mapped.lenX,
       data.rafterD_mm,
-      data.rafterW_mm,
-      { x: r.x0_mm, y: data.baseY_mm, z: r.z0_mm },
+      mapped.lenZ,
+      { x: mapped.x0, y: data.baseY_mm, z: mapped.z0 },
       joistMat,
       { roof: "pent", part: "rafter" }
     );
@@ -154,11 +173,14 @@ export function updateBOM(state) {
 
   // Stable sort: Item, L, W, Notes
   rows.sort((a, b) => {
-    const ai = String(a.item), bi = String(b.item);
+    const ai = String(a.item),
+      bi = String(b.item);
     if (ai !== bi) return ai.localeCompare(bi);
-    const aL = Number(a.L), bL = Number(b.L);
+    const aL = Number(a.L),
+      bL = Number(b.L);
     if (aL !== bL) return aL - bL;
-    const aW = Number(a.W), bW = Number(b.W);
+    const aW = Number(a.W),
+      bW = Number(b.W);
     if (aW !== bW) return aW - bW;
     return String(a.notes).localeCompare(String(b.notes));
   });
@@ -268,9 +290,7 @@ function computeRoofData(state) {
   for (let i = 0; i < pos.length; i++) {
     const b0 = pos[i];
 
-    // Build boxes in X/Z:
-    // - Length spans A axis
-    // - Thickness spans placement axis
+    // Store world anchors as before (used elsewhere), but mapping in build3D is now authoritative.
     if (isWShort) {
       // A->X, B->Z
       rafters.push({
@@ -328,6 +348,7 @@ function computeRoofData(state) {
     roofW_mm: roofW,
     roofD_mm: roofD,
     baseY_mm: wallH,
+    isWShort: isWShort,
     rafterW_mm,
     rafterD_mm,
     rafterLen_mm,
