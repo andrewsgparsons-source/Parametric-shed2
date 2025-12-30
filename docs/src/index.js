@@ -140,16 +140,6 @@ function initApp() {
       try { return JSON.stringify(v); } catch (e) { return ""; }
     }
 
-    function lsGet(key) {
-      try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
-    }
-    function lsSet(key, val) {
-      try { if (window.localStorage) window.localStorage.setItem(key, val); } catch (e) { throw e; }
-    }
-    function lsRemove(key) {
-      try { if (window.localStorage) window.localStorage.removeItem(key); } catch (e) { throw e; }
-    }
-
     function cloneJson(obj) {
       try { return JSON.parse(JSON.stringify(obj)); } catch (e) { return obj; }
     }
@@ -191,46 +181,160 @@ function initApp() {
       instancesHintEl.textContent = String(text || "");
     }
 
-    function readInstances() {
-      try {
-        var raw = lsGet(LS_INSTANCES_KEY);
-        if (!raw) return {};
-        var parsed = safeJsonParse(raw);
-        if (!parsed || typeof parsed !== "object") return {};
-        return parsed;
-      } catch (e) {
-        return null;
-      }
+    function isQuotaExceededError(err) {
+      if (!err) return false;
+      var name = String(err.name || "");
+      if (name === "QuotaExceededError") return true;
+      if (name === "NS_ERROR_DOM_QUOTA_REACHED") return true;
+      var code = err.code;
+      if (code === 22 || code === 1014) return true;
+      var msg = String(err.message || "");
+      if (msg && msg.toLowerCase().indexOf("quota") !== -1) return true;
+      return false;
     }
 
-    function writeInstances(map) {
-      try {
-        var s = safeJsonStringify(map || {});
-        if (!s) return false;
-        lsSet(LS_INSTANCES_KEY, s);
-        return true;
-      } catch (e) {
-        return false;
+    function probeStorage() {
+      var res = {
+        canRead: false,
+        canWrite: false,
+        persistentOk: false,
+        errName: "",
+        errMessage: ""
+      };
+
+      var ls = null;
+      try { ls = window.localStorage; } catch (e0) { ls = null; }
+      if (!ls) {
+        res.errName = "NoStorage";
+        res.errMessage = "window.localStorage unavailable";
+        return res;
       }
+
+      // Can read?
+      try {
+        ls.getItem("__shed_probe__");
+        res.canRead = true;
+      } catch (e1) {
+        res.canRead = false;
+        res.errName = String(e1 && e1.name ? e1.name : "ReadError");
+        res.errMessage = String(e1 && e1.message ? e1.message : e1);
+        return res;
+      }
+
+      // Can write?
+      try {
+        ls.setItem("__shed_probe__", "1");
+        res.canWrite = true;
+      } catch (e2) {
+        // Quota: read OK but write blocked.
+        res.canWrite = false;
+        res.errName = String(e2 && e2.name ? e2.name : "WriteError");
+        res.errMessage = String(e2 && e2.message ? e2.message : e2);
+        if (!isQuotaExceededError(e2)) {
+          // still keep canRead true, but treat as blocked writes
+        }
+        return res;
+      }
+
+      // Read back must work
+      try {
+        var v = ls.getItem("__shed_probe__");
+        res.canRead = true;
+        res.persistentOk = (v === "1");
+      } catch (e3) {
+        res.canRead = false;
+        res.persistentOk = false;
+        res.errName = String(e3 && e3.name ? e3.name : "ReadError");
+        res.errMessage = String(e3 && e3.message ? e3.message : e3);
+        return res;
+      }
+
+      // Cleanup probe key (best effort)
+      try { ls.removeItem("__shed_probe__"); } catch (e4) {}
+
+      return res;
     }
 
-    function readActiveName() {
-      try {
-        var v = lsGet(LS_ACTIVE_KEY);
-        return v != null ? String(v) : null;
-      } catch (e) {
-        return null;
+    var storageProbe = probeStorage();
+
+    // Provider abstraction (persistent localStorage vs session-only memory)
+    var memProvider = (function () {
+      var _map = {};
+      var _active = null;
+      return {
+        kind: "memory",
+        readMap: function () { return cloneJson(_map); },
+        writeMap: function (map) { _map = cloneJson(map || {}); return true; },
+        readActive: function () { return _active != null ? String(_active) : null; },
+        writeActive: function (name) { _active = (name == null) ? null : String(name); return true; }
+      };
+    })();
+
+    var lsProvider = (function () {
+      function lsGet(key) {
+        try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
       }
+      function lsSet(key, val) {
+        try { if (window.localStorage) window.localStorage.setItem(key, val); return true; } catch (e) { return false; }
+      }
+      function lsRemove(key) {
+        try { if (window.localStorage) window.localStorage.removeItem(key); return true; } catch (e) { return false; }
+      }
+
+      return {
+        kind: "localStorage",
+        readMap: function () {
+          try {
+            var raw = lsGet(LS_INSTANCES_KEY);
+            if (!raw) return {};
+            var parsed = safeJsonParse(raw);
+            if (!parsed || typeof parsed !== "object") return {};
+            return parsed;
+          } catch (e) {
+            return {};
+          }
+        },
+        writeMap: function (map) {
+          try {
+            var s = safeJsonStringify(map || {});
+            if (!s) return false;
+            return lsSet(LS_INSTANCES_KEY, s);
+          } catch (e) {
+            return false;
+          }
+        },
+        readActive: function () {
+          try {
+            var v = lsGet(LS_ACTIVE_KEY);
+            return v != null ? String(v) : null;
+          } catch (e) {
+            return null;
+          }
+        },
+        writeActive: function (name) {
+          try {
+            if (name == null) return lsRemove(LS_ACTIVE_KEY);
+            return lsSet(LS_ACTIVE_KEY, String(name));
+          } catch (e) {
+            return false;
+          }
+        }
+      };
+    })();
+
+    var provider = storageProbe.persistentOk ? lsProvider : memProvider;
+
+    function providerSuffix() {
+      return (provider && provider.kind === "memory") ? " (session only)" : "";
     }
 
-    function writeActiveName(name) {
-      try {
-        if (name == null) { lsRemove(LS_ACTIVE_KEY); return true; }
-        lsSet(LS_ACTIVE_KEY, String(name));
-        return true;
-      } catch (e) {
-        return false;
+    function storageBlockedHintPrefix() {
+      var nm = String(storageProbe.errName || "");
+      var msg = String(storageProbe.errMessage || "");
+      if (storageProbe.canRead && !storageProbe.canWrite) {
+        return "Storage read OK, write blocked: " + nm + (msg ? " " + msg : "") + " (session only)";
       }
+      return "Storage blocked: " + nm + (msg ? " " + msg : "") + " (session only)";
     }
 
     function listInstanceNames(map) {
@@ -240,18 +344,13 @@ function initApp() {
     }
 
     function rebuildInstanceSelect(selectedNameMaybe) {
-      if (!instanceSelectEl) return { map: {}, names: [], selected: null, ok: false };
+      if (!instanceSelectEl) return { map: {}, names: [], selected: null };
 
-      var map = readInstances();
-      if (map === null) {
-        setHint("Storage unavailable");
-        return { map: {}, names: [], selected: null, ok: false };
-      }
-
+      var map = provider.readMap();
       var names = listInstanceNames(map);
 
       var desired = selectedNameMaybe != null ? String(selectedNameMaybe) : null;
-      var active = readActiveName();
+      var active = provider.readActive();
       if (!desired && active && map[active] != null) desired = active;
       if (!desired && names.length) desired = names[0];
       if (desired && names.indexOf(desired) === -1) desired = names.length ? names[0] : null;
@@ -267,160 +366,122 @@ function initApp() {
 
       if (desired != null) {
         instanceSelectEl.value = desired;
-        writeActiveName(desired);
+        provider.writeActive(desired);
       }
 
-      return { map: map, names: names, selected: desired, ok: true };
-    }
-
-    function ensureDefaultInstance() {
-      if (!instanceSelectEl) return false;
-
-      var map = readInstances();
-      if (map === null) {
-        setHint("Storage unavailable");
-        return false;
-      }
-
-      var names = listInstanceNames(map);
-      if (names.length) return true;
-
-      // Create "Default" from CURRENT initial state (immediately after store creation).
-      try {
-        map["Default"] = cloneJson(store.getState());
-        if (!writeInstances(map)) {
-          setHint("Storage unavailable");
-          return false;
-        }
-        writeActiveName("Default");
-        rebuildInstanceSelect("Default");
-        setHint("Selected: Default");
-        return true;
-      } catch (e) {
-        setHint("Storage unavailable");
-        return false;
-      }
-    }
-
-    function getSelectedName() {
-      if (!instanceSelectEl) return null;
-      var v = String(instanceSelectEl.value || "");
-      return v ? v : null;
+      return { map: map, names: names, selected: desired };
     }
 
     function saveCurrentTo(name, overwriteAllowed) {
       var nm = String(name || "").trim();
       if (!nm) return false;
 
-      var map = readInstances();
-      if (map === null) {
-        setHint("Storage unavailable");
+      var map = provider.readMap();
+      if (!overwriteAllowed && map[nm] != null) return false;
+
+      map[nm] = cloneJson(store.getState());
+      var ok = provider.writeMap(map);
+      if (!ok) {
+        if (!storageProbe.persistentOk) setHint(storageBlockedHintPrefix());
+        else setHint("Storage blocked: WriteError" + providerSuffix());
         return false;
       }
 
-      if (!overwriteAllowed && map[nm] != null) {
-        return false;
-      }
-
-      try {
-        map[nm] = cloneJson(store.getState());
-        if (!writeInstances(map)) {
-          setHint("Storage unavailable");
-          return false;
-        }
-        writeActiveName(nm);
-        rebuildInstanceSelect(nm);
-        setHint("Saved: " + nm);
-        return true;
-      } catch (e) {
-        setHint("Storage unavailable");
-        return false;
-      }
+      provider.writeActive(nm);
+      rebuildInstanceSelect(nm);
+      setHint("Saved: " + nm + providerSuffix());
+      return true;
     }
 
     function loadFrom(name) {
       var nm = String(name || "").trim();
       if (!nm) return false;
 
-      var map = readInstances();
-      if (map === null) {
-        setHint("Storage unavailable");
-        return false;
-      }
-
+      var map = provider.readMap();
       var saved = map[nm];
+
       if (!saved || typeof saved !== "object") {
-        setHint("No saved instances.");
         rebuildInstanceSelect(null);
+        setHint("No saved instances." + providerSuffix());
         return false;
       }
 
-      try {
-        var baseline = cloneJson(DEFAULTS); // never mutate DEFAULTS
-        var merged = deepMerge(baseline, cloneJson(saved));
-        store.setState(merged); // ONCE
-        writeActiveName(nm);
-        rebuildInstanceSelect(nm);
-        setHint("Loaded: " + nm);
-        return true;
-      } catch (e) {
-        setHint("Storage unavailable");
-        return false;
-      }
+      var baseline = cloneJson(DEFAULTS); // never mutate DEFAULTS
+      var merged = deepMerge(baseline, cloneJson(saved));
+      store.setState(merged); // ONCE
+      provider.writeActive(nm);
+      rebuildInstanceSelect(nm);
+      setHint("Loaded: " + nm + providerSuffix());
+      return true;
     }
 
     function deleteSelectedInstance() {
-      var nm = getSelectedName();
-      if (!nm) {
-        setHint("No saved instances.");
-        return false;
-      }
+      var nm = (instanceSelectEl && instanceSelectEl.value) ? String(instanceSelectEl.value) : "";
+      nm = nm.trim();
+      if (!nm) { setHint("No saved instances." + providerSuffix()); return false; }
 
-      var map = readInstances();
-      if (map === null) {
-        setHint("Storage unavailable");
-        return false;
-      }
-
+      var map = provider.readMap();
       var names = listInstanceNames(map);
+
       if (names.length <= 1) {
-        setHint("Cannot delete last instance.");
         rebuildInstanceSelect(nm);
+        setHint("Cannot delete last instance." + providerSuffix());
         return false;
       }
 
       if (map[nm] == null) {
         rebuildInstanceSelect(null);
-        setHint("No saved instances.");
+        setHint("No saved instances." + providerSuffix());
         return false;
       }
 
-      try {
-        delete map[nm];
-        if (!writeInstances(map)) {
-          setHint("Storage unavailable");
-          return false;
-        }
-
-        var remaining = listInstanceNames(map);
-        var next = remaining.length ? remaining[0] : null;
-
-        if (next) {
-          writeActiveName(next);
-          rebuildInstanceSelect(next);
-          // Optionally auto-load next selection (deterministic, single store.setState)
-          loadFrom(next);
-          setHint("Deleted: " + nm);
-        } else {
-          rebuildInstanceSelect(null);
-          setHint("Deleted: " + nm);
-        }
-
-        return true;
-      } catch (e) {
-        setHint("Storage unavailable");
+      delete map[nm];
+      var ok = provider.writeMap(map);
+      if (!ok) {
+        if (!storageProbe.persistentOk) setHint(storageBlockedHintPrefix());
+        else setHint("Storage blocked: WriteError" + providerSuffix());
         return false;
       }
+
+      var remaining = listInstanceNames(map);
+      var next = remaining.length ? remaining[0] : null;
+
+      if (next) {
+        provider.writeActive(next);
+        rebuildInstanceSelect(next);
+        loadFrom(next); // deterministic; single setState inside loadFrom
+        setHint("Deleted: " + nm + providerSuffix());
+      } else {
+        rebuildInstanceSelect(null);
+        setHint("Deleted: " + nm + providerSuffix());
+      }
+
+      return true;
+    }
+
+    function ensureDefaultInstance() {
+      var map = provider.readMap();
+      var names = listInstanceNames(map);
+      if (names.length) return true;
+
+      map["Default"] = cloneJson(store.getState()); // immediately after store creation
+      var ok = provider.writeMap(map);
+      if (!ok) {
+        if (!storageProbe.persistentOk) setHint(storageBlockedHintPrefix());
+        else setHint("Storage blocked: WriteError" + providerSuffix());
+        return false;
+      }
+
+      provider.writeActive("Default");
+      rebuildInstanceSelect("Default");
+
+      if (!storageProbe.persistentOk) {
+        // Provide precise reason + session-only note
+        setHint(storageBlockedHintPrefix());
+      } else {
+        setHint("Selected: Default");
+      }
+      return true;
     }
 
     function wireInstancesUiOnce() {
@@ -434,14 +495,14 @@ function initApp() {
       instanceSelectEl._wired = true;
 
       saveInstanceBtnEl.addEventListener("click", function () {
-        var nm = getSelectedName();
-        if (!nm) { setHint("No saved instances."); return; }
+        var nm = (instanceSelectEl && instanceSelectEl.value) ? String(instanceSelectEl.value).trim() : "";
+        if (!nm) { setHint("No saved instances." + providerSuffix()); return; }
         saveCurrentTo(nm, true);
       });
 
       loadInstanceBtnEl.addEventListener("click", function () {
-        var nm = getSelectedName();
-        if (!nm) { setHint("No saved instances."); return; }
+        var nm = (instanceSelectEl && instanceSelectEl.value) ? String(instanceSelectEl.value).trim() : "";
+        if (!nm) { setHint("No saved instances." + providerSuffix()); return; }
         loadFrom(nm);
       });
 
@@ -449,9 +510,7 @@ function initApp() {
         var name = instanceNameInputEl ? String(instanceNameInputEl.value || "").trim() : "";
         if (!name) return;
 
-        var map = readInstances();
-        if (map === null) { setHint("Storage unavailable"); return; }
-
+        var map = provider.readMap();
         if (map[name] != null) {
           var ok = false;
           try { ok = window.confirm('Overwrite existing instance "' + name + '"?'); } catch (e0) { ok = false; }
@@ -466,36 +525,38 @@ function initApp() {
       });
 
       instanceSelectEl.addEventListener("change", function () {
-        var nm = getSelectedName();
-        if (!nm) { setHint("No saved instances."); return; }
-        if (!writeActiveName(nm)) { setHint("Storage unavailable"); return; }
+        var nm = (instanceSelectEl && instanceSelectEl.value) ? String(instanceSelectEl.value).trim() : "";
+        if (!nm) { setHint("No saved instances." + providerSuffix()); return; }
+        provider.writeActive(nm);
         rebuildInstanceSelect(nm);
-        setHint("Selected: " + nm);
+        setHint("Selected: " + nm + providerSuffix());
       });
     }
 
     function initInstances() {
       wireInstancesUiOnce();
 
-      // Always rebuild from localStorage as source of truth
-      var res = rebuildInstanceSelect(null);
-      if (!res.ok) return;
+      // If persistent storage isn't OK, tell precisely why and use fallback provider.
+      if (!storageProbe.persistentOk) {
+        setHint(storageBlockedHintPrefix());
+      }
 
-      // Create Default if empty/corrupt/none
+      var res = rebuildInstanceSelect(null);
+
       if (!res.names.length) {
+        // Must create Default when provider empty
         ensureDefaultInstance();
         return;
       }
 
-      // Select active if present
-      var active = readActiveName();
+      var active = provider.readActive();
       if (active && res.map && res.map[active] != null) {
         rebuildInstanceSelect(active);
-        setHint("Selected: " + active);
+        setHint("Selected: " + active + providerSuffix());
       } else {
         var first = res.names[0];
         rebuildInstanceSelect(first);
-        setHint("Selected: " + first);
+        setHint("Selected: " + first + providerSuffix());
       }
     }
 
