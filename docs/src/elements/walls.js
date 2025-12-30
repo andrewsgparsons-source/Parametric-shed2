@@ -73,7 +73,7 @@ export function build3D(state, ctx) {
 
   function normalizeDoorsForWall(wallId, length) {
     if (!doorEnabled) return [];
-    const out = [];
+    const raw = [];
     for (let i = 0; i < allDoors.length; i++) {
       const d = allDoors[i];
       if (!d || d.type !== "door") continue;
@@ -82,12 +82,10 @@ export function build3D(state, ctx) {
 
       const doorW = Math.max(100, Math.floor(d.width_mm || 800));
       const xRaw = Math.floor(d.x_mm ?? 0);
-      const x0 = clamp(xRaw, 0, Math.max(0, length - doorW));
-      const x1 = x0 + doorW;
 
-      out.push({ door: d, x0, x1, w: doorW });
+      raw.push({ door: d, x0: xRaw, x1: xRaw + doorW, w: doorW });
     }
-    return out;
+    return snapDoorsForWall(raw, length, prof.studW);
   }
 
   function isInsideAnyDoorCenter(center, doors) {
@@ -98,11 +96,24 @@ export function build3D(state, ctx) {
     return false;
   }
 
+  function findDoorsCoveringSeamStud(doors, seam) {
+    const cEnd = seam - (prof.studW / 2);
+    const cStart = seam + (prof.studW / 2);
+    const out = [];
+    for (let i = 0; i < doors.length; i++) {
+      const dd = doors[i];
+      if (cEnd > dd.x0 && cEnd < dd.x1) out.push(dd);
+      else if (cStart > dd.x0 && cStart < dd.x1) out.push(dd);
+    }
+    out.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
+    return out;
+  }
+
   function addInsulatedDoorFraming(wallId, axis, origin, length, dd) {
     const thickness = wallThk;
     const door = dd.door;
     const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
-    const doorX0 = clamp(dd.x0, 0, Math.max(0, length - dd.w));
+    const doorX0 = clamp(Math.floor(dd.x0), 0, Math.max(0, length - dd.w));
     const doorX1 = doorX0 + dd.w;
     const id = String(door.id != null ? door.id : "door");
 
@@ -200,7 +211,7 @@ export function build3D(state, ctx) {
   function addBasicDoorFrame(wallId, axis, origin, length, dd) {
     const door = dd.door;
     const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
-    const doorX0 = clamp(dd.x0, 0, Math.max(0, length - dd.w));
+    const doorX0 = clamp(Math.floor(dd.x0), 0, Math.max(0, length - dd.w));
     const doorX1 = doorX0 + dd.w;
     const id = String(door.id != null ? door.id : "door");
 
@@ -250,6 +261,34 @@ export function build3D(state, ctx) {
       );
 
       const headerL = dd.w + 2 * prof.studW;
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-header",
+        wallThk,
+        prof.studH,
+        headerL,
+        { x: origin.x, y: plateY + doorH, z: origin.z + (doorX0 - prof.studW) },
+        materials.timber
+      );
+    }
+  }
+
+  function addBasicDoorHeaderOnly(wallId, axis, origin, length, dd) {
+    const door = dd.door;
+    const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
+    const doorX0 = clamp(Math.floor(dd.x0), 0, Math.max(0, length - dd.w));
+    const id = String(door.id != null ? door.id : "door");
+    const headerL = dd.w + 2 * prof.studW;
+
+    if (axis === "x") {
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-header",
+        headerL,
+        prof.studH,
+        wallThk,
+        { x: origin.x + (doorX0 - prof.studW), y: plateY + doorH, z: origin.z },
+        materials.timber
+      );
+    } else {
       mkBox(
         "wall-" + wallId + "-door-" + id + "-header",
         wallThk,
@@ -343,14 +382,54 @@ export function build3D(state, ctx) {
   }
 
   function buildWall(wallId, axis, length, origin) {
-    const isAlongX = axis === "x";
     const wallPrefix = `wall-${wallId}-`;
     const doors = normalizeDoorsForWall(wallId, length);
 
-    // BASIC: if length > 2400mm, split into two panels (equal-ish, sum exact)
+    // BASIC: if length > 2400mm, split into panels
     if (variant === "basic" && length > 2400) {
-      const p1 = Math.floor(length / 2);
-      const p2 = length - p1; // difference ≤ 1
+      const seam = Math.floor(length / 2);
+      const seamDoors = findDoorsCoveringSeamStud(doors, seam);
+
+      if (seamDoors.length) {
+        let panelIdx = 1;
+        let offset = 0;
+
+        for (let i = 0; i < seamDoors.length; i++) {
+          const dd = seamDoors[i];
+
+          const betweenLen = Math.max(0, Math.floor(dd.x0 - offset));
+          if (betweenLen > 0) {
+            buildBasicPanel(wallPrefix + "panel-" + panelIdx + "-", axis, betweenLen, origin, offset, doors);
+            panelIdx += 1;
+          }
+
+          const doorLen = Math.max(0, Math.floor(dd.w));
+          if (doorLen > 0) {
+            buildBasicPanel(wallPrefix + "panel-door-" + (i + 1) + "-", axis, doorLen, origin, Math.floor(dd.x0), doors);
+          }
+
+          offset = Math.max(offset, Math.floor(dd.x1));
+        }
+
+        const rightLen = Math.max(0, Math.floor(length - offset));
+        if (rightLen > 0) {
+          buildBasicPanel(wallPrefix + "panel-" + panelIdx + "-", axis, rightLen, origin, offset, doors);
+        }
+
+        for (let i = 0; i < doors.length; i++) {
+          const dd = doors[i];
+          let isSeamDoor = false;
+          for (let j = 0; j < seamDoors.length; j++) {
+            if (seamDoors[j] === dd) { isSeamDoor = true; break; }
+          }
+          if (isSeamDoor) addBasicDoorHeaderOnly(wallId, axis, origin, length, dd);
+          else addBasicDoorFrame(wallId, axis, origin, length, dd);
+        }
+        return;
+      }
+
+      const p1 = seam;
+      const p2 = length - p1;
       buildBasicPanel(wallPrefix + "panel-1-", axis, p1, origin, 0, doors);
       buildBasicPanel(wallPrefix + "panel-2-", axis, p2, origin, p1, doors);
 
@@ -359,6 +438,7 @@ export function build3D(state, ctx) {
     }
 
     // Plates
+    const isAlongX = axis === "x";
     if (isAlongX) {
       mkBox(wallPrefix + "plate-bottom", length, plateY, wallThk, { x: origin.x, y: 0, z: origin.z }, materials.plate);
       mkBox(wallPrefix + "plate-top", length, plateY, wallThk, { x: origin.x, y: height - plateY, z: origin.z }, materials.plate);
@@ -491,7 +571,7 @@ export function updateBOM(state) {
 
   function doorsForWall(wallId, length) {
     if (!doorEnabled) return [];
-    const out = [];
+    const raw = [];
     for (let i = 0; i < allDoors.length; i++) {
       const d = allDoors[i];
       if (!d || d.type !== "door") continue;
@@ -500,12 +580,9 @@ export function updateBOM(state) {
 
       const doorW = Math.max(100, Math.floor(d.width_mm || 800));
       const xRaw = Math.floor(d.x_mm ?? 0);
-      const x0 = clamp(xRaw, 0, Math.max(0, length - doorW));
-      const x1 = x0 + doorW;
-
-      out.push({ door: d, x0, x1, w: doorW });
+      raw.push({ door: d, x0: xRaw, x1: xRaw + doorW, w: doorW });
     }
-    return out;
+    return snapDoorsForWall(raw, length, prof.studW);
   }
 
   function isInsideAnyDoorCenter(center, doors) {
@@ -514,6 +591,19 @@ export function updateBOM(state) {
       if (center > dd.x0 && center < dd.x1) return true;
     }
     return false;
+  }
+
+  function findDoorsCoveringSeamStud(doors, seam) {
+    const cEnd = seam - (prof.studW / 2);
+    const cStart = seam + (prof.studW / 2);
+    const out = [];
+    for (let i = 0; i < doors.length; i++) {
+      const dd = doors[i];
+      if (cEnd > dd.x0 && cEnd < dd.x1) out.push(dd);
+      else if (cStart > dd.x0 && cStart < dd.x1) out.push(dd);
+    }
+    out.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
+    return out;
   }
 
   function countInsulatedStuds(L, doors) {
@@ -533,7 +623,70 @@ export function updateBOM(state) {
     const doors = doorsForWall(wname, L);
 
     if (variant === "basic" && L > 2400) {
-      const p1 = Math.floor(L / 2);
+      const seam = Math.floor(L / 2);
+      const seamDoors = findDoorsCoveringSeamStud(doors, seam);
+
+      if (seamDoors.length) {
+        const segs = [];
+        let panelIdx = 1;
+        let offset = 0;
+
+        for (let i = 0; i < seamDoors.length; i++) {
+          const dd = seamDoors[i];
+
+          const betweenLen = Math.max(0, Math.floor(dd.x0 - offset));
+          if (betweenLen > 0) {
+            segs.push({ kind: "panel", label: `Panel ${panelIdx}`, offset, len: betweenLen });
+            panelIdx += 1;
+          }
+
+          const doorLen = Math.max(0, Math.floor(dd.w));
+          if (doorLen > 0) {
+            segs.push({ kind: "door", label: `Door Panel ${i + 1}`, offset: Math.floor(dd.x0), len: doorLen, doorRef: dd });
+          }
+
+          offset = Math.max(offset, Math.floor(dd.x1));
+        }
+
+        const rightLen = Math.max(0, Math.floor(L - offset));
+        if (rightLen > 0) {
+          segs.push({ kind: "panel", label: `Panel ${panelIdx}`, offset, len: rightLen });
+        }
+
+        for (let i = 0; i < segs.length; i++) {
+          const seg = segs[i];
+          sections.push([`Bottom Plate (${wname}) — ${seg.label}`, 1, seg.len, prof.studW, "basic"]);
+          sections.push([`Top Plate (${wname}) — ${seg.label}`, 1, seg.len, prof.studW, "basic"]);
+        }
+
+        let studCount = 0;
+        for (let i = 0; i < segs.length; i++) {
+          const seg = segs[i];
+          if (seg.len <= 0) continue;
+          studCount += 2;
+          const center = seg.offset + (seg.len / 2);
+          if (!isInsideAnyDoorCenter(center, doors)) studCount += 1;
+        }
+        sections.push([`Studs (${wname})`, studCount, studLen, prof.studW, "basic (door panels)"]);
+
+        for (let i = 0; i < doors.length; i++) {
+          const dd = doors[i];
+          const d = dd.door;
+          const id = String(d.id != null ? d.id : "door");
+
+          let isSeamDoor = false;
+          for (let j = 0; j < seamDoors.length; j++) {
+            if (seamDoors[j] === dd) { isSeamDoor = true; break; }
+          }
+
+          if (!isSeamDoor) sections.push([`Door Uprights (${wname}) — ${id}`, 2, studLen, prof.studW, "basic door"]);
+          sections.push([`Header (${wname}) — ${id}`, 1, dd.w + 2 * prof.studW, prof.studH, "basic door"]);
+        }
+
+        continue;
+      }
+
+      const p1 = seam;
       const p2 = L - p1;
 
       sections.push([`Bottom Plate (${wname}) — Panel 1`, 1, p1, prof.studW, "basic"]);
@@ -582,6 +735,98 @@ export function updateBOM(state) {
   }
 
   return { sections };
+}
+
+function snapDoorsForWall(rawDoors, length, studW) {
+  const CORNER_CLEAR = 50;
+  const MIN_GAP = 50;
+
+  const n = rawDoors.length;
+  if (!n) return [];
+
+  const items = [];
+  let sumW = 0;
+
+  for (let i = 0; i < n; i++) {
+    const dd = rawDoors[i];
+    const w = Math.max(1, Math.floor(dd.w || 1));
+    const desired = Math.floor(dd.x0 ?? 0);
+    items.push({ idx: i, door: dd.door, w, desired });
+    sumW += w;
+  }
+
+  let clear = CORNER_CLEAR;
+  let gap = MIN_GAP;
+
+  if (sumW + (n - 1) * gap + 2 * clear > length) {
+    clear = 0;
+  }
+  if (sumW + (n - 1) * gap + 2 * clear > length && n > 1) {
+    gap = Math.max(0, Math.floor((length - sumW - 2 * clear) / (n - 1)));
+  }
+
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const hasCornerRange = (length - (2 * clear) - it.w) >= 0;
+    const minEdge = hasCornerRange ? clear : 0;
+    const maxEdge = hasCornerRange ? (length - clear - it.w) : Math.max(0, length - it.w);
+
+    const baseClamp = clamp(it.desired, 0, Math.max(0, length - it.w));
+    it.minEdge = minEdge;
+    it.maxEdge = maxEdge;
+    it.desiredClamped = clamp(baseClamp, minEdge, maxEdge);
+  }
+
+  const order = items.slice().sort((a, b) => (a.desiredClamped - b.desiredClamped) || (a.idx - b.idx));
+
+  // Forward pass
+  for (let i = 0; i < order.length; i++) {
+    const it = order[i];
+    if (i === 0) it.pos = clamp(it.desiredClamped, it.minEdge, it.maxEdge);
+    else {
+      const prev = order[i - 1];
+      const minPos = prev.pos + prev.w + gap;
+      it.pos = clamp(Math.max(it.desiredClamped, minPos), it.minEdge, it.maxEdge);
+    }
+  }
+
+  // Backward pass
+  for (let i = order.length - 1; i >= 0; i--) {
+    const it = order[i];
+    it.pos = clamp(it.pos, it.minEdge, it.maxEdge);
+    if (i < order.length - 1) {
+      const next = order[i + 1];
+      const maxPos = next.pos - gap - it.w;
+      it.pos = clamp(Math.min(it.pos, maxPos), it.minEdge, it.maxEdge);
+    }
+  }
+
+  // Re-forward to re-satisfy gaps after backward adjustments
+  for (let i = 0; i < order.length; i++) {
+    const it = order[i];
+    if (i === 0) it.pos = clamp(it.pos, it.minEdge, it.maxEdge);
+    else {
+      const prev = order[i - 1];
+      const minPos = prev.pos + prev.w + gap;
+      it.pos = clamp(Math.max(it.pos, minPos), it.minEdge, it.maxEdge);
+    }
+  }
+
+  const byIdx = new Array(items.length);
+  for (let i = 0; i < order.length; i++) {
+    const it = order[i];
+    byIdx[it.idx] = {
+      door: it.door,
+      x0: Math.floor(it.pos),
+      x1: Math.floor(it.pos + it.w),
+      w: it.w
+    };
+  }
+
+  // Preserve original door ordering from state for stable behavior
+  const out = [];
+  for (let i = 0; i < items.length; i++) out.push(byIdx[i]);
+  return out;
 }
 
 function clamp(n, a, b) {
