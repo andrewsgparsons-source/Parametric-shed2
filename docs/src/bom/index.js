@@ -1,4 +1,4 @@
-﻿// src/bom/index.js
+// FILE: docs/src/bom/index.js
 
 export function renderBOM(sections) {
   const tbody = document.getElementById('bomTable');
