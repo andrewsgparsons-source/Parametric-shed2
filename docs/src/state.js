@@ -1,4 +1,4 @@
-﻿// src/state.js
+// FILE: docs/src/state.js
 
 export function createStateStore(initial) {
   let state = deepClone(initial);
