@@ -122,6 +122,246 @@ function initApp() {
     var removeAllWindowsBtnEl = $("removeAllWindowsBtn");
     var windowsListEl = $("windowsList");
 
+    var instanceSelectEl = $("instanceSelect");
+    var instanceNameInputEl = $("instanceNameInput");
+    var saveInstanceBtnEl = $("saveInstanceBtn");
+    var saveAsInstanceBtnEl = $("saveAsInstanceBtn");
+    var loadInstanceBtnEl = $("loadInstanceBtn");
+    var deleteInstanceBtnEl = $("deleteInstanceBtn");
+
+    var STORAGE_KEY = "shedInstances_v1";
+    var STORAGE_ACTIVE_KEY = "shedInstancesActive_v1";
+
+    function deepMergeLocal(target, patch) {
+      if (patch === null || typeof patch !== "object") return patch;
+      if (Array.isArray(patch)) return patch.map(function (v) { return deepMergeLocal(undefined, v); });
+      var out = Object.assign({}, (target || {}));
+      var keys = Object.keys(patch);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var pv = patch[k];
+        var tv = out[k];
+        if (pv && typeof pv === "object" && !Array.isArray(pv)) {
+          out[k] = deepMergeLocal((tv && typeof tv === "object") ? tv : {}, pv);
+        } else {
+          out[k] = deepMergeLocal(tv, pv);
+        }
+      }
+      return out;
+    }
+
+    function deepCloneLocal(v) {
+      if (v === null || typeof v !== "object") return v;
+      if (Array.isArray(v)) return v.map(deepCloneLocal);
+      var o = {};
+      for (var k in v) o[k] = deepCloneLocal(v[k]);
+      return o;
+    }
+
+    function readInstancesMap() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return {};
+        var parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return {};
+        return parsed;
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function writeInstancesMap(map) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(map || {}));
+      } catch (e) {}
+    }
+
+    function readActiveName() {
+      try {
+        var v = localStorage.getItem(STORAGE_ACTIVE_KEY);
+        return v ? String(v) : null;
+      } catch (e) { return null; }
+    }
+
+    function writeActiveName(name) {
+      try {
+        if (name == null) localStorage.removeItem(STORAGE_ACTIVE_KEY);
+        else localStorage.setItem(STORAGE_ACTIVE_KEY, String(name));
+      } catch (e) {}
+    }
+
+    function listInstanceNames(map) {
+      try {
+        return Object.keys(map || {}).map(String).sort(function (a, b) {
+          var A = a.toLowerCase(), B = b.toLowerCase();
+          if (A < B) return -1;
+          if (A > B) return 1;
+          return a < b ? -1 : (a > b ? 1 : 0);
+        });
+      } catch (e) { return []; }
+    }
+
+    function populateInstanceSelect(map, preferred) {
+      if (!instanceSelectEl) return;
+      var names = listInstanceNames(map);
+      instanceSelectEl.innerHTML = "";
+      for (var i = 0; i < names.length; i++) {
+        var opt = document.createElement("option");
+        opt.value = names[i];
+        opt.textContent = names[i];
+        instanceSelectEl.appendChild(opt);
+      }
+      var sel = null;
+      if (preferred && names.indexOf(preferred) >= 0) sel = preferred;
+      else if (names.length) sel = names[0];
+      if (sel != null) instanceSelectEl.value = sel;
+    }
+
+    function ensureDefaultInstanceExists() {
+      var map = readInstancesMap();
+      var names = listInstanceNames(map);
+      if (!names.length) {
+        map = {};
+        map["Default"] = deepCloneLocal(DEFAULTS);
+        writeInstancesMap(map);
+        writeActiveName("Default");
+        return map;
+      }
+      return map;
+    }
+
+    function getSelectedInstanceName() {
+      if (!instanceSelectEl) return null;
+      var v = instanceSelectEl.value;
+      return v ? String(v) : null;
+    }
+
+    function setSelectedInstanceName(name) {
+      if (!instanceSelectEl) return;
+      try { instanceSelectEl.value = String(name || ""); } catch (e) {}
+    }
+
+    function saveInstanceUnderName(name, stateObj) {
+      if (!name) return;
+      var map = readInstancesMap();
+      map[String(name)] = deepCloneLocal(stateObj);
+      writeInstancesMap(map);
+      writeActiveName(String(name));
+      populateInstanceSelect(map, String(name));
+      setSelectedInstanceName(String(name));
+    }
+
+    function loadInstanceByName(name) {
+      if (!name) return;
+      var map = readInstancesMap();
+      var saved = map[String(name)];
+      if (!saved || typeof saved !== "object") return;
+
+      var baseline = deepCloneLocal(DEFAULTS);
+      var merged = deepMergeLocal(baseline, saved);
+      store.setState(merged);
+
+      writeActiveName(String(name));
+      populateInstanceSelect(map, String(name));
+      setSelectedInstanceName(String(name));
+    }
+
+    function deleteInstanceByName(name) {
+      if (!name) return;
+      var map = readInstancesMap();
+      var names = listInstanceNames(map);
+      if (names.length <= 1) return;
+      if (!map.hasOwnProperty(String(name))) return;
+
+      delete map[String(name)];
+      writeInstancesMap(map);
+
+      var active = readActiveName();
+      var remaining = listInstanceNames(map);
+      var next = remaining.length ? remaining[0] : null;
+
+      populateInstanceSelect(map, (active && active !== name) ? active : next);
+
+      if (active && String(active) === String(name)) {
+        if (next) {
+          writeActiveName(next);
+          setSelectedInstanceName(next);
+          loadInstanceByName(next);
+        } else {
+          writeActiveName(null);
+        }
+      } else {
+        var sel = getSelectedInstanceName();
+        if (sel) writeActiveName(sel);
+      }
+    }
+
+    (function initInstancesUiOnce() {
+      try {
+        var map = ensureDefaultInstanceExists();
+        var active = readActiveName();
+        populateInstanceSelect(map, active && map[String(active)] ? active : null);
+        var sel = getSelectedInstanceName();
+        if (sel) writeActiveName(sel);
+      } catch (e) {}
+
+      if (instanceSelectEl && !instanceSelectEl._wired) {
+        instanceSelectEl._wired = true;
+        instanceSelectEl.addEventListener("change", function () {
+          var sel = getSelectedInstanceName();
+          if (sel) writeActiveName(sel);
+        });
+      }
+
+      if (saveInstanceBtnEl && !saveInstanceBtnEl._wired) {
+        saveInstanceBtnEl._wired = true;
+        saveInstanceBtnEl.addEventListener("click", function () {
+          var name = getSelectedInstanceName();
+          if (!name) return;
+          saveInstanceUnderName(name, store.getState());
+        });
+      }
+
+      if (saveAsInstanceBtnEl && !saveAsInstanceBtnEl._wired) {
+        saveAsInstanceBtnEl._wired = true;
+        saveAsInstanceBtnEl.addEventListener("click", function () {
+          var name = "";
+          try { name = String((instanceNameInputEl && instanceNameInputEl.value) ? instanceNameInputEl.value : ""); } catch (e) { name = ""; }
+          name = String(name || "").trim();
+          if (!name) return;
+
+          var map = readInstancesMap();
+          var exists = !!(map && map.hasOwnProperty(name));
+          if (exists) {
+            var ok = false;
+            try { ok = window.confirm('Overwrite existing instance "' + name + '"?'); } catch (e) { ok = false; }
+            if (!ok) return;
+          }
+
+          saveInstanceUnderName(name, store.getState());
+          try { if (instanceNameInputEl) instanceNameInputEl.value = ""; } catch (e) {}
+        });
+      }
+
+      if (loadInstanceBtnEl && !loadInstanceBtnEl._wired) {
+        loadInstanceBtnEl._wired = true;
+        loadInstanceBtnEl.addEventListener("click", function () {
+          var name = getSelectedInstanceName();
+          if (!name) return;
+          loadInstanceByName(name);
+        });
+      }
+
+      if (deleteInstanceBtnEl && !deleteInstanceBtnEl._wired) {
+        deleteInstanceBtnEl._wired = true;
+        deleteInstanceBtnEl.addEventListener("click", function () {
+          var name = getSelectedInstanceName();
+          if (!name) return;
+          deleteInstanceByName(name);
+        });
+      }
+    })();
+
     var asPosInt = function (v, def) {
       var n = Math.floor(Number(v));
       return Number.isFinite(n) && n > 0 ? n : def;
