@@ -17,7 +17,8 @@
  * - Left/Right run BETWEEN front/back, so their length is (dims.d - 2 * wallThickness)
  *   and they start at z = wallThickness.
  *
- * Door logic remains insulated-only (basic ignores door controls).
+ * Door logic:
+ * - door.width_mm is the CLEAR OPENING (gap) between the two uprights (studs).
  *
  * @param {any} state Derived state for walls (w/d already resolved to frame outer dims)
  * @param {{scene:BABYLON.Scene, materials:any}} ctx
@@ -91,11 +92,13 @@ export function build3D(state, ctx) {
     for (let i = 0; i < doorsAll.length; i++) {
       const d = doorsAll[i];
       if (String(d.wall || "front") !== wallId) continue;
-      const w = Math.max(100, Math.floor(d.width_mm || 800));
+
+      const wGap = Math.max(100, Math.floor(d.width_mm || 800));
       const x0 = Math.floor(d.x_mm ?? 0);
-      const x1 = x0 + w;
+      const x1 = x0 + wGap;
       const h = Math.max(100, Math.floor(d.height_mm || 2000));
-      list.push({ id: String(d.id || ""), x0, x1, w, h });
+
+      list.push({ id: String(d.id || ""), x0, x1, w: wGap, h });
     }
     return list;
   }
@@ -116,10 +119,10 @@ export function build3D(state, ctx) {
     const useInvalid = invalidSet.has(String(id));
     const mat = useInvalid && invalidDoorMat ? invalidDoorMat : materials.timber;
 
-    const doorX0 = door.x0;
-    const doorX1 = door.x1;
+    const doorX0 = door.x0; // clear opening edge
+    const doorX1 = door.x1; // clear opening edge
 
-    // Uprights (full height between plates)
+    // Uprights (full height between plates): inner faces define the clear opening.
     mkBox(
       `wall-${wallId}-door-${id}-upright-left`,
       prof.studW,
@@ -139,26 +142,7 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    // Trimmers (to door height) + Header (like insulated)
-    mkBox(
-      `wall-${wallId}-door-${id}-trimmer-left`,
-      prof.studW,
-      doorH,
-      thickness,
-      { x: origin.x + doorX0, y: plateY, z: origin.z },
-      mat,
-      { doorId: id }
-    );
-    mkBox(
-      `wall-${wallId}-door-${id}-trimmer-right`,
-      prof.studW,
-      doorH,
-      thickness,
-      { x: origin.x + (doorX1 - prof.studW), y: plateY, z: origin.z },
-      mat,
-      { doorId: id }
-    );
-
+    // Header spans clear opening + both uprights.
     const headerL = (door.w + 2 * prof.studW);
     mkBox(
       `wall-${wallId}-door-${id}-header`,
@@ -178,9 +162,10 @@ export function build3D(state, ctx) {
     const useInvalid = invalidSet.has(String(id));
     const mat = useInvalid && invalidDoorMat ? invalidDoorMat : materials.timber;
 
-    const doorZ0 = door.x0;
-    const doorZ1 = door.x1;
+    const doorZ0 = door.x0; // clear opening edge
+    const doorZ1 = door.x1; // clear opening edge
 
+    // Uprights (full height between plates): inner faces define the clear opening.
     mkBox(
       `wall-${wallId}-door-${id}-upright-left`,
       thickness,
@@ -200,25 +185,7 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    mkBox(
-      `wall-${wallId}-door-${id}-trimmer-left`,
-      thickness,
-      doorH,
-      prof.studW,
-      { x: origin.x, y: plateY, z: origin.z + doorZ0 },
-      mat,
-      { doorId: id }
-    );
-    mkBox(
-      `wall-${wallId}-door-${id}-trimmer-right`,
-      thickness,
-      doorH,
-      prof.studW,
-      { x: origin.x, y: plateY, z: origin.z + (doorZ1 - prof.studW) },
-      mat,
-      { doorId: id }
-    );
-
+    // Header spans clear opening + both uprights.
     const headerL = (door.w + 2 * prof.studW);
     mkBox(
       `wall-${wallId}-door-${id}-header`,
@@ -397,7 +364,7 @@ export function build3D(state, ctx) {
         buildBasicPanel(pref, axis, pan.len, origin, pan.start, doors);
       }
 
-      // Door framing (basic now shows frame + header)
+      // Door framing (basic includes header)
       for (let i = 0; i < doors.length; i++) {
         const d = doors[i];
         if (isAlongX) addDoorFramingAlongX(wallId, origin, length, d);
