@@ -445,91 +445,7 @@ export function build3D(state, ctx) {
     }
 
     if (variant === "basic") {
-      let panels = [{ start: 0, len: length }];
-
-      if (length > 2400) {
-        const p1 = Math.floor(length / 2);
-        const p2 = length - p1;
-        panels = [{ start: 0, len: p1 }, { start: p1, len: p2 }];
-
-        const seamA = p1 - prof.studW;
-        const seamB = p1 + prof.studW;
-
-        const all = openingsX
-          .map((o) => ({ x0: Math.floor(o.x0 ?? 0), x1: Math.floor(o.x1 ?? 0) }))
-          .filter((o) => Number.isFinite(o.x0) && Number.isFinite(o.x1));
-
-        all.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
-
-        const clusters = [];
-        if (all.length) {
-          let cs = all[0].x0;
-          let ce = all[0].x1;
-          for (let i = 1; i < all.length; i++) {
-            const o = all[i];
-            const ne = Math.max(ce, o.x1);
-            const span = ne - cs;
-            if (span <= 2400) {
-              ce = ne;
-            } else {
-              clusters.push({ x0: cs, x1: ce });
-              cs = o.x0;
-              ce = o.x1;
-            }
-          }
-          clusters.push({ x0: cs, x1: ce });
-        }
-
-        const regions = [];
-        for (let i = 0; i < clusters.length; i++) {
-          const c = clusters[i];
-          const coversSeam = !(c.x1 < seamA || c.x0 > seamB);
-          if (!coversSeam) continue;
-
-          const clusterPanelStart = clamp(c.x0 - prof.studW, 0, length);
-          const clusterPanelEnd = clamp(c.x1 + prof.studW, 0, length);
-
-          regions.push({ start: clusterPanelStart, end: clusterPanelEnd });
-        }
-
-        if (regions.length) {
-          regions.sort((a, b) => a.start - b.start || a.end - b.end);
-
-          const merged = [];
-          let cur = { start: regions[0].start, end: regions[0].end };
-          for (let i = 1; i < regions.length; i++) {
-            const r = regions[i];
-            if (r.start <= (cur.end + 1)) {
-              cur.end = Math.max(cur.end, r.end);
-            } else {
-              merged.push(cur);
-              cur = { start: r.start, end: r.end };
-            }
-          }
-          merged.push(cur);
-
-          const next = [];
-          let cursor = 0;
-          for (let i = 0; i < merged.length; i++) {
-            const r = merged[i];
-            const s = clamp(r.start, 0, length);
-            const e = clamp(r.end, 0, length);
-            if (s > cursor) {
-              const leftLen = Math.max(0, s - cursor);
-              if (leftLen > 0) next.push({ start: cursor, len: leftLen });
-            }
-            const midLen = Math.max(0, e - s);
-            if (midLen > 0) next.push({ start: s, len: midLen });
-            cursor = Math.max(cursor, e);
-          }
-          if (cursor < length) {
-            const rightLen = Math.max(0, length - cursor);
-            if (rightLen > 0) next.push({ start: cursor, len: rightLen });
-          }
-
-          panels = next.length ? next : panels;
-        }
-      }
+      const panels = computeBasicPanels(length, prof, openingsX);
 
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
@@ -634,6 +550,153 @@ function normalizeWallFlags(state) {
   };
 }
 
+function getOpeningsAll(state) {
+  const openings = Array.isArray(state.walls?.openings) ? state.walls.openings : [];
+  return openings.filter((o) => o && o.enabled !== false);
+}
+
+function getDoorIntervalsForWallFromState(state, wallId) {
+  const openings = getOpeningsAll(state);
+  const doorsAll = openings.filter((o) => o && o.type === "door");
+  const list = [];
+  for (let i = 0; i < doorsAll.length; i++) {
+    const d = doorsAll[i];
+    if (String(d.wall || "front") !== wallId) continue;
+    const wGap = Math.max(100, Math.floor(d.width_mm || 800));
+    const x0 = Math.floor(d.x_mm ?? 0);
+    const x1 = x0 + wGap;
+    const h = Math.max(100, Math.floor(d.height_mm || 2000));
+    list.push({ id: String(d.id || ""), x0, x1, w: wGap, h });
+  }
+  return list;
+}
+
+function getWindowIntervalsForWallFromState(state, wallId) {
+  const openings = getOpeningsAll(state);
+  const winsAll = openings.filter((o) => o && o.type === "window");
+  const list = [];
+  for (let i = 0; i < winsAll.length; i++) {
+    const w = winsAll[i];
+    if (String(w.wall || "front") !== wallId) continue;
+    const wGap = Math.max(100, Math.floor(w.width_mm || 600));
+    const x0 = Math.floor(w.x_mm ?? 0);
+    const x1 = x0 + wGap;
+
+    const y = Math.max(0, Math.floor(w.y_mm ?? 0));
+    const h = Math.max(100, Math.floor(w.height_mm || 600));
+    list.push({ id: String(w.id || ""), x0, x1, w: wGap, y, h });
+  }
+  return list;
+}
+
+/**
+ * Pure BASIC panel segmentation helper.
+ * IMPORTANT: This is a verbatim extraction of the existing BASIC panelization block inside buildWall().
+ * It must not change behavior.
+ */
+function computeBasicPanels(length, prof, openingsX) {
+  let panels = [{ start: 0, len: length }];
+
+  if (length > 2400) {
+    const p1 = Math.floor(length / 2);
+    const p2 = length - p1;
+    panels = [{ start: 0, len: p1 }, { start: p1, len: p2 }];
+
+    const seamA = p1 - prof.studW;
+    const seamB = p1 + prof.studW;
+
+    const all = openingsX
+      .map((o) => ({ x0: Math.floor(o.x0 ?? 0), x1: Math.floor(o.x1 ?? 0) }))
+      .filter((o) => Number.isFinite(o.x0) && Number.isFinite(o.x1));
+
+    all.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
+
+    const clusters = [];
+    if (all.length) {
+      let cs = all[0].x0;
+      let ce = all[0].x1;
+      for (let i = 1; i < all.length; i++) {
+        const o = all[i];
+        const ne = Math.max(ce, o.x1);
+        const span = ne - cs;
+        if (span <= 2400) {
+          ce = ne;
+        } else {
+          clusters.push({ x0: cs, x1: ce });
+          cs = o.x0;
+          ce = o.x1;
+        }
+      }
+      clusters.push({ x0: cs, x1: ce });
+    }
+
+    const regions = [];
+    for (let i = 0; i < clusters.length; i++) {
+      const c = clusters[i];
+      const coversSeam = !(c.x1 < seamA || c.x0 > seamB);
+      if (!coversSeam) continue;
+
+      const clusterPanelStart = clamp(c.x0 - prof.studW, 0, length);
+      const clusterPanelEnd = clamp(c.x1 + prof.studW, 0, length);
+
+      regions.push({ start: clusterPanelStart, end: clusterPanelEnd });
+    }
+
+    if (regions.length) {
+      regions.sort((a, b) => a.start - b.start || a.end - b.end);
+
+      const merged = [];
+      let cur = { start: regions[0].start, end: regions[0].end };
+      for (let i = 1; i < regions.length; i++) {
+        const r = regions[i];
+        if (r.start <= (cur.end + 1)) {
+          cur.end = Math.max(cur.end, r.end);
+        } else {
+          merged.push(cur);
+          cur = { start: r.start, end: r.end };
+        }
+      }
+      merged.push(cur);
+
+      const next = [];
+      let cursor = 0;
+      for (let i = 0; i < merged.length; i++) {
+        const r = merged[i];
+        const s = clamp(r.start, 0, length);
+        const e = clamp(r.end, 0, length);
+        if (s > cursor) {
+          const leftLen = Math.max(0, s - cursor);
+          if (leftLen > 0) next.push({ start: cursor, len: leftLen });
+        }
+        const midLen = Math.max(0, e - s);
+        if (midLen > 0) next.push({ start: s, len: midLen });
+        cursor = Math.max(cursor, e);
+      }
+      if (cursor < length) {
+        const rightLen = Math.max(0, length - cursor);
+        if (rightLen > 0) next.push({ start: cursor, len: rightLen });
+      }
+
+      panels = next.length ? next : panels;
+    }
+  }
+
+  return panels;
+}
+
+function pickPanelIndexForCenter(panels, x0, x1) {
+  const c = (Number(x0) + Number(x1)) / 2;
+  for (let i = 0; i < panels.length; i++) {
+    const p = panels[i];
+    const a = p.start;
+    const b = p.start + p.len;
+    if (c >= a && c < b) return i;
+  }
+  if (!panels.length) return -1;
+  if (c < panels[0].start) return 0;
+  return panels.length - 1;
+}
+
 export function updateBOM(state) {
   const sections = [];
   const variant = state.walls?.variant || "insulated";
@@ -661,46 +724,81 @@ export function updateBOM(state) {
   for (const wname of walls) {
     const L = lengths[wname];
 
-    if (variant === "basic" && L > 2400) {
-      const p1 = Math.floor(L / 2);
-      const p2 = L - p1;
+    // Wall header row
+    sections.push([`WALL: ${wname} (${variant})`, "", "", "", "", `Frame L=${L}mm`]);
 
-      sections.push([`Bottom Plate (${wname}) — Panel 1`, 1, p1, prof.studW, "basic"]);
-      sections.push([`Bottom Plate (${wname}) — Panel 2`, 1, p2, prof.studW, "basic"]);
-      sections.push([`Top Plate (${wname}) — Panel 1`, 1, p1, prof.studW, "basic"]);
-      sections.push([`Top Plate (${wname}) — Panel 2`, 1, p2, prof.studW, "basic"]);
-
-      sections.push([`Studs (${wname})`, 6, studLen, prof.studW, "basic (2 panels)"]);
-      continue;
-    }
-
-    sections.push([`Bottom Plate (${wname})`, 1, L, prof.studW, ""]);
-    sections.push([`Top Plate (${wname})`, 1, L, prof.studW, ""]);
-
+    // Panels for grouping (no geometry changes; basic uses same segmentation as buildWall)
+    let panels = [{ start: 0, len: L }];
     if (variant === "basic") {
-      sections.push([`Studs (${wname})`, 3, studLen, prof.studW, "basic"]);
-      continue;
+      const doors = getDoorIntervalsForWallFromState(state, wname);
+      const wins = getWindowIntervalsForWallFromState(state, wname);
+      const openingsX = doors.concat(wins);
+      panels = computeBasicPanels(L, prof, openingsX);
+      if (!panels.length) panels = [{ start: 0, len: L }];
     }
 
-    let count = 2;
-    let run = 400;
-    while (run <= L - prof.studW) {
-      count += 1;
-      run += prof.spacing;
-    }
-    sections.push([`Studs (${wname})`, count, studLen, prof.studW, "@400"]);
-  }
+    // Precompute per-wall openings for attribution
+    const doorsW = getDoorIntervalsForWallFromState(state, wname);
+    const winsW = getWindowIntervalsForWallFromState(state, wname);
 
-  // Windows BOM (additive)
-  const openings = Array.isArray(state.walls?.openings) ? state.walls.openings : [];
-  const wins = openings.filter((o) => o && o.type === "window" && o.enabled !== false);
-  for (let i = 0; i < wins.length; i++) {
-    const w = wins[i];
-    const wall = String(w.wall || "front");
-    const wGap = Math.max(100, Math.floor(w.width_mm || 600));
-    sections.push([`Window Uprights (${wall})`, 2, Math.max(1, height - 2 * plateY), prof.studW, `window ${String(w.id || "")}`]);
-    sections.push([`Window Header (${wall})`, 1, wGap + 2 * prof.studW, prof.studH, `window ${String(w.id || "")}`]);
-    sections.push([`Window Sill (${wall})`, 1, wGap + 2 * prof.studW, prof.studH, `window ${String(w.id || "")}`]);
+    const openingItemsByPanel = {};
+    for (let i = 0; i < panels.length; i++) openingItemsByPanel[i] = [];
+
+    // Doors -> panel that contains center point
+    for (let i = 0; i < doorsW.length; i++) {
+      const d = doorsW[i];
+      const pi = pickPanelIndexForCenter(panels, d.x0, d.x1);
+      if (pi < 0) continue;
+
+      const id = String(d.id || "");
+      const headerL = (d.w + 2 * prof.studW);
+
+      openingItemsByPanel[pi].push(["  Door Uprights", 2, studLen, prof.studW, wallThk, `door ${id}`]);
+      openingItemsByPanel[pi].push(["  Door Header", 1, headerL, prof.studH, wallThk, `door ${id}`]);
+    }
+
+    // Windows -> panel that contains center point
+    for (let i = 0; i < winsW.length; i++) {
+      const w = winsW[i];
+      const pi = pickPanelIndexForCenter(panels, w.x0, w.x1);
+      if (pi < 0) continue;
+
+      const id = String(w.id || "");
+      const headerL = (w.w + 2 * prof.studW);
+
+      openingItemsByPanel[pi].push(["  Window Uprights", 2, studLen, prof.studW, wallThk, `window ${id}`]);
+      openingItemsByPanel[pi].push(["  Window Header", 1, headerL, prof.studH, wallThk, `window ${id}`]);
+      openingItemsByPanel[pi].push(["  Window Sill", 1, headerL, prof.studH, wallThk, `window ${id}`]);
+    }
+
+    for (let p = 0; p < panels.length; p++) {
+      const pan = panels[p];
+
+      // Panel header row
+      sections.push([`  PANEL ${p + 1}`, "", "", "", "", `start=${pan.start}mm, len=${pan.len}mm`]);
+
+      // Panel contents (all include L/W/D)
+      sections.push([`  Bottom Plate`, 1, pan.len, plateY, wallThk, ""]);
+      sections.push([`  Top Plate`, 1, pan.len, plateY, wallThk, ""]);
+
+      if (variant === "basic") {
+        // Mirrors current basic wall panel stud policy (3 studs per panel in buildBasicPanel; suppression is geometric-only)
+        sections.push([`  Studs`, 3, studLen, prof.studW, wallThk, "basic"]);
+      } else {
+        // Insulated stud count logic preserved (was previously per wall; now attributed under single panel)
+        let count = 2;
+        let run = 400;
+        while (run <= pan.len - prof.studW) {
+          count += 1;
+          run += prof.spacing;
+        }
+        sections.push([`  Studs`, count, studLen, prof.studW, wallThk, "@400"]);
+      }
+
+      // Opening framing items attributed to this panel
+      const items = openingItemsByPanel[p] || [];
+      for (let i = 0; i < items.length; i++) sections.push(items[i]);
+    }
   }
 
   return { sections };
