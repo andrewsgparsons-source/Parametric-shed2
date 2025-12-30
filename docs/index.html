@@ -114,7 +114,7 @@
     #controlPanel .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; align-items:center; }
     #controlPanel .row4{ display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
     #controlPanel label{ display:grid; gap:4px; font-size:12px; color:#222; }
-    #controlPanel input[type="number"], #controlPanel select{
+    #controlPanel input[type="number"], #controlPanel input[type="text"], #controlPanel select{
       width:100%;
       padding: 8px 10px;
       border: 1px solid #d9d9d9;
@@ -359,8 +359,6 @@
                 <div></div>
               </div>
 
-              <!-- IMPORTANT: These are the SAME inputs as before (IDs unchanged).
-                   This text change prevents accidental swapping that causes different OSB layouts. -->
               <div class="row">
                 <label>
                   Width (mm) — X direction
@@ -401,6 +399,34 @@
                 <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
                 <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
               </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Instances</legend>
+
+              <div class="row">
+                <label>
+                  Instance
+                  <select id="instanceSelect"></select>
+                </label>
+                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
+                  <button id="saveInstanceBtn" type="button">Save</button>
+                  <button id="loadInstanceBtn" type="button">Load</button>
+                </div>
+              </div>
+
+              <div class="row">
+                <label>
+                  New name
+                  <input id="instanceNameInput" type="text" placeholder="e.g. Client A" />
+                </label>
+                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
+                  <button id="saveAsInstanceBtn" type="button">Save As</button>
+                  <button id="deleteInstanceBtn" type="button">Delete</button>
+                </div>
+              </div>
+
+              <p id="instancesHint" class="hint"></p>
             </fieldset>
           </form>
         </div>
@@ -488,60 +514,6 @@
         </thead>
         <tbody id="bomTable"></tbody>
       </table>
-    </div>
-
-    <div class="schedule-section">
-      <h4>Roof Cutting List (Pent)</h4>
-
-      <table class="sticky-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>L (mm)</th>
-            <th>W (mm)</th>
-            <th>D (mm)</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="roofJoistsBody"></tbody>
-      </table>
-
-      <table class="sticky-table">
-        <thead>
-          <tr>
-            <th colspan="6">Roof OSB — Standard Sheets</th>
-          </tr>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>L (mm)</th>
-            <th>W (mm)</th>
-            <th>T (mm)</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="roofOsbStdBody"></tbody>
-      </table>
-
-      <table class="sticky-table">
-        <thead>
-          <tr>
-            <th colspan="6">Roof OSB — Rip / Trim Cuts</th>
-          </tr>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>L (mm)</th>
-            <th>W (mm)</th>
-            <th>T (mm)</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="roofOsbRipBody"></tbody>
-      </table>
-
-      <p id="roofOsbSummary" class="subtle"></p>
     </div>
   </div>
 
