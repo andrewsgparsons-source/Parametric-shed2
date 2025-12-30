@@ -15,6 +15,7 @@ function dbgInitDefaults() {
   if (window.__dbg.buildCalls === undefined) window.__dbg.buildCalls = 0;
   if (window.__dbg.lastError === undefined) window.__dbg.lastError = null;
   if (window.__dbg.doorSeq === undefined) window.__dbg.doorSeq = 1;
+  if (window.__dbg.windowSeq === undefined) window.__dbg.windowSeq = 1;
 }
 dbgInitDefaults();
 
@@ -115,6 +116,10 @@ function initApp() {
     var removeAllDoorsBtnEl = $("removeAllDoorsBtn");
     var doorsListEl = $("doorsList");
 
+    var addWindowBtnEl = $("addWindowBtn");
+    var removeAllWindowsBtnEl = $("removeAllWindowsBtn");
+    var windowsListEl = $("windowsList");
+
     var asPosInt = function (v, def) {
       var n = Math.floor(Number(v));
       return Number.isFinite(n) && n > 0 ? n : def;
@@ -129,6 +134,8 @@ function initApp() {
       var n = Math.floor(Number(v));
       return Number.isFinite(n) && n >= 0 ? n : null;
     };
+
+    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
     function getWallsEnabled(state) {
       var vis = state && state.vis ? state.vis : null;
@@ -193,7 +200,24 @@ function initApp() {
       return (Number.isFinite(h) && h > 0) ? h : (v === "basic" ? 75 : 100);
     }
 
-    function getWallLengthsForDoors(state) {
+    function currentStudWFromState(state) {
+      var v = (state && state.walls && state.walls.variant) ? String(state.walls.variant) : "insulated";
+      var sec = (state && state.walls && state.walls[v] && state.walls[v].section) ? state.walls[v].section : null;
+      var w = sec && sec.w != null ? Math.floor(Number(sec.w)) : 50;
+      return (Number.isFinite(w) && w > 0) ? w : 50;
+    }
+
+    function currentPlateYFromState(state) {
+      return currentStudWFromState(state);
+    }
+
+    function currentStudLenFromState(state) {
+      var plateY = currentPlateYFromState(state);
+      var H = state && state.walls && state.walls.height_mm != null ? Math.max(100, Math.floor(Number(state.walls.height_mm))) : 2400;
+      return Math.max(1, H - 2 * plateY);
+    }
+
+    function getWallLengthsForOpenings(state) {
       var dims = getWallOuterDimsFromState(state);
       var thk = currentWallThicknessFromState(state);
       return {
@@ -243,8 +267,16 @@ function initApp() {
       }
     }
 
+    function getOpeningsFromState(state) {
+      return (state && state.walls && Array.isArray(state.walls.openings)) ? state.walls.openings : [];
+    }
+
+    function setOpenings(nextOpenings) {
+      store.setState({ walls: { openings: nextOpenings } });
+    }
+
     function getDoorsFromState(state) {
-      var openings = state && state.walls && Array.isArray(state.walls.openings) ? state.walls.openings : [];
+      var openings = getOpeningsFromState(state);
       var doors = [];
       for (var i = 0; i < openings.length; i++) {
         var d = openings[i];
@@ -253,25 +285,29 @@ function initApp() {
       return doors;
     }
 
-    function setDoors(nextDoors) {
-      store.setState({ walls: { openings: nextDoors } });
+    function getWindowsFromState(state) {
+      var openings = getOpeningsFromState(state);
+      var wins = [];
+      for (var i = 0; i < openings.length; i++) {
+        var w = openings[i];
+        if (w && w.type === "window") wins.push(w);
+      }
+      return wins;
     }
 
-    function getDoorById(state, doorId) {
-      var doors = getDoorsFromState(state);
-      for (var i = 0; i < doors.length; i++) {
-        var d = doors[i];
-        if (String(d.id || "") === String(doorId)) return d;
+    function getOpeningById(state, id) {
+      var openings = getOpeningsFromState(state);
+      for (var i = 0; i < openings.length; i++) {
+        var o = openings[i];
+        if (o && String(o.id || "") === String(id)) return o;
       }
       return null;
     }
 
-    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
-
     function validateDoors(state) {
       var res = { invalidById: {}, invalidIds: [] };
       var doors = getDoorsFromState(state);
-      var lens = getWallLengthsForDoors(state);
+      var lens = getWallLengthsForOpenings(state);
       var minGap = 50;
 
       function wallLen(wall) {
@@ -334,6 +370,87 @@ function initApp() {
       return res;
     }
 
+    function validateWindows(state) {
+      var res = { invalidById: {}, invalidIds: [] };
+      var wins = getWindowsFromState(state);
+      var lens = getWallLengthsForOpenings(state);
+      var minGap = 50;
+
+      var studLen = currentStudLenFromState(state);
+      var thkY = currentWallThicknessFromState(state);
+
+      function wallLen(wall) {
+        return lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
+      }
+
+      for (var i = 0; i < wins.length; i++) {
+        var w0 = wins[i];
+        var wall = String(w0.wall || "front");
+        var L = wallLen(wall);
+
+        var w = Math.max(1, Math.floor(Number(w0.width_mm || 900)));
+        var x = Math.floor(Number(w0.x_mm || 0));
+
+        var y = Math.floor(Number(w0.y_mm || 0));
+        var h = Math.max(1, Math.floor(Number(w0.height_mm || 600)));
+
+        var minX = minGap;
+        var maxX = Math.max(minX, L - w - minGap);
+
+        if (x < minX || x > maxX) {
+          res.invalidById[String(w0.id)] =
+            "Invalid: too close to corner/end.\n" +
+            "Allowed X range: " + minX + " .. " + maxX + " (mm)";
+        }
+
+        if (y < 0) {
+          res.invalidById[String(w0.id)] = "Invalid: Window Y must be ≥ 0 (mm).";
+        } else if ((y + h + thkY) > studLen) {
+          res.invalidById[String(w0.id)] =
+            "Invalid: window exceeds the wall frame height.\n" +
+            "Max (Y + H) allowed: " + Math.max(0, (studLen - thkY)) + " (mm)";
+        }
+      }
+
+      var byWall = { front: [], back: [], left: [], right: [] };
+      for (var j = 0; j < wins.length; j++) {
+        var ww2 = wins[j];
+        var wl = String(ww2.wall || "front");
+        if (!byWall[wl]) byWall[wl] = [];
+        byWall[wl].push(ww2);
+      }
+
+      function intervalsOverlapOrTooClose(a0, a1, b0, b1, gap) {
+        if (a1 + gap <= b0) return false;
+        if (b1 + gap <= a0) return false;
+        return true;
+      }
+
+      Object.keys(byWall).forEach(function (wall) {
+        var list = byWall[wall] || [];
+        for (var a = 0; a < list.length; a++) {
+          for (var b = a + 1; b < list.length; b++) {
+            var da = list[a], db = list[b];
+            var ax = Math.floor(Number(da.x_mm || 0));
+            var aw = Math.max(1, Math.floor(Number(da.width_mm || 900)));
+            var bx = Math.floor(Number(db.x_mm || 0));
+            var bw = Math.max(1, Math.floor(Number(db.width_mm || 900)));
+
+            var a0 = ax, a1 = ax + aw;
+            var b0 = bx, b1 = bx + bw;
+
+            if (intervalsOverlapOrTooClose(a0, a1, b0, b1, minGap)) {
+              if (!res.invalidById[String(da.id)]) res.invalidById[String(da.id)] = "Invalid: overlaps or is too close (<50mm) to another window on " + wall + ".";
+              if (!res.invalidById[String(db.id)]) res.invalidById[String(db.id)] = "Invalid: overlaps or is too close (<50mm) to another window on " + wall + ".";
+            }
+          }
+        }
+      });
+
+      Object.keys(res.invalidById).forEach(function (k) { res.invalidIds.push(k); });
+      return res;
+    }
+
     function subtractIntervals(base, forb) {
       var out = base.slice();
       forb.forEach(function (f) {
@@ -352,14 +469,13 @@ function initApp() {
       return out;
     }
 
-    function computeSnapX(state, doorId) {
-      var s = state;
-      var d = getDoorById(s, doorId);
-      if (!d) return null;
+    function computeSnapX_ForType(state, openingId, type) {
+      var d = getOpeningById(state, openingId);
+      if (!d || String(d.type || "") !== type) return null;
 
       var minGap = 50;
       var wall = String(d.wall || "front");
-      var lens = getWallLengthsForDoors(s);
+      var lens = getWallLengthsForOpenings(state);
       var L = lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
 
       var w = Math.max(1, Math.floor(Number(d.width_mm || 900)));
@@ -369,11 +485,12 @@ function initApp() {
       var maxX = Math.max(minX, L - w - minGap);
 
       var base = [[minX, maxX]];
-      var doors = getDoorsFromState(s).filter(function (x) { return String(x.id || "") !== String(doorId) && String(x.wall || "front") === wall; });
+      var openings = (type === "door" ? getDoorsFromState(state) : getWindowsFromState(state))
+        .filter(function (x) { return String(x.id || "") !== String(openingId) && String(x.wall || "front") === wall; });
 
       var forb = [];
-      for (var i = 0; i < doors.length; i++) {
-        var o = doors[i];
+      for (var i = 0; i < openings.length; i++) {
+        var o = openings[i];
         var ox = Math.floor(Number(o.x_mm || 0));
         var ow = Math.max(1, Math.floor(Number(o.width_mm || 900)));
         var fa = (ox - minGap - w);
@@ -400,58 +517,69 @@ function initApp() {
 
     var _invalidSyncGuard = false;
 
-    function syncInvalidDoorsIntoState() {
+    function syncInvalidOpeningsIntoState() {
       if (_invalidSyncGuard) return;
-      var s = store.getState();
-      var v = validateDoors(s);
-      var cur = (s && s.walls && Array.isArray(s.walls.invalidDoorIds)) ? s.walls.invalidDoorIds.map(String) : [];
-      var next = v.invalidIds.slice().sort();
-      var curSorted = cur.slice().sort();
 
-      var same = (curSorted.length === next.length);
-      if (same) {
-        for (var i = 0; i < curSorted.length; i++) if (curSorted[i] !== next[i]) { same = false; break; }
+      var s = store.getState();
+      var dv = validateDoors(s);
+      var wv = validateWindows(s);
+
+      var curDoors = (s && s.walls && Array.isArray(s.walls.invalidDoorIds)) ? s.walls.invalidDoorIds.map(String) : [];
+      var curWins = (s && s.walls && Array.isArray(s.walls.invalidWindowIds)) ? s.walls.invalidWindowIds.map(String) : [];
+
+      var nextDoors = dv.invalidIds.slice().sort();
+      var nextWins = wv.invalidIds.slice().sort();
+
+      function sameArr(a, b) {
+        if (a.length !== b.length) return false;
+        for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
       }
 
-      if (!same) {
+      var curDoorsS = curDoors.slice().sort();
+      var curWinsS = curWins.slice().sort();
+
+      var need = (!sameArr(curDoorsS, nextDoors)) || (!sameArr(curWinsS, nextWins));
+      if (need) {
         _invalidSyncGuard = true;
-        store.setState({ walls: { invalidDoorIds: next } });
+        store.setState({ walls: { invalidDoorIds: nextDoors, invalidWindowIds: nextWins } });
         _invalidSyncGuard = false;
       }
 
-      return v;
+      return { doors: dv, windows: wv };
     }
 
-    var snapNoticeById = {};
+    var snapNoticeDoorById = {};
+    var snapNoticeWinById = {};
+
+    function patchOpeningById(openingId, patch) {
+      var s = store.getState();
+      var cur = getOpeningsFromState(s);
+      var next = [];
+      for (var i = 0; i < cur.length; i++) {
+        var o = cur[i];
+        if (o && String(o.id || "") === String(openingId)) next.push(Object.assign({}, o, patch));
+        else next.push(o);
+      }
+      setOpenings(next);
+    }
+
+    function wireCommitOnly(inputEl, onCommit) {
+      inputEl.addEventListener("blur", function () { onCommit(); });
+      inputEl.addEventListener("keydown", function (e) {
+        if (!e) return;
+        if (e.key === "Enter") {
+          e.preventDefault();
+          try { e.target.blur(); } catch (ex) {}
+        }
+      });
+    }
 
     function renderDoorsUi(state, validation) {
       if (!doorsListEl) return;
       doorsListEl.innerHTML = "";
 
       var doors = getDoorsFromState(state);
-
-      function patchDoorById(doorId, patch) {
-        var s = store.getState();
-        var curDoors = getDoorsFromState(s);
-        var next = [];
-        for (var k = 0; k < curDoors.length; k++) {
-          var d = curDoors[k];
-          if (String(d.id || "") === String(doorId)) next.push(Object.assign({}, d, patch));
-          else next.push(d);
-        }
-        setDoors(next);
-      }
-
-      function wireCommitOnly(inputEl, onCommit) {
-        inputEl.addEventListener("blur", function () { onCommit(); });
-        inputEl.addEventListener("keydown", function (e) {
-          if (!e) return;
-          if (e.key === "Enter") {
-            e.preventDefault();
-            try { e.target.blur(); } catch (ex) {}
-          }
-        });
-      }
 
       for (var i = 0; i < doors.length; i++) {
         (function (door) {
@@ -519,7 +647,7 @@ function initApp() {
           msg.className = "doorMsg";
 
           var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
-          var notice = snapNoticeById[id] ? snapNoticeById[id] : null;
+          var notice = snapNoticeDoorById[id] ? snapNoticeDoorById[id] : null;
 
           if (invalidMsg) {
             msg.textContent = String(invalidMsg);
@@ -531,43 +659,43 @@ function initApp() {
           }
 
           wireCommitOnly(xField.inp, function () {
-            patchDoorById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(door.x_mm ?? 0))) });
+            patchOpeningById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(door.x_mm ?? 0))) });
           });
           wireCommitOnly(wField.inp, function () {
-            patchDoorById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(door.width_mm ?? 900))) });
+            patchOpeningById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(door.width_mm ?? 900))) });
           });
           wireCommitOnly(hField.inp, function () {
-            patchDoorById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(door.height_mm ?? 2000))) });
+            patchOpeningById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(door.height_mm ?? 2000))) } );
           });
 
           wallSel.addEventListener("change", function () {
-            patchDoorById(id, { wall: String(wallSel.value || "front") });
+            patchOpeningById(id, { wall: String(wallSel.value || "front") });
           });
 
           snapBtn.addEventListener("click", function () {
             var s = store.getState();
-            var snapped = computeSnapX(s, id);
+            var snapped = computeSnapX_ForType(s, id, "door");
             if (snapped == null) return;
-            patchDoorById(id, { x_mm: snapped });
+            patchOpeningById(id, { x_mm: snapped });
 
-            snapNoticeById[id] = "Snapped to " + snapped + "mm.";
+            snapNoticeDoorById[id] = "Snapped to " + snapped + "mm.";
             setTimeout(function () {
-              if (snapNoticeById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeById[id];
-              syncUiFromState(store.getState(), syncInvalidDoorsIntoState());
+              if (snapNoticeDoorById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeDoorById[id];
+              syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
             }, 1500);
           });
 
           rmBtn.addEventListener("click", function () {
             var s = store.getState();
-            var curDoors = getDoorsFromState(s);
+            var cur = getOpeningsFromState(s);
             var next = [];
-            for (var k = 0; k < curDoors.length; k++) {
-              var dd = curDoors[k];
-              if (String(dd.id || "") === id) continue;
-              next.push(dd);
+            for (var k = 0; k < cur.length; k++) {
+              var o = cur[k];
+              if (o && o.type === "door" && String(o.id || "") === id) continue;
+              next.push(o);
             }
-            delete snapNoticeById[id];
-            setDoors(next);
+            delete snapNoticeDoorById[id];
+            setOpenings(next);
           });
 
           item.appendChild(top);
@@ -586,7 +714,151 @@ function initApp() {
       }
     }
 
-    function syncUiFromState(state, validation) {
+    function renderWindowsUi(state, validation) {
+      if (!windowsListEl) return;
+      windowsListEl.innerHTML = "";
+
+      var wins = getWindowsFromState(state);
+
+      for (var i = 0; i < wins.length; i++) {
+        (function (win) {
+          var id = String(win.id || "");
+
+          var item = document.createElement("div");
+          item.className = "windowItem";
+
+          var top = document.createElement("div");
+          top.className = "windowTop";
+
+          var wallLabel = document.createElement("label");
+          wallLabel.textContent = "Wall";
+          var wallSel = document.createElement("select");
+          wallSel.innerHTML =
+            '<option value="front">front</option>' +
+            '<option value="back">back</option>' +
+            '<option value="left">left</option>' +
+            '<option value="right">right</option>';
+          wallSel.value = String(win.wall || "front");
+          wallLabel.appendChild(wallSel);
+
+          var actions = document.createElement("div");
+          actions.className = "windowActions";
+
+          var snapBtn = document.createElement("button");
+          snapBtn.type = "button";
+          snapBtn.className = "snapBtn";
+          snapBtn.textContent = "Snap to nearest viable position";
+
+          var rmBtn = document.createElement("button");
+          rmBtn.type = "button";
+          rmBtn.textContent = "Remove";
+
+          actions.appendChild(snapBtn);
+          actions.appendChild(rmBtn);
+
+          top.appendChild(wallLabel);
+          top.appendChild(actions);
+
+          var row = document.createElement("div");
+          row.className = "row4";
+
+          function makeNum(labelTxt, v, min, step) {
+            var lab = document.createElement("label");
+            lab.textContent = labelTxt;
+            var inp = document.createElement("input");
+            inp.type = "number";
+            inp.min = String(min);
+            inp.step = String(step);
+            inp.value = String(v == null ? "" : v);
+            lab.appendChild(inp);
+            return { lab: lab, inp: inp };
+          }
+
+          var xField = makeNum("Win X (mm)", Math.floor(Number(win.x_mm ?? 0)), 0, 10);
+          var yField = makeNum("Win Y (mm)", Math.floor(Number(win.y_mm ?? 0)), 0, 10);
+          var wField = makeNum("Win W (mm)", Math.floor(Number(win.width_mm ?? 900)), 100, 10);
+          var hField = makeNum("Win H (mm)", Math.floor(Number(win.height_mm ?? 600)), 100, 10);
+
+          row.appendChild(xField.lab);
+          row.appendChild(yField.lab);
+          row.appendChild(wField.lab);
+          row.appendChild(hField.lab);
+
+          var msg = document.createElement("div");
+          msg.className = "windowMsg";
+
+          var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
+          var notice = snapNoticeWinById[id] ? snapNoticeWinById[id] : null;
+
+          if (invalidMsg) {
+            msg.textContent = String(invalidMsg);
+            msg.classList.add("show");
+            snapBtn.classList.add("show");
+          } else if (notice) {
+            msg.textContent = String(notice);
+            msg.classList.add("show");
+          }
+
+          wireCommitOnly(xField.inp, function () {
+            patchOpeningById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(win.x_mm ?? 0))) });
+          });
+          wireCommitOnly(yField.inp, function () {
+            patchOpeningById(id, { y_mm: asNonNegInt(yField.inp.value, Math.floor(Number(win.y_mm ?? 0))) });
+          });
+          wireCommitOnly(wField.inp, function () {
+            patchOpeningById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(win.width_mm ?? 900))) });
+          });
+          wireCommitOnly(hField.inp, function () {
+            patchOpeningById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(win.height_mm ?? 600))) });
+          });
+
+          wallSel.addEventListener("change", function () {
+            patchOpeningById(id, { wall: String(wallSel.value || "front") });
+          });
+
+          snapBtn.addEventListener("click", function () {
+            var s = store.getState();
+            var snapped = computeSnapX_ForType(s, id, "window");
+            if (snapped == null) return;
+            patchOpeningById(id, { x_mm: snapped });
+
+            snapNoticeWinById[id] = "Snapped to " + snapped + "mm.";
+            setTimeout(function () {
+              if (snapNoticeWinById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeWinById[id];
+              syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
+            }, 1500);
+          });
+
+          rmBtn.addEventListener("click", function () {
+            var s = store.getState();
+            var cur = getOpeningsFromState(s);
+            var next = [];
+            for (var k = 0; k < cur.length; k++) {
+              var o = cur[k];
+              if (o && o.type === "window" && String(o.id || "") === id) continue;
+              next.push(o);
+            }
+            delete snapNoticeWinById[id];
+            setOpenings(next);
+          });
+
+          item.appendChild(top);
+          item.appendChild(row);
+          item.appendChild(msg);
+
+          windowsListEl.appendChild(item);
+        })(wins[i]);
+      }
+
+      if (!wins.length) {
+        var empty = document.createElement("div");
+        empty.className = "hint";
+        empty.textContent = "No windows.";
+        windowsListEl.appendChild(empty);
+      }
+    }
+
+    function syncUiFromState(state, validations) {
       try {
         if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
 
@@ -640,7 +912,11 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
-        renderDoorsUi(state, validation);
+        var dv = validations && validations.doors ? validations.doors : null;
+        var wv = validations && validations.windows ? validations.windows : null;
+
+        renderDoorsUi(state, dv);
+        renderWindowsUi(state, wv);
       } catch (e) {
         window.__dbg.lastError = "syncUiFromState failed: " + String(e && e.message ? e.message : e);
       }
@@ -709,7 +985,7 @@ function initApp() {
     if (dimModeEl) {
       dimModeEl.addEventListener("change", function () {
         store.setState({ dimMode: dimModeEl.value });
-        syncUiFromState(store.getState(), syncInvalidDoorsIntoState());
+        syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
       });
     }
 
@@ -762,8 +1038,8 @@ function initApp() {
     if (addDoorBtnEl) {
       addDoorBtnEl.addEventListener("click", function () {
         var s = store.getState();
-        var lens = getWallLengthsForDoors(s);
-        var doors = getDoorsFromState(s);
+        var lens = getWallLengthsForOpenings(s);
+        var openings = getOpeningsFromState(s);
 
         var id = "door" + String(window.__dbg.doorSeq++);
         var wall = "front";
@@ -772,20 +1048,62 @@ function initApp() {
         var L = lens[wall] || 1000;
         var x = Math.floor((L - w) / 2);
 
-        doors.push({ id: id, wall: wall, type: "door", enabled: true, x_mm: x, width_mm: w, height_mm: h });
-        setDoors(doors);
+        openings.push({ id: id, wall: wall, type: "door", enabled: true, x_mm: x, width_mm: w, height_mm: h });
+        setOpenings(openings);
       });
     }
 
     if (removeAllDoorsBtnEl) {
       removeAllDoorsBtnEl.addEventListener("click", function () {
-        snapNoticeById = {};
-        setDoors([]);
+        var s = store.getState();
+        var cur = getOpeningsFromState(s);
+        var next = [];
+        for (var i = 0; i < cur.length; i++) {
+          var o = cur[i];
+          if (o && o.type === "door") continue;
+          next.push(o);
+        }
+        snapNoticeDoorById = {};
+        setOpenings(next);
+      });
+    }
+
+    if (addWindowBtnEl) {
+      addWindowBtnEl.addEventListener("click", function () {
+        var s = store.getState();
+        var lens = getWallLengthsForOpenings(s);
+        var openings = getOpeningsFromState(s);
+
+        var id = "win" + String(window.__dbg.windowSeq++);
+        var wall = "front";
+        var w = 900;
+        var h = 600;
+        var y = 900;
+        var L = lens[wall] || 1000;
+        var x = Math.floor((L - w) / 2);
+
+        openings.push({ id: id, wall: wall, type: "window", enabled: true, x_mm: x, y_mm: y, width_mm: w, height_mm: h });
+        setOpenings(openings);
+      });
+    }
+
+    if (removeAllWindowsBtnEl) {
+      removeAllWindowsBtnEl.addEventListener("click", function () {
+        var s = store.getState();
+        var cur = getOpeningsFromState(s);
+        var next = [];
+        for (var i = 0; i < cur.length; i++) {
+          var o = cur[i];
+          if (o && o.type === "window") continue;
+          next.push(o);
+        }
+        snapNoticeWinById = {};
+        setOpenings(next);
       });
     }
 
     store.onChange(function (s) {
-      var v = syncInvalidDoorsIntoState();
+      var v = syncInvalidOpeningsIntoState();
       syncUiFromState(s, v);
       render(s);
     });
@@ -793,7 +1111,7 @@ function initApp() {
     setInterval(updateOverlay, 1000);
     updateOverlay();
 
-    syncUiFromState(store.getState(), syncInvalidDoorsIntoState());
+    syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
     render(store.getState());
     resume3D();
 
