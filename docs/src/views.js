@@ -10,7 +10,8 @@ export function initViews() {
   var controlPanel = document.getElementById("controlPanel");
   var uiLayer = document.getElementById("ui-layer");
 
-  if (!canvas || !basePage || !wallsPage || !roofPage || !viewSelect || !topbar) return;
+  // Roof page is optional at init; required only when selecting roof view.
+  if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
   function readHashView() {
     try {
@@ -68,6 +69,7 @@ export function initViews() {
       return;
     }
     var page = view === "base" ? basePage : (view === "walls" ? wallsPage : roofPage);
+    if (!page) return;
     var h = page.querySelector("h1,h2");
     var target = h || page;
     if (target && typeof target.focus === "function") {
@@ -85,7 +87,7 @@ export function initViews() {
     if (uiLayer && (el === uiLayer || uiLayer.contains(el) || el.contains(uiLayer))) return true;
     if (el === basePage || basePage.contains(el) || el.contains(basePage)) return true;
     if (el === wallsPage || wallsPage.contains(el) || el.contains(wallsPage)) return true;
-    if (el === roofPage || roofPage.contains(el) || el.contains(roofPage)) return true;
+    if (roofPage && (el === roofPage || roofPage.contains(el) || el.contains(roofPage))) return true;
     return false;
   }
 
@@ -138,7 +140,11 @@ export function initViews() {
   }
 
   function applyView(view, reason) {
-    var v = (view === "3d" || view === "base" || view === "walls" || view === "roof") ? view : "3d";
+    var requested = (view === "3d" || view === "base" || view === "walls" || view === "roof") ? view : "3d";
+    var v = requested;
+
+    // Roof view requires the page to exist; otherwise fall back to 3d (and only then).
+    if (v === "roof" && !roofPage) v = "3d";
 
     document.body.dataset.view = v;
 
@@ -156,8 +162,10 @@ export function initViews() {
     wallsPage.style.display = isWalls ? "block" : "none";
     wallsPage.setAttribute("aria-hidden", String(!isWalls));
 
-    roofPage.style.display = isRoof ? "block" : "none";
-    roofPage.setAttribute("aria-hidden", String(!isRoof));
+    if (roofPage) {
+      roofPage.style.display = isRoof ? "block" : "none";
+      roofPage.setAttribute("aria-hidden", String(!isRoof));
+    }
 
     if (viewSelect.value !== v) viewSelect.value = v;
 
