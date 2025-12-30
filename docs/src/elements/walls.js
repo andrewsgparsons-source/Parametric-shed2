@@ -82,7 +82,6 @@ export function build3D(state, ctx) {
 
       const doorW = Math.max(100, Math.floor(d.width_mm || 800));
       const xRaw = Math.floor(d.x_mm ?? 0);
-
       raw.push({ door: d, x0: xRaw, x1: xRaw + doorW, w: doorW });
     }
     return snapDoorsForWall(raw, length, prof.studW);
@@ -91,7 +90,7 @@ export function build3D(state, ctx) {
   function isInsideAnyDoorCenter(center, doors) {
     for (let i = 0; i < doors.length; i++) {
       const dd = doors[i];
-      if (center > dd.x0 && center < dd.x1) return true;
+      if (center >= dd.x0 && center <= dd.x1) return true;
     }
     return false;
   }
@@ -102,8 +101,8 @@ export function build3D(state, ctx) {
     const out = [];
     for (let i = 0; i < doors.length; i++) {
       const dd = doors[i];
-      if (cEnd > dd.x0 && cEnd < dd.x1) out.push(dd);
-      else if (cStart > dd.x0 && cStart < dd.x1) out.push(dd);
+      if (cEnd >= dd.x0 && cEnd <= dd.x1) out.push(dd);
+      else if (cStart >= dd.x0 && cStart <= dd.x1) out.push(dd);
     }
     out.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
     return out;
@@ -542,6 +541,83 @@ function normalizeWallFlags(state) {
   };
 }
 
+export function snapOpeningsForState(state) {
+  const openings = Array.isArray(state?.walls?.openings) ? state.walls.openings : [];
+  const variant = state?.walls?.variant || "insulated";
+  const prof = resolveProfile(state, variant);
+
+  const wallThk = prof.studH;
+  const frameW = Math.max(1, Math.floor(state?.w ?? 1));
+  const frameD = Math.max(1, Math.floor(state?.d ?? 1));
+
+  const lengths = {
+    front: frameW,
+    back: frameW,
+    left: Math.max(1, frameD - 2 * wallThk),
+    right: Math.max(1, frameD - 2 * wallThk),
+  };
+
+  const events = [];
+  const out = [];
+  const doorsByWall = { front: [], back: [], left: [], right: [] };
+
+  for (let i = 0; i < openings.length; i++) {
+    const o = openings[i];
+    if (!o || o.type !== "door") {
+      out.push(o);
+      continue;
+    }
+    const wall = String(o.wall || "front");
+    if (!doorsByWall[wall]) {
+      out.push(o);
+      continue;
+    }
+    doorsByWall[wall].push({ idx: i, door: o });
+  }
+
+  const wallKeys = ["front", "back", "left", "right"];
+  const snappedByIdx = new Map();
+
+  for (let wi = 0; wi < wallKeys.length; wi++) {
+    const wall = wallKeys[wi];
+    const list = doorsByWall[wall];
+    if (!list.length) continue;
+
+    const L = lengths[wall];
+    const raw = list.map((r) => {
+      const d = r.door;
+      const w = Math.max(100, Math.floor(d.width_mm || 800));
+      const x = Math.floor(d.x_mm ?? 0);
+      return { door: d, x0: x, x1: x + w, w: w, _idx: r.idx };
+    });
+
+    const res = snapDoorsForWallWithEvents(raw, L, prof.studW, wall);
+    for (let ei = 0; ei < res.events.length; ei++) events.push(res.events[ei]);
+
+    for (let i = 0; i < res.doors.length; i++) {
+      const dd = res.doors[i];
+      snappedByIdx.set(dd._idx, Object.assign({}, dd.door, { x_mm: Math.floor(dd.x0) }));
+    }
+
+    for (let i = 0; i < res.removed.length; i++) {
+      snappedByIdx.set(res.removed[i], null);
+    }
+  }
+
+  for (let i = 0; i < openings.length; i++) {
+    const o = openings[i];
+    if (o && o.type === "door") {
+      if (!snappedByIdx.has(i)) out.push(o);
+      else {
+        const v = snappedByIdx.get(i);
+        if (v) out.push(v);
+      }
+    }
+  }
+
+  return { openings: out, events };
+}
+
 export function updateBOM(state) {
   const sections = [];
   const variant = state.walls?.variant || "insulated";
@@ -588,7 +664,7 @@ export function updateBOM(state) {
   function isInsideAnyDoorCenter(center, doors) {
     for (let i = 0; i < doors.length; i++) {
       const dd = doors[i];
-      if (center > dd.x0 && center < dd.x1) return true;
+      if (center >= dd.x0 && center <= dd.x1) return true;
     }
     return false;
   }
@@ -599,8 +675,8 @@ export function updateBOM(state) {
     const out = [];
     for (let i = 0; i < doors.length; i++) {
       const dd = doors[i];
-      if (cEnd > dd.x0 && cEnd < dd.x1) out.push(dd);
-      else if (cStart > dd.x0 && cStart < dd.x1) out.push(dd);
+      if (cEnd >= dd.x0 && cEnd <= dd.x1) out.push(dd);
+      else if (cStart >= dd.x0 && cStart <= dd.x1) out.push(dd);
     }
     out.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
     return out;
@@ -738,95 +814,138 @@ export function updateBOM(state) {
 }
 
 function snapDoorsForWall(rawDoors, length, studW) {
+  return snapDoorsForWallWithEvents(rawDoors.map((d) => Object.assign({}, d, { _idx: -1 })), length, studW, "").doors.map((d) => {
+    const out = Object.assign({}, d);
+    delete out._idx;
+    return out;
+  });
+}
+
+function snapDoorsForWallWithEvents(rawDoors, length, studW, wall) {
   const CORNER_CLEAR = 50;
   const MIN_GAP = 50;
 
-  const n = rawDoors.length;
-  if (!n) return [];
+  const events = [];
+  const removed = [];
 
   const items = [];
-  let sumW = 0;
-
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < rawDoors.length; i++) {
     const dd = rawDoors[i];
+    const d = dd.door;
+    const id = String(d && d.id != null ? d.id : "door");
     const w = Math.max(1, Math.floor(dd.w || 1));
-    const desired = Math.floor(dd.x0 ?? 0);
-    items.push({ idx: i, door: dd.door, w, desired });
-    sumW += w;
+    items.push({
+      door: d,
+      id,
+      wall,
+      w,
+      desired: Math.floor(dd.x0 ?? 0),
+      _idx: dd._idx,
+    });
   }
 
-  let clear = CORNER_CLEAR;
-  let gap = MIN_GAP;
-
-  if (sumW + (n - 1) * gap + 2 * clear > length) {
-    clear = 0;
-  }
-  if (sumW + (n - 1) * gap + 2 * clear > length && n > 1) {
-    gap = Math.max(0, Math.floor((length - sumW - 2 * clear) / (n - 1)));
-  }
-
+  // Remove doors that can never satisfy corner clearance.
+  const maxDoorW = Math.max(0, length - 2 * CORNER_CLEAR);
+  const survivors = [];
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const hasCornerRange = (length - (2 * clear) - it.w) >= 0;
-    const minEdge = hasCornerRange ? clear : 0;
-    const maxEdge = hasCornerRange ? (length - clear - it.w) : Math.max(0, length - it.w);
-
-    const baseClamp = clamp(it.desired, 0, Math.max(0, length - it.w));
-    it.minEdge = minEdge;
-    it.maxEdge = maxEdge;
-    it.desiredClamped = clamp(baseClamp, minEdge, maxEdge);
+    if (it.w > maxDoorW) {
+      events.push(`Door ${it.id} (${wall}) removed: too wide (${it.w}mm) for wall length ${length}mm with 50mm corner clearance.`);
+      removed.push(it._idx);
+    } else {
+      survivors.push(it);
+    }
   }
 
-  const order = items.slice().sort((a, b) => (a.desiredClamped - b.desiredClamped) || (a.idx - b.idx));
+  // If still impossible to fit all with fixed constraints, remove widest doors until feasible.
+  function requiredLen(list) {
+    if (!list.length) return 0;
+    let sum = 0;
+    for (let i = 0; i < list.length; i++) sum += list[i].w;
+    return sum + (list.length - 1) * MIN_GAP + 2 * CORNER_CLEAR;
+  }
 
-  // Forward pass
+  let cur = survivors.slice();
+  while (cur.length > 0 && requiredLen(cur) > length) {
+    let dropIdx = 0;
+    for (let i = 1; i < cur.length; i++) {
+      if (cur[i].w > cur[dropIdx].w) dropIdx = i;
+      else if (cur[i].w === cur[dropIdx].w && cur[i].desired > cur[dropIdx].desired) dropIdx = i;
+    }
+    const drop = cur.splice(dropIdx, 1)[0];
+    events.push(`Door ${drop.id} (${wall}) removed: cannot fit with 50mm spacing and 50mm corner clearance.`);
+    removed.push(drop._idx);
+  }
+
+  if (!cur.length) return { doors: [], removed, events };
+
+  // Clamp to corner-clear range.
+  for (let i = 0; i < cur.length; i++) {
+    const it = cur[i];
+    it.minEdge = CORNER_CLEAR;
+    it.maxEdge = Math.max(CORNER_CLEAR, length - CORNER_CLEAR - it.w);
+    it.desiredClamped = clamp(it.desired, it.minEdge, it.maxEdge);
+  }
+
+  // Stable order by desired.
+  const order = cur.slice().sort((a, b) => (a.desiredClamped - b.desiredClamped) || (a._idx - b._idx));
+
+  // Projection with fixed gaps (forward/backward).
   for (let i = 0; i < order.length; i++) {
     const it = order[i];
     if (i === 0) it.pos = clamp(it.desiredClamped, it.minEdge, it.maxEdge);
     else {
       const prev = order[i - 1];
-      const minPos = prev.pos + prev.w + gap;
+      const minPos = prev.pos + prev.w + MIN_GAP;
       it.pos = clamp(Math.max(it.desiredClamped, minPos), it.minEdge, it.maxEdge);
     }
   }
 
-  // Backward pass
   for (let i = order.length - 1; i >= 0; i--) {
     const it = order[i];
     it.pos = clamp(it.pos, it.minEdge, it.maxEdge);
     if (i < order.length - 1) {
       const next = order[i + 1];
-      const maxPos = next.pos - gap - it.w;
+      const maxPos = next.pos - MIN_GAP - it.w;
       it.pos = clamp(Math.min(it.pos, maxPos), it.minEdge, it.maxEdge);
     }
   }
 
-  // Re-forward to re-satisfy gaps after backward adjustments
   for (let i = 0; i < order.length; i++) {
     const it = order[i];
     if (i === 0) it.pos = clamp(it.pos, it.minEdge, it.maxEdge);
     else {
       const prev = order[i - 1];
-      const minPos = prev.pos + prev.w + gap;
+      const minPos = prev.pos + prev.w + MIN_GAP;
       it.pos = clamp(Math.max(it.pos, minPos), it.minEdge, it.maxEdge);
     }
   }
 
-  const byIdx = new Array(items.length);
+  const out = [];
   for (let i = 0; i < order.length; i++) {
     const it = order[i];
-    byIdx[it.idx] = {
+    const prevX = Math.floor(Number(it.door && it.door.x_mm != null ? it.door.x_mm : it.desired));
+    const nextX = Math.floor(Number(it.pos));
+
+    const reasons = [];
+    if (it.desiredClamped !== it.desired) reasons.push("corner clearance");
+    if (nextX !== Math.floor(it.desiredClamped)) reasons.push("50mm spacing");
+
+    if (prevX !== nextX) {
+      const rs = reasons.length ? (" (" + reasons.join("; ") + ")") : "";
+      events.push(`Door ${it.id} (${wall}) snapped: ${prevX}mm → ${nextX}mm${rs}.`);
+    }
+
+    out.push({
       door: it.door,
       x0: Math.floor(it.pos),
       x1: Math.floor(it.pos + it.w),
-      w: it.w
-    };
+      w: it.w,
+      _idx: it._idx,
+    });
   }
 
-  // Preserve original door ordering from state for stable behavior
-  const out = [];
-  for (let i = 0; i < items.length; i++) out.push(byIdx[i]);
-  return out;
+  return { doors: out, removed, events };
 }
 
 function clamp(n, a, b) {
