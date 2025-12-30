@@ -31,6 +31,7 @@ import { DEFAULTS, resolveDims } from "./params.js";
 import { boot, disposeAll } from "./renderer/babylon.js";
 import * as Base from "./elements/base.js";
 import * as Walls from "./elements/walls.js";
+import * as Roof from "./elements/roof.js";
 import { renderBOM } from "./bom/index.js";
 
 function $(id) { return document.getElementById(id); }
@@ -694,6 +695,13 @@ function initApp() {
         if (getWallsEnabled(state)) {
           if (Walls && typeof Walls.build3D === "function") Walls.build3D(wallState, ctx);
           shiftWallMeshes(ctx.scene, -WALL_OVERHANG_MM, WALL_RISE_MM, -WALL_OVERHANG_MM);
+        }
+
+        if (state && state.roof && String(state.roof.style || "") === "pent") {
+          if (R && R.roof && R.roof.w_mm != null && R.roof.d_mm != null) {
+            var roofState = Object.assign({}, state, { w: R.roof.w_mm, d: R.roof.d_mm });
+            if (Roof && typeof Roof.build3D === "function") Roof.build3D(roofState, ctx);
+          }
         }
 
         if (Walls && typeof Walls.updateBOM === "function") {
