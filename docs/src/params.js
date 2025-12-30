@@ -1,4 +1,4 @@
-﻿// src/params.js
+// FILE: docs/src/params.js
 
 /** BASE constants (from reference single-file) */
 export const CONFIG = {
@@ -53,10 +53,7 @@ export const DEFAULTS = {
     height_mm: 2400,
     insulated: { section: { w: 50, h: 100 }, spacing: 400 },
     basic:     { section: { w: 50, h: 75 },  spacing: null },
-    openings: [
-      // Keep defaults; ensure entry exists (front door)
-      { id: "door1", wall: "front", type: "door", enabled: false, x_mm: 800, width_mm: 900, height_mm: 2000 }
-    ]
+    openings: []
   }
 };
 
