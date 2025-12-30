@@ -1,13 +1,11 @@
 // FILE: docs/src/elements/roof.js
 /**
  * Roof (PENT only).
- * - Rafters @600mm spacing (literal).
+ * - Rafters/joists @600mm spacing (literal).
  * - OSB sheets 1220×2440, no-stagger tiling, thickness 18mm (literal).
- * - Rafters span shortest roof dimension:
- *     A = min(roofW, roofD)  // span axis
- *     B = max(roofW, roofD)  // placement axis
- * - "Rotate 90 degrees" vs prior attempt:
- *     Cross-section orientation differs: rafter W/D output reflects the local axes used here.
+ * - Rafters span the shortest roof dimension (A = min(w,d)); placed along the long axis (B = max(w,d)).
+ * - “Rotate 90 degrees” cross-section orientation vs prior attempt:
+ *   Uses CONFIG.timber.w / CONFIG.timber.d but swaps which local axis gets which value consistently.
  *
  * All roof meshes:
  * - name prefix "roof-"
@@ -21,28 +19,26 @@ export function build3D(state, ctx) {
   if (!scene) return;
 
   // Dispose previous roof meshes
-  try {
-    scene.meshes
-      .filter(
-        (m) =>
-          m &&
-          m.metadata &&
-          m.metadata.dynamic === true &&
-          typeof m.name === "string" &&
-          m.name.startsWith("roof-")
-      )
-      .forEach((m) => {
-        try {
-          if (!m.isDisposed()) m.dispose(false, true);
-        } catch (e) {}
-      });
-  } catch (e) {}
+  scene.meshes
+    .filter(
+      (m) =>
+        m &&
+        m.metadata &&
+        m.metadata.dynamic === true &&
+        typeof m.name === "string" &&
+        m.name.startsWith("roof-")
+    )
+    .forEach((m) => {
+      try {
+        if (!m.isDisposed()) m.dispose(false, true);
+      } catch (e) {}
+    });
 
-  if (!state || !state.roof || String(state.roof.style || "") !== "pent") return;
+  if (!isPentEnabled(state)) return;
 
   const data = computeRoofData(state);
 
-  const timberMat = materials && materials.timber ? materials.timber : null;
+  const joistMat = materials && materials.timber ? materials.timber : null;
 
   const osbMat = (() => {
     try {
@@ -72,34 +68,34 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  // Rafters (span axis A, placed along B)
+  // Rafters (span along A, placed along B @600)
   for (let i = 0; i < data.rafters.length; i++) {
     const r = data.rafters[i];
 
-    // Cross-section orientation (rotated vs prior attempt):
-    // Here: vertical = rafterD_mm, in-plane thickness = rafterW_mm.
+    // Cross-section orientation (rotated): vertical = rafterD_mm, thickness = rafterW_mm
+    // A-axis is length.
     mkBox(
       `roof-rafter-${i}`,
-      r.Lx_mm,
+      r.len_mm,
       data.rafterD_mm,
-      r.Lz_mm,
+      data.rafterW_mm,
       { x: r.x0_mm, y: data.baseY_mm, z: r.z0_mm },
-      timberMat,
+      joistMat,
       { roof: "pent", part: "rafter" }
     );
   }
 
-  // OSB pieces above rafters
+  // OSB boards laid above rafters (thickness vertical)
   for (let i = 0; i < data.osb.all.length; i++) {
     const p = data.osb.all[i];
     mkBox(
       `roof-osb-${i}`,
-      p.Lx_mm,
+      p.xLen_mm,
       data.osbThickness_mm,
-      p.Lz_mm,
+      p.zLen_mm,
       { x: p.x0_mm, y: data.baseY_mm + data.rafterD_mm, z: p.z0_mm },
       osbMat,
-      { roof: "pent", part: "osb" }
+      { roof: "pent", part: "osb", kind: p.kind }
     );
   }
 }
@@ -108,11 +104,11 @@ export function updateBOM(state) {
   const tbody = document.getElementById("roofBomTable");
   if (!tbody) return;
 
+  // Always clear and render something deterministic
   tbody.innerHTML = "";
 
-  const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
-  if (!isPent) {
-    appendRow(tbody, ["Roof not enabled", "—", "—", "—", ""]);
+  if (!isPentEnabled(state)) {
+    appendPlaceholderRow(tbody, "Roof not enabled.");
     return;
   }
 
@@ -120,71 +116,68 @@ export function updateBOM(state) {
 
   const rows = [];
 
-  // Rafters: group identical lengths/sections
+  // Rafters (grouped)
   rows.push({
     item: "Roof Rafter",
     qty: data.rafters.length,
-    L: data.spanA_mm,
+    L: data.rafterLen_mm,
     W: data.rafterW_mm,
-    notes: "D (mm): " + String(data.rafterD_mm) + "; spacing @600mm; pent roof"
+    notes: "D (mm): " + String(data.rafterD_mm) + "; spacing @600mm; pent roof",
   });
 
-  // OSB pieces: group by cut size (L along B, W along A)
-  const osbGrouped = {};
-  for (let i = 0; i < data.osb.piecesAB.length; i++) {
-    const p = data.osb.piecesAB[i];
-    const L = Math.max(1, Math.floor(p.bLen_mm));
-    const W = Math.max(1, Math.floor(p.aLen_mm));
-    const key = String(L) + "x" + String(W);
-    if (!osbGrouped[key]) osbGrouped[key] = { qty: 0, L: L, W: W };
-    osbGrouped[key].qty += 1;
+  // OSB pieces (group identical cut sizes)
+  const osbPieces = [];
+  for (let i = 0; i < data.osb.all.length; i++) {
+    const p = data.osb.all[i];
+    osbPieces.push({
+      L: Math.max(1, Math.floor(p.L_mm)),
+      W: Math.max(1, Math.floor(p.W_mm)),
+      notes: "18mm OSB; " + (p.kind === "std" ? "standard sheet" : "rip/trim"),
+    });
   }
 
-  const keys = Object.keys(osbGrouped).sort((a, b) => {
-    const aa = osbGrouped[a], bb = osbGrouped[b];
-    if (aa.L !== bb.L) return aa.L - bb.L;
-    if (aa.W !== bb.W) return aa.W - bb.W;
-    return String(a).localeCompare(String(b));
-  });
+  const grouped = groupByLWN(osbPieces);
+  const gKeys = Object.keys(grouped);
+  gKeys.sort((a, b) => String(a).localeCompare(String(b)));
 
-  for (let i = 0; i < keys.length; i++) {
-    const g = osbGrouped[keys[i]];
+  for (let i = 0; i < gKeys.length; i++) {
+    const k = gKeys[i];
+    const g = grouped[k];
     rows.push({
       item: "Roof OSB",
       qty: g.qty,
       L: g.L,
       W: g.W,
-      notes: "18mm OSB"
+      notes: g.notes,
     });
   }
 
-  // Stable sort: Item then L then W then Notes
+  // Stable sort: Item, L, W, Notes
   rows.sort((a, b) => {
-    const ia = String(a.item || "");
-    const ib = String(b.item || "");
-    if (ia !== ib) return ia.localeCompare(ib);
-    const la = Number(a.L || 0), lb = Number(b.L || 0);
-    if (la !== lb) return la - lb;
-    const wa = Number(a.W || 0), wb = Number(b.W || 0);
-    if (wa !== wb) return wa - wb;
-    const na = String(a.notes || "");
-    const nb = String(b.notes || "");
-    return na.localeCompare(nb);
+    const ai = String(a.item), bi = String(b.item);
+    if (ai !== bi) return ai.localeCompare(bi);
+    const aL = Number(a.L), bL = Number(b.L);
+    if (aL !== bL) return aL - bL;
+    const aW = Number(a.W), bW = Number(b.W);
+    if (aW !== bW) return aW - bW;
+    return String(a.notes).localeCompare(String(b.notes));
   });
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    appendRow(tbody, [
-      r.item,
-      String(r.qty),
-      String(Math.floor(Number(r.L))),
-      String(Math.floor(Number(r.W))),
-      r.notes || ""
-    ]);
+    appendRow5(tbody, [r.item, String(r.qty), String(r.L), String(r.W), r.notes]);
+  }
+
+  if (!rows.length) {
+    appendPlaceholderRow(tbody, "Roof cutting list not yet generated.");
   }
 }
 
-function appendRow(tbody, cols) {
+function isPentEnabled(state) {
+  return !!(state && state.roof && String(state.roof.style || "") === "pent");
+}
+
+function appendRow5(tbody, cols) {
   const tr = document.createElement("tr");
   for (let i = 0; i < cols.length; i++) {
     const td = document.createElement("td");
@@ -194,106 +187,139 @@ function appendRow(tbody, cols) {
   tbody.appendChild(tr);
 }
 
-function computeRoofData(state) {
-  // Roof extents are provided by orchestration as state.w/state.d for roof mode.
-  const roofW = Math.max(1, Math.floor(Number(state && state.w != null ? state.w : 1)));
-  const roofD = Math.max(1, Math.floor(Number(state && state.d != null ? state.d : 1)));
+function appendPlaceholderRow(tbody, msg) {
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = 5;
+  td.textContent = String(msg || "");
+  tr.appendChild(td);
+  tbody.appendChild(tr);
+}
 
+function groupByLWN(pieces) {
+  const out = {};
+  for (let i = 0; i < pieces.length; i++) {
+    const p = pieces[i];
+    const L = Math.max(1, Math.floor(Number(p.L || 0)));
+    const W = Math.max(1, Math.floor(Number(p.W || 0)));
+    const notes = String(p.notes || "");
+    const key = String(L) + "x" + String(W) + "|" + notes;
+    if (!out[key]) out[key] = { qty: 0, L: L, W: W, notes: notes };
+    out[key].qty += 1;
+  }
+  return out;
+}
+
+function computeRoofData(state) {
+  // Roof extents: state.w/state.d are assumed resolved by orchestration
+  const roofW = Math.max(1, Math.floor(Number(state.w)));
+  const roofD = Math.max(1, Math.floor(Number(state.d)));
+
+  // Base Y: use wall height (matches existing patterns)
   const wallH = Math.max(
     100,
     Math.floor(
-      state && state.walls && state.walls.height_mm != null ? state.walls.height_mm : 2400
+      state && state.walls && state.walls.height_mm != null
+        ? Number(state.walls.height_mm)
+        : 2400
     )
   );
 
-  const spanA = Math.min(roofW, roofD);
-  const placeB = Math.max(roofW, roofD);
+  // A = shortest (rafter span), B = longest (placement axis)
+  const A = Math.min(roofW, roofD);
+  const B = Math.max(roofW, roofD);
 
-  // A spans the shortest dimension; B is placement dimension.
-  // Determine whether B runs along X or Z
-  const bAxis = roofW >= roofD ? "x" : "z"; // long axis
-  const aAxis = bAxis === "x" ? "z" : "x"; // short axis
+  // Determine mapping to X/Z:
+  // If roofW is the short axis => A->X, B->Z
+  // Else => A->Z, B->X
+  const isWShort = roofW <= roofD;
 
   const spacing = 600;
 
-  // Timber section from CONFIG; orientation rotated vs prior attempt
-  const timberW = Math.max(1, Math.floor(Number(CONFIG && CONFIG.timber && CONFIG.timber.w != null ? CONFIG.timber.w : 50)));
-  const timberD = Math.max(1, Math.floor(Number(CONFIG && CONFIG.timber && CONFIG.timber.d != null ? CONFIG.timber.d : 100)));
+  // Timber section from CONFIG, rotated orientation:
+  // Use rafterW_mm along horizontal thickness, rafterD_mm vertical.
+  const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w))); // typically 50
+  const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d))); // typically 100
 
-  // Cross-section orientation used here:
-  // - vertical (Y) = timberD
-  // - in-plane thickness across placement axis = timberW
-  const rafterW_mm = timberW;
-  const rafterD_mm = timberD;
+  // Rotated 90°: swap which local axis gets baseW/baseD.
+  // Here: horizontal thickness uses baseD; vertical uses baseW.
+  const rafterW_mm = baseD;
+  const rafterD_mm = baseW;
 
-  // Placement positions along B: include 0, step 600, ensure last at (B - thickness) if possible.
-  const bMax = Math.max(0, placeB - rafterW_mm);
-  const bPositions = [];
+  const rafterLen_mm = A;
+
+  // Placement positions along B: include 0; step 600; ensure last at (B - rafterW_mm) if possible
+  const pos = [];
+  const maxP = Math.max(0, B - rafterW_mm);
+
   let p = 0;
-  while (p <= bMax) {
-    bPositions.push(Math.floor(p));
+  while (p <= maxP) {
+    pos.push(Math.floor(p));
     p += spacing;
   }
-  if (bPositions.length) {
-    const last = bPositions[bPositions.length - 1];
-    if (Math.abs(last - bMax) > 0) bPositions.push(Math.floor(bMax));
+  if (pos.length) {
+    const last = pos[pos.length - 1];
+    if (Math.abs(last - maxP) > 0) pos.push(Math.floor(maxP));
   } else {
-    bPositions.push(0);
+    pos.push(0);
   }
 
-  // Build rafter boxes in X/Z
-  // Each rafter spans A fully, with thickness rafterW_mm along placement axis.
   const rafters = [];
-  for (let i = 0; i < bPositions.length; i++) {
-    const b0 = bPositions[i];
+  for (let i = 0; i < pos.length; i++) {
+    const b0 = pos[i];
 
-    // Compute box footprint in X/Z depending on which axis is A/B.
-    // aAxis length = spanA
-    // bAxis thickness = rafterW_mm at offset b0
-    if (bAxis === "x") {
-      // B->X placement, A->Z span
+    // Build boxes in X/Z:
+    // - Length spans A axis
+    // - Thickness spans placement axis
+    if (isWShort) {
+      // A->X, B->Z
       rafters.push({
-        x0_mm: b0,
-        z0_mm: 0,
-        Lx_mm: rafterW_mm,
-        Lz_mm: spanA
-      });
-    } else {
-      // B->Z placement, A->X span
-      rafters.push({
+        len_mm: rafterLen_mm,
         x0_mm: 0,
         z0_mm: b0,
-        Lx_mm: spanA,
-        Lz_mm: rafterW_mm
+      });
+    } else {
+      // A->Z, B->X
+      rafters.push({
+        len_mm: rafterLen_mm,
+        x0_mm: b0,
+        z0_mm: 0,
       });
     }
   }
 
-  // OSB tiling in AB (A across = 1220, B along = 2440), then map to XZ based on axis mapping.
-  const osbThickness_mm = 18;
-  const sheetA = Math.max(1, Math.floor(Number(CONFIG && CONFIG.decking && CONFIG.decking.w != null ? CONFIG.decking.w : 1220)));
-  const sheetB = Math.max(1, Math.floor(Number(CONFIG && CONFIG.decking && CONFIG.decking.d != null ? CONFIG.decking.d : 2440)));
+  // OSB tiling in AB space: 1220 along A, 2440 along B (no stagger)
+  const osbAB = computeOsbPiecesNoStagger(A, B);
 
-  const piecesAB = computePiecesAB_NoStagger(spanA, placeB, sheetA, sheetB);
+  // Map AB pieces to X/Z consistent with rafter mapping
+  const mappedAll = [];
+  for (let i = 0; i < osbAB.all.length; i++) {
+    const p2 = osbAB.all[i];
 
-  const osbAll = [];
-  for (let i = 0; i < piecesAB.length; i++) {
-    const q = piecesAB[i];
-    if (bAxis === "x") {
-      // B->X, A->Z
-      osbAll.push({
-        x0_mm: q.b0_mm,
-        z0_mm: q.a0_mm,
-        Lx_mm: q.bLen_mm,
-        Lz_mm: q.aLen_mm
+    // In AB space:
+    // - W_mm is along A (1220 direction)
+    // - L_mm is along B (2440 direction)
+    if (isWShort) {
+      // A->X, B->Z
+      mappedAll.push({
+        kind: p2.kind,
+        x0_mm: p2.a0_mm,
+        z0_mm: p2.b0_mm,
+        xLen_mm: p2.W_mm,
+        zLen_mm: p2.L_mm,
+        L_mm: p2.L_mm,
+        W_mm: p2.W_mm,
       });
     } else {
-      // B->Z, A->X
-      osbAll.push({
-        x0_mm: q.a0_mm,
-        z0_mm: q.b0_mm,
-        Lx_mm: q.aLen_mm,
-        Lz_mm: q.bLen_mm
+      // A->Z, B->X
+      mappedAll.push({
+        kind: p2.kind,
+        x0_mm: p2.b0_mm,
+        z0_mm: p2.a0_mm,
+        xLen_mm: p2.L_mm,
+        zLen_mm: p2.W_mm,
+        L_mm: p2.L_mm,
+        W_mm: p2.W_mm,
       });
     }
   }
@@ -301,69 +327,75 @@ function computeRoofData(state) {
   return {
     roofW_mm: roofW,
     roofD_mm: roofD,
-    spanA_mm: spanA,
-    placeB_mm: placeB,
-    aAxis: aAxis,
-    bAxis: bAxis,
     baseY_mm: wallH,
-    rafterW_mm: rafterW_mm,
-    rafterD_mm: rafterD_mm,
-    rafters: rafters,
-    osbThickness_mm: osbThickness_mm,
+    rafterW_mm,
+    rafterD_mm,
+    rafterLen_mm,
+    rafters,
+    osbThickness_mm: 18,
     osb: {
-      piecesAB: piecesAB,
-      all: osbAll
-    }
+      all: mappedAll,
+      totalArea_mm2: osbAB.totalArea_mm2,
+    },
   };
 }
 
 /**
- * No-stagger tiling for sheets:
- * - A axis uses sheetA (e.g., 1220)
- * - B axis uses sheetB (e.g., 2440)
- * Order: full sheets, remainder column, remainder row, corner remainder.
- * Returns list of pieces in AB coordinates with sizes and origins.
+ * No-stagger tiling for 1220×2440 sheets in AB space:
+ * - A axis uses 1220
+ * - B axis uses 2440
+ * Returns all pieces with A/B origins (a0_mm,b0_mm) and sizes (W_mm along A, L_mm along B).
  */
-function computePiecesAB_NoStagger(A_mm, B_mm, sheetA, sheetB) {
+function computeOsbPiecesNoStagger(A_mm, B_mm) {
   const A = Math.max(1, Math.floor(A_mm));
   const B = Math.max(1, Math.floor(B_mm));
 
-  const aFull = Math.floor(A / sheetA);
-  const bFull = Math.floor(B / sheetB);
+  const SHEET_A = 1220;
+  const SHEET_B = 2440;
 
-  const rectA = aFull * sheetA;
-  const rectB = bFull * sheetB;
+  const aFull = Math.floor(A / SHEET_A);
+  const bFull = Math.floor(B / SHEET_B);
 
-  const remA = Math.max(0, A - rectA);
-  const remB = Math.max(0, B - rectB);
+  const aRem = A - aFull * SHEET_A;
+  const bRem = B - bFull * SHEET_B;
 
-  const pieces = [];
+  const all = [];
+
+  function pushPiece(kind, a0, b0, W, L) {
+    all.push({ kind, a0_mm: a0, b0_mm: b0, W_mm: W, L_mm: L });
+  }
 
   // Full sheets
   for (let bi = 0; bi < bFull; bi++) {
     for (let ai = 0; ai < aFull; ai++) {
-      pieces.push({ a0_mm: ai * sheetA, b0_mm: bi * sheetB, aLen_mm: sheetA, bLen_mm: sheetB });
+      pushPiece("std", ai * SHEET_A, bi * SHEET_B, SHEET_A, SHEET_B);
     }
   }
 
-  // Remainder column (remA × sheetB) for each full row
-  if (remA > 0) {
+  // A remainder strip across full B rows (aRem × 2440)
+  if (aRem > 0 && bFull > 0) {
     for (let bi = 0; bi < bFull; bi++) {
-      pieces.push({ a0_mm: rectA, b0_mm: bi * sheetB, aLen_mm: remA, bLen_mm: sheetB });
+      pushPiece("rip", aFull * SHEET_A, bi * SHEET_B, aRem, SHEET_B);
     }
   }
 
-  // Remainder row (sheetA × remB) for each full col
-  if (remB > 0) {
+  // B remainder strip across full A cols (1220 × bRem)
+  if (bRem > 0 && aFull > 0) {
     for (let ai = 0; ai < aFull; ai++) {
-      pieces.push({ a0_mm: ai * sheetA, b0_mm: rectB, aLen_mm: sheetA, bLen_mm: remB });
+      pushPiece("rip", ai * SHEET_A, bFull * SHEET_B, SHEET_A, bRem);
     }
   }
 
-  // Corner remainder
-  if (remA > 0 && remB > 0) {
-    pieces.push({ a0_mm: rectA, b0_mm: rectB, aLen_mm: remA, bLen_mm: remB });
+  // Corner remainder (aRem × bRem)
+  if (aRem > 0 && bRem > 0) {
+    pushPiece("rip", aFull * SHEET_A, bFull * SHEET_B, aRem, bRem);
   }
 
-  return pieces;
+  // Total area
+  let area = 0;
+  for (let i = 0; i < all.length; i++) {
+    area += Math.max(0, all[i].W_mm) * Math.max(0, all[i].L_mm);
+  }
+
+  return { all, totalArea_mm2: area };
 }
