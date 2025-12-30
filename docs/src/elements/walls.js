@@ -11,14 +11,15 @@
  * BASIC variant panelization:
  * - If a basic wall length exceeds 2400mm, it is built as TWO separate panels split as evenly as possible.
  *
- * CORNER JOIN (requested change):
+ * CORNER JOIN:
  * - Panels must NOT overlap/intersect at corners.
  * - Front/Back are full building frame width (dims.w).
  * - Left/Right run BETWEEN front/back, so their length is (dims.d - 2 * wallThickness)
  *   and they start at z = wallThickness.
  *
- * Door logic:
- * - door.width_mm is the CLEAR OPENING (gap) between the two uprights (studs).
+ * Openings:
+ * - Doors: width_mm is the CLEAR OPENING (gap) between the uprights (studs).
+ * - Windows: same horizontal logic, plus y_mm (from bottom plate top) and height_mm must fit within the stud cavity.
  *
  * @param {any} state Derived state for walls (w/d already resolved to frame outer dims)
  * @param {{scene:BABYLON.Scene, materials:any}} ctx
@@ -41,26 +42,28 @@ export function build3D(state, ctx) {
 
   const prof = resolveProfile(state, variant);
 
-  // Rotated plates: vertical plate height is the thin dimension; wall thickness is the wide dimension.
-  const plateY = prof.studW; // usually 50mm
-  const wallThk = prof.studH; // 75 or 100mm
+  const plateY = prof.studW;
+  const wallThk = prof.studH;
   const studLen = Math.max(1, height - 2 * plateY);
 
   const flags = normalizeWallFlags(state);
 
   const openings = Array.isArray(state.walls?.openings) ? state.walls.openings : [];
   const doorsAll = openings.filter((o) => o && o.type === "door" && o.enabled !== false);
+  const winsAll = openings.filter((o) => o && o.type === "window" && o.enabled !== false);
 
-  const invalidIds = Array.isArray(state.walls?.invalidDoorIds) ? state.walls.invalidDoorIds.map(String) : [];
-  const invalidSet = new Set(invalidIds);
+  const invalidDoorIds = Array.isArray(state.walls?.invalidDoorIds) ? state.walls.invalidDoorIds.map(String) : [];
+  const invalidWinIds = Array.isArray(state.walls?.invalidWindowIds) ? state.walls.invalidWindowIds.map(String) : [];
+  const invalidDoorSet = new Set(invalidDoorIds);
+  const invalidWinSet = new Set(invalidWinIds);
 
-  const invalidDoorMat = (() => {
+  const invalidMat = (() => {
     try {
-      if (scene._invalidDoorMat) return scene._invalidDoorMat;
-      const m = new BABYLON.StandardMaterial("invalidDoorMat", scene);
+      if (scene._invalidOpeningMat) return scene._invalidOpeningMat;
+      const m = new BABYLON.StandardMaterial("invalidOpeningMat", scene);
       m.diffuseColor = new BABYLON.Color3(0.85, 0.1, 0.1);
       m.emissiveColor = new BABYLON.Color3(0.35, 0.0, 0.0);
-      scene._invalidDoorMat = m;
+      scene._invalidOpeningMat = m;
       return m;
     } catch (e) {
       return null;
@@ -87,42 +90,55 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  function doorIntervalsForWall(wallId, length) {
+  function doorIntervalsForWall(wallId) {
     const list = [];
     for (let i = 0; i < doorsAll.length; i++) {
       const d = doorsAll[i];
       if (String(d.wall || "front") !== wallId) continue;
-
       const wGap = Math.max(100, Math.floor(d.width_mm || 800));
       const x0 = Math.floor(d.x_mm ?? 0);
       const x1 = x0 + wGap;
       const h = Math.max(100, Math.floor(d.height_mm || 2000));
-
       list.push({ id: String(d.id || ""), x0, x1, w: wGap, h });
     }
     return list;
   }
 
-  function isInsideAnyDoor(pos, doors) {
-    for (let i = 0; i < doors.length; i++) {
-      const d = doors[i];
+  function windowIntervalsForWall(wallId) {
+    const list = [];
+    for (let i = 0; i < winsAll.length; i++) {
+      const w = winsAll[i];
+      if (String(w.wall || "front") !== wallId) continue;
+      const wGap = Math.max(100, Math.floor(w.width_mm || 600));
+      const x0 = Math.floor(w.x_mm ?? 0);
+      const x1 = x0 + wGap;
+
+      const y = Math.max(0, Math.floor(w.y_mm ?? 0));
+      const h = Math.max(100, Math.floor(w.height_mm || 600));
+      list.push({ id: String(w.id || ""), x0, x1, w: wGap, y, h });
+    }
+    return list;
+  }
+
+  function isInsideAnyOpening(pos, intervals) {
+    for (let i = 0; i < intervals.length; i++) {
+      const d = intervals[i];
       const c = pos + prof.studW / 2;
       if (c > d.x0 && c < d.x1) return true;
     }
     return false;
   }
 
-  function addDoorFramingAlongX(wallId, origin, lengthX, door) {
+  function addDoorFramingAlongX(wallId, origin, door) {
     const thickness = wallThk;
     const doorH = door.h;
     const id = door.id;
-    const useInvalid = invalidSet.has(String(id));
-    const mat = useInvalid && invalidDoorMat ? invalidDoorMat : materials.timber;
+    const useInvalid = invalidDoorSet.has(String(id));
+    const mat = useInvalid && invalidMat ? invalidMat : materials.timber;
 
-    const doorX0 = door.x0; // clear opening edge
-    const doorX1 = door.x1; // clear opening edge
+    const doorX0 = door.x0;
+    const doorX1 = door.x1;
 
-    // Uprights (full height between plates): inner faces define the clear opening.
     mkBox(
       `wall-${wallId}-door-${id}-upright-left`,
       prof.studW,
@@ -142,7 +158,6 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    // Header spans clear opening + both uprights.
     const headerL = (door.w + 2 * prof.studW);
     mkBox(
       `wall-${wallId}-door-${id}-header`,
@@ -155,17 +170,16 @@ export function build3D(state, ctx) {
     );
   }
 
-  function addDoorFramingAlongZ(wallId, origin, lengthZ, door) {
+  function addDoorFramingAlongZ(wallId, origin, door) {
     const thickness = wallThk;
     const doorH = door.h;
     const id = door.id;
-    const useInvalid = invalidSet.has(String(id));
-    const mat = useInvalid && invalidDoorMat ? invalidDoorMat : materials.timber;
+    const useInvalid = invalidDoorSet.has(String(id));
+    const mat = useInvalid && invalidMat ? invalidMat : materials.timber;
 
-    const doorZ0 = door.x0; // clear opening edge
-    const doorZ1 = door.x1; // clear opening edge
+    const doorZ0 = door.x0;
+    const doorZ1 = door.x1;
 
-    // Uprights (full height between plates): inner faces define the clear opening.
     mkBox(
       `wall-${wallId}-door-${id}-upright-left`,
       thickness,
@@ -185,7 +199,6 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    // Header spans clear opening + both uprights.
     const headerL = (door.w + 2 * prof.studW);
     mkBox(
       `wall-${wallId}-door-${id}-header`,
@@ -198,7 +211,113 @@ export function build3D(state, ctx) {
     );
   }
 
-  function buildBasicPanel(wallPrefix, axis, panelLen, origin, offsetAlong, doors) {
+  function addWindowFramingAlongX(wallId, origin, win) {
+    const thickness = wallThk;
+    const id = win.id;
+    const useInvalid = invalidWinSet.has(String(id));
+    const mat = useInvalid && invalidMat ? invalidMat : materials.timber;
+
+    const x0 = win.x0;
+    const x1 = win.x1;
+
+    const y0 = plateY + Math.max(0, Math.floor(win.y));
+    const yTop = y0 + Math.max(100, Math.floor(win.h));
+
+    mkBox(
+      `wall-${wallId}-win-${id}-upright-left`,
+      prof.studW,
+      Math.max(1, height - 2 * plateY),
+      thickness,
+      { x: origin.x + (x0 - prof.studW), y: plateY, z: origin.z },
+      mat,
+      { windowId: id }
+    );
+    mkBox(
+      `wall-${wallId}-win-${id}-upright-right`,
+      prof.studW,
+      Math.max(1, height - 2 * plateY),
+      thickness,
+      { x: origin.x + x1, y: plateY, z: origin.z },
+      mat,
+      { windowId: id }
+    );
+
+    const headerL = (win.w + 2 * prof.studW);
+    mkBox(
+      `wall-${wallId}-win-${id}-header`,
+      headerL,
+      prof.studH,
+      thickness,
+      { x: origin.x + (x0 - prof.studW), y: yTop, z: origin.z },
+      mat,
+      { windowId: id }
+    );
+
+    mkBox(
+      `wall-${wallId}-win-${id}-sill`,
+      headerL,
+      prof.studH,
+      thickness,
+      { x: origin.x + (x0 - prof.studW), y: y0, z: origin.z },
+      mat,
+      { windowId: id }
+    );
+  }
+
+  function addWindowFramingAlongZ(wallId, origin, win) {
+    const thickness = wallThk;
+    const id = win.id;
+    const useInvalid = invalidWinSet.has(String(id));
+    const mat = useInvalid && invalidMat ? invalidMat : materials.timber;
+
+    const z0 = win.x0;
+    const z1 = win.x1;
+
+    const y0 = plateY + Math.max(0, Math.floor(win.y));
+    const yTop = y0 + Math.max(100, Math.floor(win.h));
+
+    mkBox(
+      `wall-${wallId}-win-${id}-upright-left`,
+      thickness,
+      Math.max(1, height - 2 * plateY),
+      prof.studW,
+      { x: origin.x, y: plateY, z: origin.z + (z0 - prof.studW) },
+      mat,
+      { windowId: id }
+    );
+    mkBox(
+      `wall-${wallId}-win-${id}-upright-right`,
+      thickness,
+      Math.max(1, height - 2 * plateY),
+      prof.studW,
+      { x: origin.x, y: plateY, z: origin.z + z1 },
+      mat,
+      { windowId: id }
+    );
+
+    const headerL = (win.w + 2 * prof.studW);
+    mkBox(
+      `wall-${wallId}-win-${id}-header`,
+      thickness,
+      prof.studH,
+      headerL,
+      { x: origin.x, y: yTop, z: origin.z + (z0 - prof.studW) },
+      mat,
+      { windowId: id }
+    );
+
+    mkBox(
+      `wall-${wallId}-win-${id}-sill`,
+      thickness,
+      prof.studH,
+      headerL,
+      { x: origin.x, y: y0, z: origin.z + (z0 - prof.studW) },
+      mat,
+      { windowId: id }
+    );
+  }
+
+  function buildBasicPanel(wallPrefix, axis, panelLen, origin, offsetAlong, openings) {
     const isAlongX = axis === "x";
 
     if (isAlongX) {
@@ -262,15 +381,15 @@ export function build3D(state, ctx) {
     const offsetStart = offsetAlong;
     const offsetEnd = offsetAlong + panelLen;
 
-    const panelDoors = doors.filter((d) => {
+    const panelOpenings = openings.filter((d) => {
       const s = d.x0;
       const e = d.x1;
       return e > offsetStart && s < offsetEnd;
     });
 
     const studAt = (posStart) => {
-      for (let i = 0; i < panelDoors.length; i++) {
-        const d = panelDoors[i];
+      for (let i = 0; i < panelOpenings.length; i++) {
+        const d = panelOpenings[i];
         if (posStart + prof.studW > d.x0 && posStart < d.x1) return false;
       }
       return true;
@@ -285,8 +404,8 @@ export function build3D(state, ctx) {
       if (studAt(offsetAlong + panelLen - prof.studW)) placeStud(x1, origin.z, studLen, 1);
 
       let midAllowed = true;
-      for (let i = 0; i < panelDoors.length; i++) {
-        const d = panelDoors[i];
+      for (let i = 0; i < panelOpenings.length; i++) {
+        const d = panelOpenings[i];
         const ms = (xm - origin.x);
         if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
       }
@@ -300,8 +419,8 @@ export function build3D(state, ctx) {
       if (studAt(offsetAlong + panelLen - prof.studW)) placeStud(origin.x, z1, studLen, 1);
 
       let midAllowed = true;
-      for (let i = 0; i < panelDoors.length; i++) {
-        const d = panelDoors[i];
+      for (let i = 0; i < panelOpenings.length; i++) {
+        const d = panelOpenings[i];
         const ms = (zm - origin.z);
         if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
       }
@@ -313,9 +432,10 @@ export function build3D(state, ctx) {
     const isAlongX = axis === "x";
     const wallPrefix = `wall-${wallId}-`;
 
-    const doors = doorIntervalsForWall(wallId, length);
+    const doors = doorIntervalsForWall(wallId);
+    const wins = windowIntervalsForWall(wallId);
+    const openingsX = doors.concat(wins);
 
-    // Plates (full wall)
     if (isAlongX) {
       mkBox(wallPrefix + "plate-bottom", length, plateY, wallThk, { x: origin.x, y: 0, z: origin.z }, materials.plate);
       mkBox(wallPrefix + "plate-top", length, plateY, wallThk, { x: origin.x, y: height - plateY, z: origin.z }, materials.plate);
@@ -325,7 +445,6 @@ export function build3D(state, ctx) {
     }
 
     if (variant === "basic") {
-      // BASIC: if length > 2400mm, split panels; seam door => insert door panel
       let panels = [{ start: 0, len: length }];
 
       if (length > 2400) {
@@ -361,20 +480,24 @@ export function build3D(state, ctx) {
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
         const pref = wallPrefix + `panel-${p + 1}-`;
-        buildBasicPanel(pref, axis, pan.len, origin, pan.start, doors);
+        buildBasicPanel(pref, axis, pan.len, origin, pan.start, openingsX);
       }
 
-      // Door framing (basic includes header)
       for (let i = 0; i < doors.length; i++) {
         const d = doors[i];
-        if (isAlongX) addDoorFramingAlongX(wallId, origin, length, d);
-        else addDoorFramingAlongZ(wallId, origin, length, d);
+        if (isAlongX) addDoorFramingAlongX(wallId, origin, d);
+        else addDoorFramingAlongZ(wallId, origin, d);
+      }
+
+      for (let i = 0; i < wins.length; i++) {
+        const w = wins[i];
+        if (isAlongX) addWindowFramingAlongX(wallId, origin, w);
+        else addWindowFramingAlongZ(wallId, origin, w);
       }
 
       return;
     }
 
-    // INSULATED studs @400, skipping door regions
     const studs = [];
     const placeStud = (x, z, h) => {
       if (isAlongX) {
@@ -384,42 +507,43 @@ export function build3D(state, ctx) {
       }
     };
 
-    // Corner studs
     if (isAlongX) {
-      if (!isInsideAnyDoor(0, doors)) placeStud(origin.x + 0, origin.z + 0, studLen);
-      if (!isInsideAnyDoor(length - prof.studW, doors)) placeStud(origin.x + (length - prof.studW), origin.z + 0, studLen);
+      if (!isInsideAnyOpening(0, openingsX)) placeStud(origin.x + 0, origin.z + 0, studLen);
+      if (!isInsideAnyOpening(length - prof.studW, openingsX)) placeStud(origin.x + (length - prof.studW), origin.z + 0, studLen);
     } else {
-      if (!isInsideAnyDoor(0, doors)) placeStud(origin.x + 0, origin.z + 0, studLen);
-      if (!isInsideAnyDoor(length - prof.studW, doors)) placeStud(origin.x + 0, origin.z + (length - prof.studW), studLen);
+      if (!isInsideAnyOpening(0, openingsX)) placeStud(origin.x + 0, origin.z + 0, studLen);
+      if (!isInsideAnyOpening(length - prof.studW, openingsX)) placeStud(origin.x + 0, origin.z + (length - prof.studW), studLen);
     }
 
     if (isAlongX) {
       let x = 400;
       while (x <= length - prof.studW) {
         if (Math.abs(x - (length - prof.studW)) < 1) break;
-        if (!isInsideAnyDoor(x, doors)) placeStud(origin.x + x, origin.z, studLen);
+        if (!isInsideAnyOpening(x, openingsX)) placeStud(origin.x + x, origin.z, studLen);
         x += prof.spacing;
       }
     } else {
       let z = 400;
       while (z <= length - prof.studW) {
         if (Math.abs(z - (length - prof.studW)) < 1) break;
-        if (!isInsideAnyDoor(z, doors)) placeStud(origin.x, origin.z + z, studLen);
+        if (!isInsideAnyOpening(z, openingsX)) placeStud(origin.x, origin.z + z, studLen);
         z += prof.spacing;
       }
     }
 
-    // Door framing for any wall (insulated)
     for (let i = 0; i < doors.length; i++) {
       const d = doors[i];
-      if (isAlongX) addDoorFramingAlongX(wallId, origin, length, d);
-      else addDoorFramingAlongZ(wallId, origin, length, d);
+      if (isAlongX) addDoorFramingAlongX(wallId, origin, d);
+      else addDoorFramingAlongZ(wallId, origin, d);
+    }
+
+    for (let i = 0; i < wins.length; i++) {
+      const w = wins[i];
+      if (isAlongX) addWindowFramingAlongX(wallId, origin, w);
+      else addWindowFramingAlongZ(wallId, origin, w);
     }
   }
 
-  // Corner-safe lengths/origins:
-  // Front/Back: full width.
-  // Left/Right: between front/back => shorter by 2 * wallThk and start at z = wallThk.
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
 
   if (flags.front) buildWall("front", "x", dims.w, { x: 0, z: 0 });
@@ -504,7 +628,6 @@ export function updateBOM(state) {
       continue;
     }
 
-    // insulated (unchanged logic)
     let count = 2;
     let run = 400;
     while (run <= L - prof.studW) {
@@ -512,16 +635,18 @@ export function updateBOM(state) {
       run += prof.spacing;
     }
     sections.push([`Studs (${wname})`, count, studLen, prof.studW, "@400"]);
+  }
 
-    if (wname === "front") {
-      const door = (state.walls?.openings || [])[0];
-      if (door && door.enabled) {
-        const doorW = Math.max(100, Math.floor(door.width_mm || 800));
-        sections.push(["King Studs (front)", 2, Math.max(1, height - 2 * plateY), prof.studW, "door"]);
-        sections.push(["Trimmer Studs (front)", 2, Math.max(100, Math.floor(door.height_mm || 2000)), prof.studW, "door"]);
-        sections.push(["Header (front)", 1, doorW + 2 * prof.studW, prof.studH, "door"]);
-      }
-    }
+  // Windows BOM (additive)
+  const openings = Array.isArray(state.walls?.openings) ? state.walls.openings : [];
+  const wins = openings.filter((o) => o && o.type === "window" && o.enabled !== false);
+  for (let i = 0; i < wins.length; i++) {
+    const w = wins[i];
+    const wall = String(w.wall || "front");
+    const wGap = Math.max(100, Math.floor(w.width_mm || 600));
+    sections.push([`Window Uprights (${wall})`, 2, Math.max(1, height - 2 * plateY), prof.studW, `window ${String(w.id || "")}`]);
+    sections.push([`Window Header (${wall})`, 1, wGap + 2 * prof.studW, prof.studH, `window ${String(w.id || "")}`]);
+    sections.push([`Window Sill (${wall})`, 1, wGap + 2 * prof.studW, prof.studH, `window ${String(w.id || "")}`]);
   }
 
   return { sections };
