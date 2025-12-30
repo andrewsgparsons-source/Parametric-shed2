@@ -1,4 +1,4 @@
-// src/renderer/babylon.js
+// FILE: docs/src/renderer/babylon.js
 
 export function mkMat(scene, name, color3, alpha = 1) {
   const mat = new BABYLON.StandardMaterial(name, scene);
@@ -9,12 +9,8 @@ export function mkMat(scene, name, color3, alpha = 1) {
 }
 
 export function disposeAll(scene) {
-  // Accept either a Babylon Scene or a ctx object { engine, scene, camera, materials }.
-  const sc = (scene && scene.scene) ? scene.scene : scene;
-  if (!sc || !sc.meshes) return;
-
   // Dispose meshes/materials created in previous renders for dynamic geometry.
-  const toDispose = sc.meshes.filter(m => m.metadata && m.metadata.dynamic === true);
+  const toDispose = scene.meshes.filter(m => m.metadata && m.metadata.dynamic === true);
   toDispose.forEach(m => { if (!m.isDisposed()) m.dispose(false, true); });
 }
 
