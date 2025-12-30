@@ -197,8 +197,9 @@ export function build3D(state, ctx) {
     }
   }
 
-  function addBasicDoorUprights(wallId, axis, origin, length, dd) {
+  function addBasicDoorFrame(wallId, axis, origin, length, dd) {
     const door = dd.door;
+    const doorH = Math.max(100, Math.floor(door.height_mm || 2000));
     const doorX0 = clamp(dd.x0, 0, Math.max(0, length - dd.w));
     const doorX1 = doorX0 + dd.w;
     const id = String(door.id != null ? door.id : "door");
@@ -220,6 +221,16 @@ export function build3D(state, ctx) {
         { x: origin.x + (doorX1 - prof.studW), y: plateY, z: origin.z },
         materials.timber
       );
+
+      const headerL = dd.w + 2 * prof.studW;
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-header",
+        headerL,
+        prof.studH,
+        wallThk,
+        { x: origin.x + (doorX0 - prof.studW), y: plateY + doorH, z: origin.z },
+        materials.timber
+      );
     } else {
       mkBox(
         "wall-" + wallId + "-door-" + id + "-upright-left",
@@ -235,6 +246,16 @@ export function build3D(state, ctx) {
         studLen,
         prof.studW,
         { x: origin.x, y: plateY, z: origin.z + (doorX1 - prof.studW) },
+        materials.timber
+      );
+
+      const headerL = dd.w + 2 * prof.studW;
+      mkBox(
+        "wall-" + wallId + "-door-" + id + "-header",
+        wallThk,
+        prof.studH,
+        headerL,
+        { x: origin.x, y: plateY + doorH, z: origin.z + (doorX0 - prof.studW) },
         materials.timber
       );
     }
@@ -333,7 +354,7 @@ export function build3D(state, ctx) {
       buildBasicPanel(wallPrefix + "panel-1-", axis, p1, origin, 0, doors);
       buildBasicPanel(wallPrefix + "panel-2-", axis, p2, origin, p1, doors);
 
-      for (let i = 0; i < doors.length; i++) addBasicDoorUprights(wallId, axis, origin, length, doors[i]);
+      for (let i = 0; i < doors.length; i++) addBasicDoorFrame(wallId, axis, origin, length, doors[i]);
       return;
     }
 
@@ -372,7 +393,7 @@ export function build3D(state, ctx) {
         else placeStud(origin.x, Math.max(origin.z, Math.floor(origin.z + length / 2 - prof.studW / 2)), studLen);
       }
 
-      for (let i = 0; i < doors.length; i++) addBasicDoorUprights(wallId, axis, origin, length, doors[i]);
+      for (let i = 0; i < doors.length; i++) addBasicDoorFrame(wallId, axis, origin, length, doors[i]);
       return;
     }
 
@@ -528,6 +549,7 @@ export function updateBOM(state) {
       for (let i = 0; i < doors.length; i++) {
         const id = String(doors[i].door.id != null ? doors[i].door.id : "door");
         sections.push([`Door Uprights (${wname}) — ${id}`, 2, studLen, prof.studW, "basic door"]);
+        sections.push([`Header (${wname}) — ${id}`, 1, doors[i].w + 2 * prof.studW, prof.studH, "basic door"]);
       }
       continue;
     }
@@ -543,6 +565,7 @@ export function updateBOM(state) {
       for (let i = 0; i < doors.length; i++) {
         const id = String(doors[i].door.id != null ? doors[i].door.id : "door");
         sections.push([`Door Uprights (${wname}) — ${id}`, 2, studLen, prof.studW, "basic door"]);
+        sections.push([`Header (${wname}) — ${id}`, 1, doors[i].w + 2 * prof.studW, prof.studH, "basic door"]);
       }
       continue;
     }
