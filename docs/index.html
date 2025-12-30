@@ -402,6 +402,31 @@
                 <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
               </div>
             </fieldset>
+
+            <fieldset id="instancesFieldset">
+              <legend>Instances</legend>
+              <div class="row">
+                <label>
+                  Instance
+                  <select id="instanceSelect"></select>
+                </label>
+                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
+                  <button id="saveInstanceBtn" type="button">Save</button>
+                  <button id="loadInstanceBtn" type="button">Load</button>
+                </div>
+              </div>
+              <div class="row">
+                <label>
+                  New name
+                  <input id="instanceNameInput" type="text" placeholder="e.g. Client A" />
+                </label>
+                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
+                  <button id="saveAsInstanceBtn" type="button">Save As</button>
+                  <button id="deleteInstanceBtn" type="button">Delete</button>
+                </div>
+              </div>
+              <p class="hint" id="instancesHint">Saved locally in this browser.</p>
+            </fieldset>
           </form>
         </div>
       </details>
