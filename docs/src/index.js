@@ -115,7 +115,6 @@ function initApp() {
     var doorDelBtnEl = $("doorDelBtn");
     var doorWallEl = $("doorWall");
 
-    var doorEnabledEl = $("doorEnabled");
     var doorXEl = $("doorX");
     var doorWEl = $("doorW");
     var doorHEl = $("doorH");
@@ -383,7 +382,6 @@ function initApp() {
 
         var door = getActiveDoor(state);
         if (door) {
-          if (doorEnabledEl) doorEnabledEl.checked = !!door.enabled;
           if (doorWallEl) doorWallEl.value = String(door.wall || "front");
           if (doorXEl && door.x_mm != null) doorXEl.value = String(door.x_mm);
           if (doorWEl && door.width_mm != null) doorWEl.value = String(door.width_mm);
@@ -527,7 +525,7 @@ function initApp() {
         var centered = Math.floor((wallLen - w) / 2);
         var x = clampDoorX(centered, w, wallLen);
 
-        var d = { id: id, wall: wall, type: "door", enabled: true, x_mm: x, width_mm: w, height_mm: 2000 };
+        var d = { id: id, wall: wall, type: "door", x_mm: x, width_mm: w, height_mm: 2000 };
         doors.push(d);
         activeDoorId = id;
         store.setState({ walls: { openings: doors } });
@@ -557,29 +555,17 @@ function initApp() {
 
     if (doorWallEl) {
       doorWallEl.addEventListener("change", function () {
-        patchDoor({ wall: doorWallEl.value });
-      });
-    }
-
-    if (doorEnabledEl) {
-      doorEnabledEl.addEventListener("change", function () {
         var s = store.getState();
         var cur = getActiveDoor(s);
         if (!cur) return;
 
-        var enabled = !!doorEnabledEl.checked;
-        if (!enabled) {
-          patchDoor({ enabled: false });
-          return;
-        }
-
-        var wallKey = String((doorWallEl && doorWallEl.value) ? doorWallEl.value : (cur.wall || "front"));
+        var wallKey = String(doorWallEl.value || "front");
         var wallLen = wallLenForDoor(s, wallKey);
         var doorW = asPosInt(cur.width_mm, 900);
         doorW = Math.min(doorW, wallLen);
-        var centered = Math.floor((wallLen - doorW) / 2);
-        var clamped = clampDoorX(centered, doorW, wallLen);
-        patchDoor({ enabled: true, wall: wallKey, x_mm: clamped, width_mm: doorW });
+        var x = clampDoorX(asNonNegInt(cur.x_mm, 0), doorW, wallLen);
+
+        patchDoor({ wall: wallKey, width_mm: doorW, x_mm: x });
       });
     }
 
