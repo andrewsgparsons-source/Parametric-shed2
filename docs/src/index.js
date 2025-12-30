@@ -133,14 +133,6 @@ function initApp() {
     var LS_INSTANCES_KEY = "shedInstances_v1";
     var LS_ACTIVE_KEY = "shedInstancesActive_v1";
 
-    /* Instances manual test:
-       1) Save As "A"
-       2) Change width/depth (and/or add a door/window)
-       3) Save As "B"
-       4) Switch dropdown between A and B and click Load
-       5) Confirm controls + model update immediately (via existing store.onChange)
-    */
-
     function safeJsonParse(s) {
       try { return JSON.parse(s); } catch (e) { return null; }
     }
@@ -158,11 +150,6 @@ function initApp() {
       try { if (window.localStorage) window.localStorage.removeItem(key); } catch (e) { throw e; }
     }
 
-    function setInstancesHint(msg) {
-      if (!instancesHintEl) return;
-      instancesHintEl.textContent = msg;
-    }
-
     function cloneJson(obj) {
       try { return JSON.parse(JSON.stringify(obj)); } catch (e) { return obj; }
     }
@@ -175,39 +162,99 @@ function initApp() {
       if (!isPlainObject(dst)) dst = {};
       if (!isPlainObject(src)) return dst;
       var keys = Object.keys(src);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var sv = src[k];
+        if (Array.isArray(sv)) {
+          dst[k] = sv.slice();
+        } else if (isPlainObject(sv)) {
+          dst[k] = deepMerge(isPlainObject(dst[k]) ? dst[k] : {}, sv);
+        } else {
+          dst[k] = sv;
+        }
+      }
+      return dst;
+    }
+
+    // ---- Instances (Save/Load Presets) ----
+    // Manual test checklist:
+    // - Save As “A”
+    // - Change width/depth + wall settings + add a door
+    // - Save As “B”
+    // - In dropdown, confirm “A” and “B” are visible
+    // - Select “A” → Load → verify state changes back
+    // - Select “B” → Load → verify state changes forward
+    // - Refresh page → active instance remains selected (active key)
+
+    function setHint(text) {
+      if (!instancesHintEl) return;
+      instancesHintEl.textContent = String(text || "");
+    }
+
+    function readInstances() {
+      try {
+        var raw = lsGet(LS_INSTANCES_KEY);
+        if (!raw) return {};
+        var parsed = safeJsonParse(raw);
+        if (!parsed || typeof parsed !== "object") return {};
+        return parsed;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeInstances(map) {
+      try {
+        var s = safeJsonStringify(map || {});
+        if (!s) return false;
+        lsSet(LS_INSTANCES_KEY, s);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function readActiveName() {
+      try {
+        var v = lsGet(LS_ACTIVE_KEY);
+        return v != null ? String(v) : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeActiveName(name) {
+      try {
+        if (name == null) { lsRemove(LS_ACTIVE_KEY); return true; }
+        lsSet(LS_ACTIVE_KEY, String(name));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function listInstanceNames(map) {
+      var names = Object.keys(map || {});
       names.sort(function (a, b) { return String(a).localeCompare(String(b)); });
       return names;
     }
 
-    function refreshInstanceSelectFromStorage(preferredName) {
-      if (!instanceSelectEl) return { map: {}, names: [], selected: null };
+    function rebuildInstanceSelect(selectedNameMaybe) {
+      if (!instanceSelectEl) return { map: {}, names: [], selected: null, ok: false };
 
-      var map = {};
-      try {
-        map = readInstancesMap();
-      } catch (e) {
-        setInstancesHint("Storage unavailable");
-        return { map: {}, names: [], selected: null };
+      var map = readInstances();
+      if (map === null) {
+        setHint("Storage unavailable");
+        return { map: {}, names: [], selected: null, ok: false };
       }
 
       var names = listInstanceNames(map);
-      if (!names.length) {
-        // Create Default from CURRENT initial state (right after store creation).
-        try {
-          map["Default"] = cloneJson(store.getState());
-          writeInstancesMap(map);
-          writeActiveName("Default");
-          names = listInstanceNames(map);
-        } catch (e2) {
-          setInstancesHint("Storage unavailable");
-          return { map: {}, names: [], selected: null };
-        }
-      }
 
+      var desired = selectedNameMaybe != null ? String(selectedNameMaybe) : null;
       var active = readActiveName();
-      var want = preferredName != null ? String(preferredName) : null;
-      if (!want && active && map[active] != null) want = active;
-      if (!want || names.indexOf(want) === -1) want = names[0];
+      if (!desired && active && map[active] != null) desired = active;
+      if (!desired && names.length) desired = names[0];
+      if (desired && names.indexOf(desired) === -1) desired = names.length ? names[0] : null;
 
       instanceSelectEl.innerHTML = "";
       for (var i = 0; i < names.length; i++) {
@@ -218,135 +265,161 @@ function initApp() {
         instanceSelectEl.appendChild(opt);
       }
 
-      instanceSelectEl.value = want;
-      try { writeActiveName(want); } catch (e3) { setInstancesHint("Storage unavailable"); }
+      if (desired != null) {
+        instanceSelectEl.value = desired;
+        writeActiveName(desired);
+      }
 
-      setInstancesHint("Selected: " + want);
-      return { map: map, names: names, selected: want };
+      return { map: map, names: names, selected: desired, ok: true };
     }
 
-    function getSelectedNameSafe(map) {
+    function ensureDefaultInstance() {
+      if (!instanceSelectEl) return false;
+
+      var map = readInstances();
+      if (map === null) {
+        setHint("Storage unavailable");
+        return false;
+      }
+
+      var names = listInstanceNames(map);
+      if (names.length) return true;
+
+      // Create "Default" from CURRENT initial state (immediately after store creation).
+      try {
+        map["Default"] = cloneJson(store.getState());
+        if (!writeInstances(map)) {
+          setHint("Storage unavailable");
+          return false;
+        }
+        writeActiveName("Default");
+        rebuildInstanceSelect("Default");
+        setHint("Selected: Default");
+        return true;
+      } catch (e) {
+        setHint("Storage unavailable");
+        return false;
+      }
+    }
+
+    function getSelectedName() {
       if (!instanceSelectEl) return null;
-      var nm = String(instanceSelectEl.value || "");
-      if (!nm) return null;
-      if (map && typeof map === "object" && map[nm] == null) return null;
-      return nm;
+      var v = String(instanceSelectEl.value || "");
+      return v ? v : null;
     }
 
-    function saveOverwriteSelected() {
+    function saveCurrentTo(name, overwriteAllowed) {
+      var nm = String(name || "").trim();
+      if (!nm) return false;
+
+      var map = readInstances();
+      if (map === null) {
+        setHint("Storage unavailable");
+        return false;
+      }
+
+      if (!overwriteAllowed && map[nm] != null) {
+        return false;
+      }
+
       try {
-        var map = readInstancesMap();
-        var name = getSelectedNameSafe(map);
-        if (!name) {
-          setInstancesHint("No saved instances.");
-          refreshInstanceSelectFromStorage(null);
-          return;
+        map[nm] = cloneJson(store.getState());
+        if (!writeInstances(map)) {
+          setHint("Storage unavailable");
+          return false;
         }
-        map[name] = cloneJson(store.getState());
-        writeInstancesMap(map);
-        writeActiveName(name);
-        refreshInstanceSelectFromStorage(name);
-        setInstancesHint("Saved: " + name);
+        writeActiveName(nm);
+        rebuildInstanceSelect(nm);
+        setHint("Saved: " + nm);
+        return true;
       } catch (e) {
-        setInstancesHint("Storage unavailable");
+        setHint("Storage unavailable");
+        return false;
       }
     }
 
-    function saveAsNewName() {
-      var name = instanceNameInputEl ? String(instanceNameInputEl.value || "").trim() : "";
-      if (!name) return;
+    function loadFrom(name) {
+      var nm = String(name || "").trim();
+      if (!nm) return false;
 
-      try {
-        var map = readInstancesMap();
-        if (map[name] != null) {
-          var ok = false;
-          try { ok = window.confirm('Overwrite existing instance "' + name + '"?'); } catch (e0) { ok = false; }
-          if (!ok) return;
-        }
-        map[name] = cloneJson(store.getState());
-        writeInstancesMap(map);
-        writeActiveName(name);
-        refreshInstanceSelectFromStorage(name);
-        setInstancesHint("Saved: " + name);
-        if (instanceNameInputEl) instanceNameInputEl.value = "";
-      } catch (e) {
-        setInstancesHint("Storage unavailable");
+      var map = readInstances();
+      if (map === null) {
+        setHint("Storage unavailable");
+        return false;
       }
-    }
 
-    function loadSelectedInstance() {
+      var saved = map[nm];
+      if (!saved || typeof saved !== "object") {
+        setHint("No saved instances.");
+        rebuildInstanceSelect(null);
+        return false;
+      }
+
       try {
-        var map = readInstancesMap();
-        var name = getSelectedNameSafe(map);
-        if (!name) {
-          setInstancesHint("No saved instances.");
-          refreshInstanceSelectFromStorage(null);
-          return;
-        }
-        var saved = map[name];
-        if (!saved || typeof saved !== "object") {
-          setInstancesHint("No saved instances.");
-          refreshInstanceSelectFromStorage(null);
-          return;
-        }
-
-        var baseline = cloneJson(DEFAULTS);
+        var baseline = cloneJson(DEFAULTS); // never mutate DEFAULTS
         var merged = deepMerge(baseline, cloneJson(saved));
-        store.setState(merged);
-
-        writeActiveName(name);
-        refreshInstanceSelectFromStorage(name);
-        setInstancesHint("Loaded: " + name);
+        store.setState(merged); // ONCE
+        writeActiveName(nm);
+        rebuildInstanceSelect(nm);
+        setHint("Loaded: " + nm);
+        return true;
       } catch (e) {
-        setInstancesHint("Storage unavailable");
+        setHint("Storage unavailable");
+        return false;
       }
     }
 
     function deleteSelectedInstance() {
+      var nm = getSelectedName();
+      if (!nm) {
+        setHint("No saved instances.");
+        return false;
+      }
+
+      var map = readInstances();
+      if (map === null) {
+        setHint("Storage unavailable");
+        return false;
+      }
+
+      var names = listInstanceNames(map);
+      if (names.length <= 1) {
+        setHint("Cannot delete last instance.");
+        rebuildInstanceSelect(nm);
+        return false;
+      }
+
+      if (map[nm] == null) {
+        rebuildInstanceSelect(null);
+        setHint("No saved instances.");
+        return false;
+      }
+
       try {
-        var map = readInstancesMap();
-        var names = listInstanceNames(map);
-        if (names.length <= 1) return;
-
-        var name = getSelectedNameSafe(map);
-        if (!name) return;
-
-        delete map[name];
-        writeInstancesMap(map);
+        delete map[nm];
+        if (!writeInstances(map)) {
+          setHint("Storage unavailable");
+          return false;
+        }
 
         var remaining = listInstanceNames(map);
-        if (!remaining.length) {
-          // Should not happen due to guard, but keep safe.
-          map["Default"] = cloneJson(store.getState());
-          writeInstancesMap(map);
-          writeActiveName("Default");
-          refreshInstanceSelectFromStorage("Default");
-          setInstancesHint("Deleted: " + name);
-          return;
+        var next = remaining.length ? remaining[0] : null;
+
+        if (next) {
+          writeActiveName(next);
+          rebuildInstanceSelect(next);
+          // Optionally auto-load next selection (deterministic, single store.setState)
+          loadFrom(next);
+          setHint("Deleted: " + nm);
+        } else {
+          rebuildInstanceSelect(null);
+          setHint("Deleted: " + nm);
         }
 
-        var active = readActiveName();
-        if (String(active || "") === String(name)) {
-          var nextName = remaining[0];
-          writeActiveName(nextName);
-          refreshInstanceSelectFromStorage(nextName);
-
-          var saved = map[nextName];
-          if (saved && typeof saved === "object") {
-            var baseline = cloneJson(DEFAULTS);
-            var merged = deepMerge(baseline, cloneJson(saved));
-            store.setState(merged);
-            setInstancesHint("Loaded: " + nextName);
-          } else {
-            setInstancesHint("Deleted: " + name);
-          }
-          return;
-        }
-
-        refreshInstanceSelectFromStorage(remaining[0]);
-        setInstancesHint("Deleted: " + name);
+        return true;
       } catch (e) {
-        setInstancesHint("Storage unavailable");
+        setHint("Storage unavailable");
+        return false;
       }
     }
 
@@ -360,32 +433,70 @@ function initApp() {
       deleteInstanceBtnEl._wired = true;
       instanceSelectEl._wired = true;
 
-      saveInstanceBtnEl.addEventListener("click", function () { saveOverwriteSelected(); });
-      loadInstanceBtnEl.addEventListener("click", function () { loadSelectedInstance(); });
-      saveAsInstanceBtnEl.addEventListener("click", function () { saveAsNewName(); });
-      deleteInstanceBtnEl.addEventListener("click", function () { deleteSelectedInstance(); });
+      saveInstanceBtnEl.addEventListener("click", function () {
+        var nm = getSelectedName();
+        if (!nm) { setHint("No saved instances."); return; }
+        saveCurrentTo(nm, true);
+      });
+
+      loadInstanceBtnEl.addEventListener("click", function () {
+        var nm = getSelectedName();
+        if (!nm) { setHint("No saved instances."); return; }
+        loadFrom(nm);
+      });
+
+      saveAsInstanceBtnEl.addEventListener("click", function () {
+        var name = instanceNameInputEl ? String(instanceNameInputEl.value || "").trim() : "";
+        if (!name) return;
+
+        var map = readInstances();
+        if (map === null) { setHint("Storage unavailable"); return; }
+
+        if (map[name] != null) {
+          var ok = false;
+          try { ok = window.confirm('Overwrite existing instance "' + name + '"?'); } catch (e0) { ok = false; }
+          if (!ok) return;
+        }
+
+        if (saveCurrentTo(name, true) && instanceNameInputEl) instanceNameInputEl.value = "";
+      });
+
+      deleteInstanceBtnEl.addEventListener("click", function () {
+        deleteSelectedInstance();
+      });
 
       instanceSelectEl.addEventListener("change", function () {
-        try {
-          var map = readInstancesMap();
-          var name = getSelectedNameSafe(map);
-          if (!name) {
-            setInstancesHint("No saved instances.");
-            refreshInstanceSelectFromStorage(null);
-            return;
-          }
-          writeActiveName(name);
-          refreshInstanceSelectFromStorage(name);
-          setInstancesHint("Selected: " + name);
-        } catch (e) {
-          setInstancesHint("Storage unavailable");
-        }
+        var nm = getSelectedName();
+        if (!nm) { setHint("No saved instances."); return; }
+        if (!writeActiveName(nm)) { setHint("Storage unavailable"); return; }
+        rebuildInstanceSelect(nm);
+        setHint("Selected: " + nm);
       });
     }
 
     function initInstances() {
       wireInstancesUiOnce();
-      refreshInstanceSelectFromStorage(null);
+
+      // Always rebuild from localStorage as source of truth
+      var res = rebuildInstanceSelect(null);
+      if (!res.ok) return;
+
+      // Create Default if empty/corrupt/none
+      if (!res.names.length) {
+        ensureDefaultInstance();
+        return;
+      }
+
+      // Select active if present
+      var active = readActiveName();
+      if (active && res.map && res.map[active] != null) {
+        rebuildInstanceSelect(active);
+        setHint("Selected: " + active);
+      } else {
+        var first = res.names[0];
+        rebuildInstanceSelect(first);
+        setHint("Selected: " + first);
+      }
     }
 
     var asPosInt = function (v, def) {
