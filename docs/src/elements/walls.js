@@ -23,7 +23,8 @@
  * @param {{scene:BABYLON.Scene, materials:any}} ctx
  */
 export function build3D(state, ctx) {
-  const { scene, materials } = ctx;
+  const { scene } = ctx;
+  const materials = ctx && ctx.materials ? ctx.materials : {};
   const variant = state.walls?.variant || "insulated";
   const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
 
@@ -442,6 +443,18 @@ export function updateBOM(state) {
     return false;
   }
 
+  function countInsulatedStuds(L, doors) {
+    let count = 2; // corners
+    let run = 400;
+    while (run <= L - prof.studW) {
+      if (Math.abs(run - (L - prof.studW)) < 1) break;
+      const center = run + prof.studW / 2;
+      if (!isInsideAnyDoorCenter(center, doors)) count += 1;
+      run += prof.spacing;
+    }
+    return count;
+  }
+
   for (const wname of walls) {
     const L = lengths[wname];
 
@@ -467,16 +480,7 @@ export function updateBOM(state) {
     }
 
     const doors = doorsForWall(wname, L);
-
-    let count = 2;
-    let run = 400;
-    while (run <= L - prof.studW) {
-      count += 1;
-      const center = run + prof.studW / 2;
-      if (isInsideAnyDoorCenter(center, doors)) count -= 1;
-      run += prof.spacing;
-    }
-    sections.push([`Studs (${wname})`, count, studLen, prof.studW, "@400"]);
+    sections.push([`Studs (${wname})`, countInsulatedStuds(L, doors), studLen, prof.studW, "@400"]);
 
     for (let i = 0; i < doors.length; i++) {
       const d = doors[i].door;
