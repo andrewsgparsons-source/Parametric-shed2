@@ -455,25 +455,79 @@ export function build3D(state, ctx) {
         const seamA = p1 - prof.studW;
         const seamB = p1 + prof.studW;
 
-        for (let i = 0; i < doors.length; i++) {
-          const d = doors[i];
-          const coversSeam = !(d.x1 < seamA || d.x0 > seamB);
+        const all = openingsX
+          .map((o) => ({ x0: Math.floor(o.x0 ?? 0), x1: Math.floor(o.x1 ?? 0) }))
+          .filter((o) => Number.isFinite(o.x0) && Number.isFinite(o.x1));
+
+        all.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
+
+        const clusters = [];
+        if (all.length) {
+          let cs = all[0].x0;
+          let ce = all[0].x1;
+          for (let i = 1; i < all.length; i++) {
+            const o = all[i];
+            const ne = Math.max(ce, o.x1);
+            const span = ne - cs;
+            if (span <= 2400) {
+              ce = ne;
+            } else {
+              clusters.push({ x0: cs, x1: ce });
+              cs = o.x0;
+              ce = o.x1;
+            }
+          }
+          clusters.push({ x0: cs, x1: ce });
+        }
+
+        const regions = [];
+        for (let i = 0; i < clusters.length; i++) {
+          const c = clusters[i];
+          const coversSeam = !(c.x1 < seamA || c.x0 > seamB);
           if (!coversSeam) continue;
 
-          const doorPanelStart = clamp(d.x0 - prof.studW, 0, length);
-          const doorPanelEnd = clamp(d.x1 + prof.studW, 0, length);
+          const clusterPanelStart = clamp(c.x0 - prof.studW, 0, length);
+          const clusterPanelEnd = clamp(c.x1 + prof.studW, 0, length);
+
+          regions.push({ start: clusterPanelStart, end: clusterPanelEnd });
+        }
+
+        if (regions.length) {
+          regions.sort((a, b) => a.start - b.start || a.end - b.end);
+
+          const merged = [];
+          let cur = { start: regions[0].start, end: regions[0].end };
+          for (let i = 1; i < regions.length; i++) {
+            const r = regions[i];
+            if (r.start <= (cur.end + 1)) {
+              cur.end = Math.max(cur.end, r.end);
+            } else {
+              merged.push(cur);
+              cur = { start: r.start, end: r.end };
+            }
+          }
+          merged.push(cur);
 
           const next = [];
-          const leftLen = Math.max(0, doorPanelStart);
-          const midLen = Math.max(0, doorPanelEnd - doorPanelStart);
-          const rightLen = Math.max(0, length - doorPanelEnd);
-
-          if (leftLen > 0) next.push({ start: 0, len: leftLen });
-          if (midLen > 0) next.push({ start: doorPanelStart, len: midLen });
-          if (rightLen > 0) next.push({ start: doorPanelEnd, len: rightLen });
+          let cursor = 0;
+          for (let i = 0; i < merged.length; i++) {
+            const r = merged[i];
+            const s = clamp(r.start, 0, length);
+            const e = clamp(r.end, 0, length);
+            if (s > cursor) {
+              const leftLen = Math.max(0, s - cursor);
+              if (leftLen > 0) next.push({ start: cursor, len: leftLen });
+            }
+            const midLen = Math.max(0, e - s);
+            if (midLen > 0) next.push({ start: s, len: midLen });
+            cursor = Math.max(cursor, e);
+          }
+          if (cursor < length) {
+            const rightLen = Math.max(0, length - cursor);
+            if (rightLen > 0) next.push({ start: cursor, len: rightLen });
+          }
 
           panels = next.length ? next : panels;
-          break;
         }
       }
 
