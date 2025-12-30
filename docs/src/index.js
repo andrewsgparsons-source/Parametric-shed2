@@ -150,6 +150,14 @@ function initApp() {
       setTimeout(removeNow, 4000);
     }
 
+    function isDoorNumberInputActive() {
+      var el = document.activeElement;
+      if (!el) return false;
+      if (el.tagName && String(el.tagName).toLowerCase() !== "input") return false;
+      if (el.type !== "number") return false;
+      return el.hasAttribute("data-door-id") && el.hasAttribute("data-door-field");
+    }
+
     function getWallsEnabled(state) {
       var vis = state && state.vis ? state.vis : null;
       if (vis && typeof vis.walls === "boolean") return vis.walls;
@@ -284,6 +292,15 @@ function initApp() {
       return doors;
     }
 
+    function getDoorById(state, doorId) {
+      var doors = getDoorsFromState(state);
+      for (var i = 0; i < doors.length; i++) {
+        var d = doors[i];
+        if (String(d.id || "") === String(doorId)) return d;
+      }
+      return null;
+    }
+
     function renderDoorsUi(state) {
       if (!doorsListEl) return;
       doorsListEl.innerHTML = "";
@@ -320,7 +337,7 @@ function initApp() {
           var rowB = document.createElement("div");
           rowB.className = "row3";
 
-          function makeNum(labelTxt, v, min, step) {
+          function makeNum(labelTxt, v, min, step, field) {
             var lab = document.createElement("label");
             lab.textContent = labelTxt;
             var inp = document.createElement("input");
@@ -328,13 +345,15 @@ function initApp() {
             inp.min = String(min);
             inp.step = String(step);
             inp.value = String(v == null ? "" : v);
+            inp.setAttribute("data-door-id", id);
+            inp.setAttribute("data-door-field", field);
             lab.appendChild(inp);
             return { lab: lab, inp: inp };
           }
 
-          var xField = makeNum("Door X (mm)", Math.floor(Number(door.x_mm ?? 0)), 0, 10);
-          var wField = makeNum("Door W (mm)", Math.floor(Number(door.width_mm ?? 900)), 100, 10);
-          var hField = makeNum("Door H (mm)", Math.floor(Number(door.height_mm ?? 2000)), 100, 10);
+          var xField = makeNum("Door X (mm)", Math.floor(Number(door.x_mm ?? 0)), 0, 10, "x_mm");
+          var wField = makeNum("Door W (mm)", Math.floor(Number(door.width_mm ?? 900)), 100, 10, "width_mm");
+          var hField = makeNum("Door H (mm)", Math.floor(Number(door.height_mm ?? 2000)), 100, 10, "height_mm");
 
           rowB.appendChild(xField.lab);
           rowB.appendChild(wField.lab);
@@ -355,17 +374,52 @@ function initApp() {
             setOpenings(next);
           }
 
+          function commitDoorField(doorId, field, parseFn) {
+            var s = store.getState();
+            var cur = getDoorById(s, doorId);
+            if (!cur) return;
+            var curVal = cur[field];
+            var nextVal = parseFn(cur);
+            var a = Math.floor(Number(curVal));
+            var b = Math.floor(Number(nextVal));
+            if (!(Number.isFinite(a) && Number.isFinite(b) && a === b)) {
+              var p = {};
+              p[field] = nextVal;
+              patchDoorById(doorId, p);
+            }
+          }
+
+          function wireCommitOnly(inputEl, onCommit) {
+            inputEl.addEventListener("blur", function () { onCommit(); });
+            inputEl.addEventListener("keydown", function (e) {
+              if (!e) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                try { e.target.blur(); } catch (ex) {}
+              }
+            });
+          }
+
           wallSel.addEventListener("change", function () {
             patchDoorById(id, { wall: String(wallSel.value || "front") });
           });
-          xField.inp.addEventListener("input", function () {
-            patchDoorById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(door.x_mm ?? 0))) });
+
+          wireCommitOnly(xField.inp, function () {
+            commitDoorField(id, "x_mm", function (cur) {
+              return asNonNegInt(xField.inp.value, Math.floor(Number(cur.x_mm ?? 0)));
+            });
           });
-          wField.inp.addEventListener("input", function () {
-            patchDoorById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(door.width_mm ?? 900))) });
+
+          wireCommitOnly(wField.inp, function () {
+            commitDoorField(id, "width_mm", function (cur) {
+              return asPosInt(wField.inp.value, Math.floor(Number(cur.width_mm ?? 900)));
+            });
           });
-          hField.inp.addEventListener("input", function () {
-            patchDoorById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(door.height_mm ?? 2000))) });
+
+          wireCommitOnly(hField.inp, function () {
+            commitDoorField(id, "height_mm", function (cur) {
+              return asPosInt(hField.inp.value, Math.floor(Number(cur.height_mm ?? 2000)));
+            });
           });
 
           rmBtn.addEventListener("click", function () {
@@ -446,7 +500,7 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
-        renderDoorsUi(state);
+        if (!isDoorNumberInputActive()) renderDoorsUi(state);
       } catch (e) {
         window.__dbg.lastError = "syncUiFromState failed: " + String(e && e.message ? e.message : e);
       }
