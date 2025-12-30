@@ -154,7 +154,7 @@ export function build3D(state, ctx) {
     const out = [];
     for (let i = 0; i < allDoors.length; i++) {
       const d = allDoors[i];
-      if (!d || d.type !== "door" || !d.enabled) continue;
+      if (!d || d.type !== "door") continue;
       const w = String(d.wall || "front");
       if (w !== wallId) continue;
 
@@ -420,7 +420,7 @@ export function updateBOM(state) {
     const out = [];
     for (let i = 0; i < allDoors.length; i++) {
       const d = allDoors[i];
-      if (!d || d.type !== "door" || !d.enabled) continue;
+      if (!d || d.type !== "door") continue;
       const w = String(d.wall || "front");
       if (w !== wallId) continue;
 
