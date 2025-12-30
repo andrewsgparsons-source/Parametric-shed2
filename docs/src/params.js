@@ -47,6 +47,10 @@ export const DEFAULTS = {
     roofD_mm: 4040,
   },
 
+  roof: {
+    style: "apex"
+  },
+
   // Walls configuration (v1)
   walls: {
     variant: "insulated",
