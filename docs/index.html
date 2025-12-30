@@ -112,6 +112,7 @@
     }
     #controlPanel .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
     #controlPanel .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; align-items:center; }
+    #controlPanel .row4{ display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
     #controlPanel label{ display:grid; gap:4px; font-size:12px; color:#222; }
     #controlPanel input[type="number"], #controlPanel select{
       width:100%;
@@ -137,7 +138,7 @@
     }
     #controlPanel button:disabled{ opacity: 0.5; cursor: not-allowed; }
 
-    .doorItem{
+    .doorItem, .windowItem{
       border: 1px solid #eee;
       border-radius: 10px;
       padding: 10px;
@@ -145,19 +146,19 @@
       gap: 8px;
       background: #fafafa;
     }
-    .doorTop{
+    .doorTop, .windowTop{
       display:flex;
       gap:8px;
       align-items:flex-end;
       justify-content:space-between;
     }
-    .doorActions{
+    .doorActions, .windowActions{
       display:flex;
       gap:8px;
       align-items:center;
       justify-content:flex-end;
     }
-    .doorMsg{
+    .doorMsg, .windowMsg{
       font-size: 12px;
       padding: 8px 10px;
       border-radius: 8px;
@@ -167,7 +168,7 @@
       display: none;
       white-space: pre-wrap;
     }
-    .doorMsg.show{ display:block; }
+    .doorMsg.show, .windowMsg.show{ display:block; }
     .snapBtn{ display:none; }
     .snapBtn.show{ display:inline-block; }
 
@@ -332,6 +333,16 @@
               </div>
               <div id="doorsList"></div>
               <p class="hint">Commit edits on Enter or click-away. Invalid doors highlight red; use the snap button to resolve.</p>
+            </fieldset>
+
+            <fieldset>
+              <legend>Windows</legend>
+              <div class="row">
+                <button id="addWindowBtn" type="button">Add Window</button>
+                <button id="removeAllWindowsBtn" type="button">Remove All Windows</button>
+              </div>
+              <div id="windowsList"></div>
+              <p class="hint">Window Y is measured from the bottom plate top (inside the frame). Invalid windows highlight red; snap resolves X-only.</p>
             </fieldset>
 
             <fieldset>
