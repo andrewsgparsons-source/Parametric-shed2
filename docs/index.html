@@ -122,20 +122,54 @@
       background: #fff;
       box-sizing: border-box;
     }
-    #controlPanel button{
-      width:100%;
-      padding: 8px 10px;
-      border: 1px solid #d9d9d9;
-      border-radius: 8px;
-      font-size: 13px;
-      background: #fff;
-      box-sizing: border-box;
-      cursor: pointer;
-      font-weight: 700;
-    }
     #controlPanel .checks{ display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:4px; }
     #controlPanel .check{ display:flex; gap:8px; align-items:center; font-size:13px; color:#222; }
     #controlPanel .hint{ font-size:11px; color:#666; margin:6px 0 0 0; }
+
+    #controlPanel button{
+      padding: 8px 10px;
+      border: 1px solid #d9d9d9;
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    #controlPanel button:disabled{ opacity: 0.5; cursor: not-allowed; }
+
+    .doorItem{
+      border: 1px solid #eee;
+      border-radius: 10px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      background: #fafafa;
+    }
+    .doorTop{
+      display:flex;
+      gap:8px;
+      align-items:flex-end;
+      justify-content:space-between;
+    }
+    .doorActions{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      justify-content:flex-end;
+    }
+    .doorMsg{
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #f0c5c5;
+      background: #ffecec;
+      color: #7a1a1a;
+      display: none;
+      white-space: pre-wrap;
+    }
+    .doorMsg.show{ display:block; }
+    .snapBtn{ display:none; }
+    .snapBtn.show{ display:inline-block; }
 
     .page{
       position: fixed;
@@ -205,36 +239,6 @@
       display: none;
     }
 
-    #toastContainer{
-      position: fixed;
-      top: 56px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 2147483000;
-      pointer-events: none;
-      display: grid;
-      gap: 8px;
-      max-width: min(560px, calc(100vw - 24px));
-      padding: 0 12px;
-      box-sizing: border-box;
-    }
-    .toastBubble{
-      background: rgba(0,0,0,0.78);
-      color: #fff;
-      border-radius: 10px;
-      padding: 10px 12px;
-      font: 12px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      white-space: pre-wrap;
-      opacity: 0;
-      transform: translateY(-6px);
-      transition: opacity 250ms ease, transform 250ms ease;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-    }
-    .toastBubble.show{
-      opacity: 1;
-      transform: translateY(0);
-    }
-
     @media print{
       #topbar, #renderCanvas, #statusOverlay, #controls { display:none !important; }
       body, html { overflow: visible !important; height:auto !important; background:#fff !important; }
@@ -248,7 +252,6 @@
       }
       #bomToolbar{ display:none !important; }
       .sticky-table thead th{ top:0; }
-      #toastContainer{ display:none !important; }
     }
   </style>
 </head>
@@ -256,7 +259,6 @@
 <body data-view="3d">
   <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
   <div id="statusOverlay">status...</div>
-  <div id="toastContainer" aria-live="polite" aria-atomic="true"></div>
 
   <div id="topbar">
     <select id="viewSelect" aria-label="Select view">
@@ -323,13 +325,13 @@
             </fieldset>
 
             <fieldset>
-              <legend>Door Placement</legend>
+              <legend>Doors</legend>
               <div class="row">
                 <button id="addDoorBtn" type="button">Add Door</button>
                 <button id="removeAllDoorsBtn" type="button">Remove All Doors</button>
               </div>
               <div id="doorsList"></div>
-              <p class="hint">Doors snap to stay ≥50mm from corners and ≥50mm apart. If impossible, doors are removed.</p>
+              <p class="hint">Commit edits on Enter or click-away. Invalid doors highlight red; use the snap button to resolve.</p>
             </fieldset>
 
             <fieldset>
