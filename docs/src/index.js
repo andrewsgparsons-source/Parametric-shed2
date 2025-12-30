@@ -59,7 +59,6 @@ function initApp() {
   try {
     var canvas = $("renderCanvas");
     var statusOverlayEl = $("statusOverlay");
-    var toastContainerEl = $("toastContainer");
 
     if (!canvas) {
       window.__dbg.lastError = "renderCanvas not found";
@@ -131,33 +130,6 @@ function initApp() {
       return Number.isFinite(n) && n >= 0 ? n : null;
     };
 
-    function showToast(msg) {
-      if (!toastContainerEl) return;
-      var el = document.createElement("div");
-      el.className = "toastBubble";
-      el.textContent = String(msg || "");
-      toastContainerEl.appendChild(el);
-      try { requestAnimationFrame(function () { el.classList.add("show"); }); } catch (e) { try { el.classList.add("show"); } catch (e2) {} }
-
-      var removed = false;
-      function removeNow() {
-        if (removed) return;
-        removed = true;
-        try { el.classList.remove("show"); } catch (e) {}
-        setTimeout(function () { try { el.remove(); } catch (e2) {} }, 260);
-      }
-
-      setTimeout(removeNow, 4000);
-    }
-
-    function isDoorNumberInputActive() {
-      var el = document.activeElement;
-      if (!el) return false;
-      if (el.tagName && String(el.tagName).toLowerCase() !== "input") return false;
-      if (el.type !== "number") return false;
-      return el.hasAttribute("data-door-id") && el.hasAttribute("data-door-field");
-    }
-
     function getWallsEnabled(state) {
       var vis = state && state.vis ? state.vis : null;
       if (vis && typeof vis.walls === "boolean") return vis.walls;
@@ -228,7 +200,8 @@ function initApp() {
         front: Math.max(1, Math.floor(dims.w_mm)),
         back: Math.max(1, Math.floor(dims.w_mm)),
         left: Math.max(1, Math.floor(dims.d_mm - 2 * thk)),
-        right: Math.max(1, Math.floor(dims.d_mm - 2 * thk))
+        right: Math.max(1, Math.floor(dims.d_mm - 2 * thk)),
+        _thk: thk
       };
     }
 
@@ -270,18 +243,6 @@ function initApp() {
       }
     }
 
-    function setOpenings(nextDoors) {
-      var cur = store.getState();
-      var curOpenings = (cur && cur.walls && Array.isArray(cur.walls.openings)) ? cur.walls.openings : [];
-      var nonDoors = [];
-      for (var i = 0; i < curOpenings.length; i++) {
-        var o = curOpenings[i];
-        if (o && o.type === "door") continue;
-        nonDoors.push(o);
-      }
-      store.setState({ walls: { openings: nonDoors.concat(nextDoors) } });
-    }
-
     function getDoorsFromState(state) {
       var openings = state && state.walls && Array.isArray(state.walls.openings) ? state.walls.openings : [];
       var doors = [];
@@ -290,6 +251,10 @@ function initApp() {
         if (d && d.type === "door") doors.push(d);
       }
       return doors;
+    }
+
+    function setDoors(nextDoors) {
+      store.setState({ walls: { openings: nextDoors } });
     }
 
     function getDoorById(state, doorId) {
@@ -301,19 +266,202 @@ function initApp() {
       return null;
     }
 
-    function renderDoorsUi(state) {
+    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+    function validateDoors(state) {
+      var res = { invalidById: {}, invalidIds: [] };
+      var doors = getDoorsFromState(state);
+      var lens = getWallLengthsForDoors(state);
+      var minGap = 50;
+
+      function wallLen(wall) {
+        return lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
+      }
+
+      for (var i = 0; i < doors.length; i++) {
+        var d = doors[i];
+        var wall = String(d.wall || "front");
+        var L = wallLen(wall);
+        var w = Math.max(1, Math.floor(Number(d.width_mm || 900)));
+        var x = Math.floor(Number(d.x_mm || 0));
+
+        var minX = minGap;
+        var maxX = Math.max(minX, L - w - minGap);
+
+        if (x < minX || x > maxX) {
+          res.invalidById[String(d.id)] =
+            "Invalid: too close to corner/end.\n" +
+            "Allowed X range: " + minX + " .. " + maxX + " (mm)";
+        }
+      }
+
+      var byWall = { front: [], back: [], left: [], right: [] };
+      for (var j = 0; j < doors.length; j++) {
+        var dd = doors[j];
+        var ww = String(dd.wall || "front");
+        if (!byWall[ww]) byWall[ww] = [];
+        byWall[ww].push(dd);
+      }
+
+      function intervalsOverlapOrTooClose(a0, a1, b0, b1, gap) {
+        if (a1 + gap <= b0) return false;
+        if (b1 + gap <= a0) return false;
+        return true;
+      }
+
+      Object.keys(byWall).forEach(function (wall) {
+        var list = byWall[wall] || [];
+        for (var a = 0; a < list.length; a++) {
+          for (var b = a + 1; b < list.length; b++) {
+            var da = list[a], db = list[b];
+            var ax = Math.floor(Number(da.x_mm || 0));
+            var aw = Math.max(1, Math.floor(Number(da.width_mm || 900)));
+            var bx = Math.floor(Number(db.x_mm || 0));
+            var bw = Math.max(1, Math.floor(Number(db.width_mm || 900)));
+
+            var a0 = ax, a1 = ax + aw;
+            var b0 = bx, b1 = bx + bw;
+
+            if (intervalsOverlapOrTooClose(a0, a1, b0, b1, minGap)) {
+              if (!res.invalidById[String(da.id)]) res.invalidById[String(da.id)] = "Invalid: overlaps or is too close (<50mm) to another door on " + wall + ".";
+              if (!res.invalidById[String(db.id)]) res.invalidById[String(db.id)] = "Invalid: overlaps or is too close (<50mm) to another door on " + wall + ".";
+            }
+          }
+        }
+      });
+
+      Object.keys(res.invalidById).forEach(function (k) { res.invalidIds.push(k); });
+      return res;
+    }
+
+    function subtractIntervals(base, forb) {
+      var out = base.slice();
+      forb.forEach(function (f) {
+        var next = [];
+        for (var i = 0; i < out.length; i++) {
+          var seg = out[i];
+          var a = seg[0], b = seg[1];
+          var fa = f[0], fb = f[1];
+          if (fb < a || fa > b) { next.push(seg); continue; }
+          if (fa <= a && fb >= b) { continue; }
+          if (fa > a) next.push([a, fa - 1]);
+          if (fb < b) next.push([fb + 1, b]);
+        }
+        out = next;
+      });
+      return out;
+    }
+
+    function computeSnapX(state, doorId) {
+      var s = state;
+      var d = getDoorById(s, doorId);
+      if (!d) return null;
+
+      var minGap = 50;
+      var wall = String(d.wall || "front");
+      var lens = getWallLengthsForDoors(s);
+      var L = lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
+
+      var w = Math.max(1, Math.floor(Number(d.width_mm || 900)));
+      var desired = Math.floor(Number(d.x_mm || 0));
+
+      var minX = minGap;
+      var maxX = Math.max(minX, L - w - minGap);
+
+      var base = [[minX, maxX]];
+      var doors = getDoorsFromState(s).filter(function (x) { return String(x.id || "") !== String(doorId) && String(x.wall || "front") === wall; });
+
+      var forb = [];
+      for (var i = 0; i < doors.length; i++) {
+        var o = doors[i];
+        var ox = Math.floor(Number(o.x_mm || 0));
+        var ow = Math.max(1, Math.floor(Number(o.width_mm || 900)));
+        var fa = (ox - minGap - w);
+        var fb = (ox + ow + minGap);
+        forb.push([fa, fb]);
+      }
+
+      var allowed = subtractIntervals(base, forb);
+      if (!allowed.length) return clamp(desired, minX, maxX);
+
+      var best = null;
+      var bestDist = Infinity;
+
+      for (var k = 0; k < allowed.length; k++) {
+        var seg = allowed[k];
+        var a = seg[0], b = seg[1];
+        var x = clamp(desired, a, b);
+        var dist = Math.abs(x - desired);
+        if (dist < bestDist) { bestDist = dist; best = x; }
+      }
+
+      return best == null ? clamp(desired, minX, maxX) : best;
+    }
+
+    var _invalidSyncGuard = false;
+
+    function syncInvalidDoorsIntoState() {
+      if (_invalidSyncGuard) return;
+      var s = store.getState();
+      var v = validateDoors(s);
+      var cur = (s && s.walls && Array.isArray(s.walls.invalidDoorIds)) ? s.walls.invalidDoorIds.map(String) : [];
+      var next = v.invalidIds.slice().sort();
+      var curSorted = cur.slice().sort();
+
+      var same = (curSorted.length === next.length);
+      if (same) {
+        for (var i = 0; i < curSorted.length; i++) if (curSorted[i] !== next[i]) { same = false; break; }
+      }
+
+      if (!same) {
+        _invalidSyncGuard = true;
+        store.setState({ walls: { invalidDoorIds: next } });
+        _invalidSyncGuard = false;
+      }
+
+      return v;
+    }
+
+    var snapNoticeById = {};
+
+    function renderDoorsUi(state, validation) {
       if (!doorsListEl) return;
       doorsListEl.innerHTML = "";
 
       var doors = getDoorsFromState(state);
+
+      function patchDoorById(doorId, patch) {
+        var s = store.getState();
+        var curDoors = getDoorsFromState(s);
+        var next = [];
+        for (var k = 0; k < curDoors.length; k++) {
+          var d = curDoors[k];
+          if (String(d.id || "") === String(doorId)) next.push(Object.assign({}, d, patch));
+          else next.push(d);
+        }
+        setDoors(next);
+      }
+
+      function wireCommitOnly(inputEl, onCommit) {
+        inputEl.addEventListener("blur", function () { onCommit(); });
+        inputEl.addEventListener("keydown", function (e) {
+          if (!e) return;
+          if (e.key === "Enter") {
+            e.preventDefault();
+            try { e.target.blur(); } catch (ex) {}
+          }
+        });
+      }
+
       for (var i = 0; i < doors.length; i++) {
         (function (door) {
           var id = String(door.id || "");
-          var wrap = document.createElement("div");
 
-          var rowA = document.createElement("div");
-          rowA.className = "row";
-          rowA.style.marginTop = "8px";
+          var item = document.createElement("div");
+          item.className = "doorItem";
+
+          var top = document.createElement("div");
+          top.className = "doorTop";
 
           var wallLabel = document.createElement("label");
           wallLabel.textContent = "Wall";
@@ -326,18 +474,28 @@ function initApp() {
           wallSel.value = String(door.wall || "front");
           wallLabel.appendChild(wallSel);
 
+          var actions = document.createElement("div");
+          actions.className = "doorActions";
+
+          var snapBtn = document.createElement("button");
+          snapBtn.type = "button";
+          snapBtn.className = "snapBtn";
+          snapBtn.textContent = "Snap to nearest viable position";
+
           var rmBtn = document.createElement("button");
           rmBtn.type = "button";
           rmBtn.textContent = "Remove";
-          rmBtn.setAttribute("data-door-id", id);
 
-          rowA.appendChild(wallLabel);
-          rowA.appendChild(rmBtn);
+          actions.appendChild(snapBtn);
+          actions.appendChild(rmBtn);
 
-          var rowB = document.createElement("div");
-          rowB.className = "row3";
+          top.appendChild(wallLabel);
+          top.appendChild(actions);
 
-          function makeNum(labelTxt, v, min, step, field) {
+          var row = document.createElement("div");
+          row.className = "row3";
+
+          function makeNum(labelTxt, v, min, step) {
             var lab = document.createElement("label");
             lab.textContent = labelTxt;
             var inp = document.createElement("input");
@@ -345,81 +503,58 @@ function initApp() {
             inp.min = String(min);
             inp.step = String(step);
             inp.value = String(v == null ? "" : v);
-            inp.setAttribute("data-door-id", id);
-            inp.setAttribute("data-door-field", field);
             lab.appendChild(inp);
             return { lab: lab, inp: inp };
           }
 
-          var xField = makeNum("Door X (mm)", Math.floor(Number(door.x_mm ?? 0)), 0, 10, "x_mm");
-          var wField = makeNum("Door W (mm)", Math.floor(Number(door.width_mm ?? 900)), 100, 10, "width_mm");
-          var hField = makeNum("Door H (mm)", Math.floor(Number(door.height_mm ?? 2000)), 100, 10, "height_mm");
+          var xField = makeNum("Door X (mm)", Math.floor(Number(door.x_mm ?? 0)), 0, 10);
+          var wField = makeNum("Door W (mm)", Math.floor(Number(door.width_mm ?? 900)), 100, 10);
+          var hField = makeNum("Door H (mm)", Math.floor(Number(door.height_mm ?? 2000)), 100, 10);
 
-          rowB.appendChild(xField.lab);
-          rowB.appendChild(wField.lab);
-          rowB.appendChild(hField.lab);
+          row.appendChild(xField.lab);
+          row.appendChild(wField.lab);
+          row.appendChild(hField.lab);
 
-          wrap.appendChild(rowA);
-          wrap.appendChild(rowB);
+          var msg = document.createElement("div");
+          msg.className = "doorMsg";
 
-          function patchDoorById(doorId, patch) {
-            var s = store.getState();
-            var curDoors = getDoorsFromState(s);
-            var next = [];
-            for (var k = 0; k < curDoors.length; k++) {
-              var d = curDoors[k];
-              if (String(d.id || "") === String(doorId)) next.push(Object.assign({}, d, patch));
-              else next.push(d);
-            }
-            setOpenings(next);
+          var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
+          var notice = snapNoticeById[id] ? snapNoticeById[id] : null;
+
+          if (invalidMsg) {
+            msg.textContent = String(invalidMsg);
+            msg.classList.add("show");
+            snapBtn.classList.add("show");
+          } else if (notice) {
+            msg.textContent = String(notice);
+            msg.classList.add("show");
           }
 
-          function commitDoorField(doorId, field, parseFn) {
-            var s = store.getState();
-            var cur = getDoorById(s, doorId);
-            if (!cur) return;
-            var curVal = cur[field];
-            var nextVal = parseFn(cur);
-            var a = Math.floor(Number(curVal));
-            var b = Math.floor(Number(nextVal));
-            if (!(Number.isFinite(a) && Number.isFinite(b) && a === b)) {
-              var p = {};
-              p[field] = nextVal;
-              patchDoorById(doorId, p);
-            }
-          }
-
-          function wireCommitOnly(inputEl, onCommit) {
-            inputEl.addEventListener("blur", function () { onCommit(); });
-            inputEl.addEventListener("keydown", function (e) {
-              if (!e) return;
-              if (e.key === "Enter") {
-                e.preventDefault();
-                try { e.target.blur(); } catch (ex) {}
-              }
-            });
-          }
+          wireCommitOnly(xField.inp, function () {
+            patchDoorById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(door.x_mm ?? 0))) });
+          });
+          wireCommitOnly(wField.inp, function () {
+            patchDoorById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(door.width_mm ?? 900))) });
+          });
+          wireCommitOnly(hField.inp, function () {
+            patchDoorById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(door.height_mm ?? 2000))) });
+          });
 
           wallSel.addEventListener("change", function () {
             patchDoorById(id, { wall: String(wallSel.value || "front") });
           });
 
-          wireCommitOnly(xField.inp, function () {
-            commitDoorField(id, "x_mm", function (cur) {
-              return asNonNegInt(xField.inp.value, Math.floor(Number(cur.x_mm ?? 0)));
-            });
-          });
+          snapBtn.addEventListener("click", function () {
+            var s = store.getState();
+            var snapped = computeSnapX(s, id);
+            if (snapped == null) return;
+            patchDoorById(id, { x_mm: snapped });
 
-          wireCommitOnly(wField.inp, function () {
-            commitDoorField(id, "width_mm", function (cur) {
-              return asPosInt(wField.inp.value, Math.floor(Number(cur.width_mm ?? 900)));
-            });
-          });
-
-          wireCommitOnly(hField.inp, function () {
-            commitDoorField(id, "height_mm", function (cur) {
-              return asPosInt(hField.inp.value, Math.floor(Number(cur.height_mm ?? 2000)));
-            });
+            snapNoticeById[id] = "Snapped to " + snapped + "mm.";
+            setTimeout(function () {
+              if (snapNoticeById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeById[id];
+              syncUiFromState(store.getState(), syncInvalidDoorsIntoState());
+            }, 1500);
           });
 
           rmBtn.addEventListener("click", function () {
@@ -427,14 +562,19 @@ function initApp() {
             var curDoors = getDoorsFromState(s);
             var next = [];
             for (var k = 0; k < curDoors.length; k++) {
-              var d = curDoors[k];
-              if (String(d.id || "") === id) continue;
-              next.push(d);
+              var dd = curDoors[k];
+              if (String(dd.id || "") === id) continue;
+              next.push(dd);
             }
-            setOpenings(next);
+            delete snapNoticeById[id];
+            setDoors(next);
           });
 
-          doorsListEl.appendChild(wrap);
+          item.appendChild(top);
+          item.appendChild(row);
+          item.appendChild(msg);
+
+          doorsListEl.appendChild(item);
         })(doors[i]);
       }
 
@@ -446,7 +586,7 @@ function initApp() {
       }
     }
 
-    function syncUiFromState(state) {
+    function syncUiFromState(state, validation) {
       try {
         if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
 
@@ -500,7 +640,7 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
-        if (!isDoorNumberInputActive()) renderDoorsUi(state);
+        renderDoorsUi(state, validation);
       } catch (e) {
         window.__dbg.lastError = "syncUiFromState failed: " + String(e && e.message ? e.message : e);
       }
@@ -569,7 +709,7 @@ function initApp() {
     if (dimModeEl) {
       dimModeEl.addEventListener("change", function () {
         store.setState({ dimMode: dimModeEl.value });
-        syncUiFromState(store.getState());
+        syncUiFromState(store.getState(), syncInvalidDoorsIntoState());
       });
     }
 
@@ -633,68 +773,27 @@ function initApp() {
         var x = Math.floor((L - w) / 2);
 
         doors.push({ id: id, wall: wall, type: "door", enabled: true, x_mm: x, width_mm: w, height_mm: h });
-        setOpenings(doors);
+        setDoors(doors);
       });
     }
 
     if (removeAllDoorsBtnEl) {
       removeAllDoorsBtnEl.addEventListener("click", function () {
-        setOpenings([]);
+        snapNoticeById = {};
+        setDoors([]);
       });
     }
 
-    var _snappingGuard = false;
-
-    function openingsEqual(a, b) {
-      if (a === b) return true;
-      if (!Array.isArray(a) || !Array.isArray(b)) return false;
-      if (a.length !== b.length) return false;
-      for (var i = 0; i < a.length; i++) {
-        var da = a[i], db = b[i];
-        if (!da || !db) return false;
-        if (String(da.id || "") !== String(db.id || "")) return false;
-        if (String(da.wall || "") !== String(db.wall || "")) return false;
-        if (Math.floor(Number(da.x_mm)) !== Math.floor(Number(db.x_mm))) return false;
-        if (Math.floor(Number(da.width_mm)) !== Math.floor(Number(db.width_mm))) return false;
-        if (Math.floor(Number(da.height_mm)) !== Math.floor(Number(db.height_mm))) return false;
-        if (String(da.type || "") !== String(db.type || "")) return false;
-        if (!!da.enabled !== !!db.enabled) return false;
-      }
-      return true;
-    }
-
-    function applyDoorSnappingIfNeeded(s) {
-      if (_snappingGuard) return false;
-      if (!Walls || typeof Walls.snapOpeningsForState !== "function") return false;
-      if (!s || !s.walls || !Array.isArray(s.walls.openings)) return false;
-
-      var res = null;
-      try { res = Walls.snapOpeningsForState(s); } catch (e) { return false; }
-      if (!res || !Array.isArray(res.openings)) return false;
-
-      if (res.events && res.events.length) {
-        for (var i = 0; i < res.events.length; i++) showToast(res.events[i]);
-      }
-
-      if (!openingsEqual(s.walls.openings, res.openings)) {
-        _snappingGuard = true;
-        store.setState({ walls: { openings: res.openings } });
-        _snappingGuard = false;
-        return true;
-      }
-      return false;
-    }
-
     store.onChange(function (s) {
-      if (applyDoorSnappingIfNeeded(s)) return;
-      syncUiFromState(s);
+      var v = syncInvalidDoorsIntoState();
+      syncUiFromState(s, v);
       render(s);
     });
 
     setInterval(updateOverlay, 1000);
     updateOverlay();
 
-    syncUiFromState(store.getState());
+    syncUiFromState(store.getState(), syncInvalidDoorsIntoState());
     render(store.getState());
     resume3D();
 
