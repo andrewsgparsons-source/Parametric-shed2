@@ -122,6 +122,243 @@ function initApp() {
     var removeAllWindowsBtnEl = $("removeAllWindowsBtn");
     var windowsListEl = $("windowsList");
 
+    var instanceSelectEl = $("instanceSelect");
+    var saveInstanceBtnEl = $("saveInstanceBtn");
+    var loadInstanceBtnEl = $("loadInstanceBtn");
+    var instanceNameInputEl = $("instanceNameInput");
+    var saveAsInstanceBtnEl = $("saveAsInstanceBtn");
+    var deleteInstanceBtnEl = $("deleteInstanceBtn");
+
+    var LS_INSTANCES_KEY = "shedInstances_v1";
+    var LS_ACTIVE_KEY = "shedInstancesActive_v1";
+
+    function safeJsonParse(s) {
+      try { return JSON.parse(s); } catch (e) { return null; }
+    }
+    function safeJsonStringify(v) {
+      try { return JSON.stringify(v); } catch (e) { return ""; }
+    }
+    function lsGet(key) {
+      try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
+    }
+    function lsSet(key, val) {
+      try { if (window.localStorage) window.localStorage.setItem(key, val); } catch (e) {}
+    }
+    function lsRemove(key) {
+      try { if (window.localStorage) window.localStorage.removeItem(key); } catch (e) {}
+    }
+
+    function deepClone(obj) {
+      try {
+        if (typeof structuredClone === "function") return structuredClone(obj);
+      } catch (e) {}
+      try {
+        return JSON.parse(JSON.stringify(obj));
+      } catch (e) {
+        return obj;
+      }
+    }
+
+    function isPlainObject(x) {
+      return !!x && typeof x === "object" && !Array.isArray(x);
+    }
+
+    function deepMerge(dst, src) {
+      if (!isPlainObject(dst)) dst = {};
+      if (!isPlainObject(src)) return dst;
+      var keys = Object.keys(src);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var sv = src[k];
+        if (Array.isArray(sv)) {
+          dst[k] = sv.slice();
+        } else if (isPlainObject(sv)) {
+          dst[k] = deepMerge(isPlainObject(dst[k]) ? dst[k] : {}, sv);
+        } else {
+          dst[k] = sv;
+        }
+      }
+      return dst;
+    }
+
+    function readInstancesMap() {
+      var raw = lsGet(LS_INSTANCES_KEY);
+      if (!raw) return {};
+      var parsed = safeJsonParse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      return parsed;
+    }
+
+    function writeInstancesMap(map) {
+      var s = safeJsonStringify(map || {});
+      if (!s) return;
+      lsSet(LS_INSTANCES_KEY, s);
+    }
+
+    function readActiveName() {
+      var v = lsGet(LS_ACTIVE_KEY);
+      return v != null ? String(v) : null;
+    }
+
+    function writeActiveName(name) {
+      if (name == null) { lsRemove(LS_ACTIVE_KEY); return; }
+      lsSet(LS_ACTIVE_KEY, String(name));
+    }
+
+    function listInstanceNames(map) {
+      var names = Object.keys(map || {});
+      names.sort(function (a, b) { return String(a).localeCompare(String(b)); });
+      return names;
+    }
+
+    function refreshInstanceSelect(map, preferredName) {
+      if (!instanceSelectEl) return;
+      var names = listInstanceNames(map);
+      var cur = preferredName != null ? String(preferredName) : null;
+
+      instanceSelectEl.innerHTML = "";
+      for (var i = 0; i < names.length; i++) {
+        var nm = names[i];
+        var opt = document.createElement("option");
+        opt.value = nm;
+        opt.textContent = nm;
+        instanceSelectEl.appendChild(opt);
+      }
+
+      if (cur && names.indexOf(cur) !== -1) instanceSelectEl.value = cur;
+      else if (names.length) instanceSelectEl.value = names[0];
+    }
+
+    function getSelectedInstanceName(map) {
+      if (!instanceSelectEl) return null;
+      var nm = String(instanceSelectEl.value || "");
+      if (!nm) return null;
+      if (!map || typeof map !== "object") return nm;
+      return nm;
+    }
+
+    function ensureDefaultInstanceExists() {
+      var map = readInstancesMap();
+      var names = listInstanceNames(map);
+      if (!names.length) {
+        map["Default"] = deepClone(store.getState());
+        writeInstancesMap(map);
+        writeActiveName("Default");
+        refreshInstanceSelect(map, "Default");
+        return map;
+      }
+      var active = readActiveName();
+      refreshInstanceSelect(map, (active && map[active] != null) ? active : null);
+      return map;
+    }
+
+    function saveInstanceOverwrite() {
+      var map = readInstancesMap();
+      var name = getSelectedInstanceName(map);
+      if (!name) return;
+      map[name] = deepClone(store.getState());
+      writeInstancesMap(map);
+      writeActiveName(name);
+      refreshInstanceSelect(map, name);
+    }
+
+    function saveInstanceAs() {
+      var map = readInstancesMap();
+      var name = instanceNameInputEl ? String(instanceNameInputEl.value || "").trim() : "";
+      if (!name) return;
+
+      if (map[name] != null) {
+        var ok = false;
+        try { ok = window.confirm('Overwrite existing instance "' + name + '"?'); } catch (e) { ok = false; }
+        if (!ok) return;
+      }
+
+      map[name] = deepClone(store.getState());
+      writeInstancesMap(map);
+      writeActiveName(name);
+      refreshInstanceSelect(map, name);
+
+      if (instanceNameInputEl) instanceNameInputEl.value = "";
+    }
+
+    function loadSelectedInstance() {
+      var map = readInstancesMap();
+      var name = getSelectedInstanceName(map);
+      if (!name) return;
+      var saved = map[name];
+      if (!saved || typeof saved !== "object") return;
+
+      var baseline = deepClone(DEFAULTS);
+      var merged = deepMerge(baseline, deepClone(saved));
+      store.setState(merged);
+      writeActiveName(name);
+      refreshInstanceSelect(map, name);
+    }
+
+    function deleteSelectedInstance() {
+      var map = readInstancesMap();
+      var names = listInstanceNames(map);
+      if (names.length <= 1) return;
+
+      var name = getSelectedInstanceName(map);
+      if (!name) return;
+      if (map[name] == null) return;
+
+      delete map[name];
+      writeInstancesMap(map);
+
+      var active = readActiveName();
+      var remaining = listInstanceNames(map);
+      if (!remaining.length) {
+        map["Default"] = deepClone(store.getState());
+        writeInstancesMap(map);
+        writeActiveName("Default");
+        refreshInstanceSelect(map, "Default");
+        return;
+      }
+
+      if (String(active || "") === String(name)) {
+        var nextName = remaining[0];
+        refreshInstanceSelect(map, nextName);
+        writeActiveName(nextName);
+        var saved = map[nextName];
+        if (saved && typeof saved === "object") {
+          var baseline = deepClone(DEFAULTS);
+          var merged = deepMerge(baseline, deepClone(saved));
+          store.setState(merged);
+        }
+        return;
+      }
+
+      refreshInstanceSelect(map, remaining[0]);
+    }
+
+    function wireInstancesUiOnce() {
+      if (!instanceSelectEl || !saveInstanceBtnEl || !loadInstanceBtnEl || !saveAsInstanceBtnEl || !deleteInstanceBtnEl) return;
+      if (saveInstanceBtnEl._wired) return;
+
+      saveInstanceBtnEl._wired = true;
+      loadInstanceBtnEl._wired = true;
+      saveAsInstanceBtnEl._wired = true;
+      deleteInstanceBtnEl._wired = true;
+
+      saveInstanceBtnEl.addEventListener("click", function () { saveInstanceOverwrite(); });
+      loadInstanceBtnEl.addEventListener("click", function () { loadSelectedInstance(); });
+      saveAsInstanceBtnEl.addEventListener("click", function () { saveInstanceAs(); });
+      deleteInstanceBtnEl.addEventListener("click", function () { deleteSelectedInstance(); });
+    }
+
+    function initInstances() {
+      try {
+        var map = ensureDefaultInstanceExists();
+        var active = readActiveName();
+        if (active && map && map[active] != null) {
+          refreshInstanceSelect(map, active);
+        }
+        wireInstancesUiOnce();
+      } catch (e) {}
+    }
+
     var asPosInt = function (v, def) {
       var n = Math.floor(Number(v));
       return Number.isFinite(n) && n > 0 ? n : def;
@@ -1122,6 +1359,8 @@ function initApp() {
 
     setInterval(updateOverlay, 1000);
     updateOverlay();
+
+    initInstances();
 
     syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
     render(store.getState());
