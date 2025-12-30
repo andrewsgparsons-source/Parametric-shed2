@@ -175,46 +175,6 @@ function initApp() {
       if (!isPlainObject(dst)) dst = {};
       if (!isPlainObject(src)) return dst;
       var keys = Object.keys(src);
-      for (var i = 0; i < keys.length; i++) {
-        var k = keys[i];
-        var sv = src[k];
-        if (Array.isArray(sv)) {
-          dst[k] = sv.slice();
-        } else if (isPlainObject(sv)) {
-          dst[k] = deepMerge(isPlainObject(dst[k]) ? dst[k] : {}, sv);
-        } else {
-          dst[k] = sv;
-        }
-      }
-      return dst;
-    }
-
-    function readInstancesMap() {
-      var raw = lsGet(LS_INSTANCES_KEY);
-      if (!raw) return {};
-      var parsed = safeJsonParse(raw);
-      if (!parsed || typeof parsed !== "object") return {};
-      return parsed;
-    }
-
-    function writeInstancesMap(map) {
-      var s = safeJsonStringify(map || {});
-      if (!s) return;
-      lsSet(LS_INSTANCES_KEY, s);
-    }
-
-    function readActiveName() {
-      var v = lsGet(LS_ACTIVE_KEY);
-      return v != null ? String(v) : null;
-    }
-
-    function writeActiveName(name) {
-      if (name == null) { lsRemove(LS_ACTIVE_KEY); return; }
-      lsSet(LS_ACTIVE_KEY, String(name));
-    }
-
-    function listInstanceNames(map) {
-      var names = Object.keys(map || {});
       names.sort(function (a, b) { return String(a).localeCompare(String(b)); });
       return names;
     }
