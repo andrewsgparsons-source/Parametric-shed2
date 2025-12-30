@@ -3,17 +3,18 @@ export function initViews() {
   var canvas = document.getElementById("renderCanvas");
   var basePage = document.getElementById("bomPage");
   var wallsPage = document.getElementById("wallsBomPage");
+  var roofPage = document.getElementById("roofBomPage");
   var viewSelect = document.getElementById("viewSelect");
   var topbar = document.getElementById("topbar");
   var controls = document.getElementById("controls");
   var controlPanel = document.getElementById("controlPanel");
   var uiLayer = document.getElementById("ui-layer");
 
-  if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
+  if (!canvas || !basePage || !wallsPage || !roofPage || !viewSelect || !topbar) return;
 
   function readHashView() {
     try {
-      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls)\b/i);
+      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls|roof)\b/i);
       return m ? String(m[1] || "").toLowerCase() : null;
     } catch (e) { return null; }
   }
@@ -29,7 +30,7 @@ export function initViews() {
   function readStoredView() {
     try {
       var v = localStorage.getItem("viewMode");
-      return (v === "3d" || v === "base" || v === "walls") ? v : null;
+      return (v === "3d" || v === "base" || v === "walls" || v === "roof") ? v : null;
     } catch (e) { return null; }
   }
 
@@ -66,7 +67,7 @@ export function initViews() {
       try { viewSelect.focus({ preventScroll: true }); } catch (e) {}
       return;
     }
-    var page = view === "base" ? basePage : wallsPage;
+    var page = view === "base" ? basePage : (view === "walls" ? wallsPage : roofPage);
     var h = page.querySelector("h1,h2");
     var target = h || page;
     if (target && typeof target.focus === "function") {
@@ -84,6 +85,7 @@ export function initViews() {
     if (uiLayer && (el === uiLayer || uiLayer.contains(el) || el.contains(uiLayer))) return true;
     if (el === basePage || basePage.contains(el) || el.contains(basePage)) return true;
     if (el === wallsPage || wallsPage.contains(el) || el.contains(wallsPage)) return true;
+    if (el === roofPage || roofPage.contains(el) || el.contains(roofPage)) return true;
     return false;
   }
 
@@ -136,13 +138,14 @@ export function initViews() {
   }
 
   function applyView(view, reason) {
-    var v = (view === "3d" || view === "base" || view === "walls") ? view : "3d";
+    var v = (view === "3d" || view === "base" || view === "walls" || view === "roof") ? view : "3d";
 
     document.body.dataset.view = v;
 
     var is3d = v === "3d";
     var isBase = v === "base";
     var isWalls = v === "walls";
+    var isRoof = v === "roof";
 
     canvas.style.display = is3d ? "block" : "none";
     canvas.setAttribute("aria-hidden", String(!is3d));
@@ -152,6 +155,9 @@ export function initViews() {
 
     wallsPage.style.display = isWalls ? "block" : "none";
     wallsPage.setAttribute("aria-hidden", String(!isWalls));
+
+    roofPage.style.display = isRoof ? "block" : "none";
+    roofPage.setAttribute("aria-hidden", String(!isRoof));
 
     if (viewSelect.value !== v) viewSelect.value = v;
 
