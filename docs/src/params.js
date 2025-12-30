@@ -53,7 +53,8 @@ export const DEFAULTS = {
     height_mm: 2400,
     insulated: { section: { w: 50, h: 100 }, spacing: 400 },
     basic:     { section: { w: 50, h: 75 },  spacing: null },
-    openings: []
+    openings: [],
+    invalidDoorIds: []
   }
 };
 
