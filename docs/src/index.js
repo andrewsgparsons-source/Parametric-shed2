@@ -195,8 +195,8 @@ function initApp() {
     function getDoorWallThickness(state) {
       var h = null;
       try {
-        if (state && state.walls && state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
-        else if (state && state.walls && state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
+        if (state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
+        else if (state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
       } catch (e) {}
       var n = Math.floor(Number(h));
       return Number.isFinite(n) && n > 0 ? n : 100;
@@ -219,12 +219,19 @@ function initApp() {
       return arr;
     }
 
+    function setDoorInputsEnabled(on) {
+      if (doorSelectEl) doorSelectEl.disabled = !on;
+      if (doorWallEl) doorWallEl.disabled = !on;
+      if (doorXEl) doorXEl.disabled = !on;
+      if (doorWEl) doorWEl.disabled = !on;
+      if (doorHEl) doorHEl.disabled = !on;
+    }
+
     function ensureActiveDoorId(state) {
       var doors = getDoors(state);
       if (!doors.length) { activeDoorId = null; return; }
       if (activeDoorId && doors.some(function (d) { return d && d.id === activeDoorId; })) return;
       activeDoorId = doors[0] && doors[0].id ? doors[0].id : null;
-      if (!activeDoorId) activeDoorId = "door1";
     }
 
     function getActiveDoor(state) {
@@ -243,6 +250,7 @@ function initApp() {
       if (!doors.length) return;
 
       ensureActiveDoorId(s);
+      if (!activeDoorId) return;
 
       var updated = doors.map(function (d) {
         if (!d) return d;
@@ -359,12 +367,18 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
-        // Doors (multiple)
+        // Doors
         if (doorSelectEl) {
           ensureActiveDoorId(state);
           var doors = getDoors(state);
 
-          var prev = doorSelectEl.value || "";
+          if (!doors.length) {
+            doorSelectEl.innerHTML = "";
+            if (doorDelBtnEl) doorDelBtnEl.disabled = true;
+            setDoorInputsEnabled(false);
+            return;
+          }
+
           var html = "";
           for (var i = 0; i < doors.length; i++) {
             var d = doors[i];
@@ -375,9 +389,9 @@ function initApp() {
           }
           doorSelectEl.innerHTML = html;
           if (activeDoorId) doorSelectEl.value = activeDoorId;
-          else if (prev) doorSelectEl.value = prev;
 
-          if (doorDelBtnEl) doorDelBtnEl.disabled = doors.length <= 1;
+          if (doorDelBtnEl) doorDelBtnEl.disabled = false;
+          setDoorInputsEnabled(true);
         }
 
         var door = getActiveDoor(state);
@@ -534,22 +548,8 @@ function initApp() {
 
     if (doorDelBtnEl) {
       doorDelBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var doors = getDoors(s).slice();
-        if (doors.length <= 1) return;
-
-        ensureActiveDoorId(s);
-        var kept = [];
-        for (var i = 0; i < doors.length; i++) {
-          var d = doors[i];
-          if (!d) continue;
-          if (d.id === activeDoorId) continue;
-          kept.push(d);
-        }
-        if (!kept.length) return;
-
-        activeDoorId = kept[0].id;
-        store.setState({ walls: { openings: kept } });
+        activeDoorId = null;
+        store.setState({ walls: { openings: [] } });
       });
     }
 
