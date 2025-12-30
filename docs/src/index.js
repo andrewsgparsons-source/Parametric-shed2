@@ -102,6 +102,8 @@ function initApp() {
     var wInputEl = $("wInput");
     var dInputEl = $("dInput");
 
+    var roofStyleEl = $("roofStyle");
+
     var overUniformEl = $("roofOverUniform");
     var overFrontEl = $("roofOverFront");
     var overBackEl = $("roofOverBack");
@@ -878,6 +880,10 @@ function initApp() {
           if (dInputEl && state && state.d != null) dInputEl.value = String(state.d);
         }
 
+        if (roofStyleEl) {
+          roofStyleEl.value = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
+        }
+
         if (state && state.overhang) {
           if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
           if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
@@ -902,7 +908,6 @@ function initApp() {
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
         if (wallHeightEl && state && state.walls && state.walls.height_mm != null) wallHeightEl.value = String(state.walls.height_mm);
 
-        // Reflect currently-selected section height into the dropdown.
         if (wallSectionEl && state && state.walls) {
           var h = null;
           try {
@@ -946,6 +951,14 @@ function initApp() {
         "BuildCalls: " + window.__dbg.buildCalls + "\n" +
         "Meshes: " + meshes + "\n" +
         "LastError: " + err;
+    }
+
+    if (roofStyleEl) {
+      roofStyleEl.addEventListener("change", function () {
+        var v = String(roofStyleEl.value || "apex");
+        if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
+        store.setState({ roof: { style: v } });
+      });
     }
 
     if (vWallsEl) {
@@ -1016,7 +1029,6 @@ function initApp() {
     if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
     if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
 
-    // NEW: Stud/Plate size -> updates BOTH variants' section.h (50×75 or 50×100)
     function sectionHFromSelectValue(v) {
       return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
     }
