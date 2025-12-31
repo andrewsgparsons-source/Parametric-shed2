@@ -120,7 +120,7 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  // ---- Wall colliders for raycasts (prefer top plates) ----
+  // ---- Collect wall meshes (prefer top plates) ----
   const wallAll = [];
   const wallTopPlates = [];
 
@@ -132,8 +132,6 @@ export function build3D(state, ctx) {
     wallAll.push(m);
     if (nm.indexOf("plate-top") !== -1) wallTopPlates.push(m);
   }
-
-  const colliders = wallTopPlates.length ? wallTopPlates : wallAll;
 
   // ---- Roof footprint in world X/Z (NO hardcoded offsets) ----
   function boundsForMeshes(meshes) {
@@ -178,132 +176,109 @@ export function build3D(state, ctx) {
   const roofMinZ_m = wallMinZ_m - f_m;
   const roofMaxZ_m = wallMaxZ_m + b_m;
 
-  // ---- Raycast sampling (ground truth) ----
-  function castDownY(x_m, z_m) {
-    try {
-      const ray = new BABYLON.Ray(
-        new BABYLON.Vector3(x_m, 10, z_m), // 10m above
-        new BABYLON.Vector3(0, -1, 0),
-        25 // length (meters)
-      );
-      const pick = scene.pickWithRay(ray, (mesh) => colliders.indexOf(mesh) !== -1);
-      if (pick && pick.hit && pick.pickedPoint && Number.isFinite(pick.pickedPoint.y)) return pick.pickedPoint.y;
-    } catch (e) {}
-    return null;
-  }
+  // ---- Measure bearing plane from ACTUAL wall top-plate meshes (world-space top-Y) ----
+  function measurePentBearingPlane() {
+    const plates = wallTopPlates.length ? wallTopPlates : wallAll;
+    const topBounds = boundsForMeshes(plates);
 
-  function sampleEdgeAverageY(edgeAxis, edgeValue_m, sampleAxisMin_m, sampleAxisMax_m, N) {
-    let sum = 0;
-    let count = 0;
-    let missing = 0;
-
-    const tStep = N <= 1 ? 1 : 1 / (N - 1);
-
-    for (let i = 0; i < N; i++) {
-      const t = i * tStep;
-      const s = sampleAxisMin_m + (sampleAxisMax_m - sampleAxisMin_m) * t;
-
-      const x = edgeAxis === "x" ? edgeValue_m : s;
-      const z = edgeAxis === "z" ? edgeValue_m : s;
-
-      const y = castDownY(x, z);
-      if (y == null) {
-        missing++;
-        continue;
-      }
-      sum += y;
-      count++;
+    // If no walls in scene (walls hidden), fall back to state heights.
+    if (!topBounds) {
+      const minH_m = Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000);
+      const maxH_m = Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000);
+      const yLow = Math.min(minH_m, maxH_m);
+      const yHigh = Math.max(minH_m, maxH_m);
+      const x0 = wallMinX_m;
+      const x1 = wallMaxX_m;
+      const run = Math.max(1e-6, (x1 - x0));
+      return { yLow, yHigh, x0, x1, run, used: "state-fallback", countLow: 0, countHigh: 0 };
     }
 
-    return {
-      avgY: count ? (sum / count) : null,
-      count,
-      missing,
-    };
+    const x0 = topBounds.minX;
+    const x1 = topBounds.maxX;
+    const run = Math.max(1e-6, (x1 - x0));
+
+    const eps = Math.max(0.001, run * 0.10);
+
+    let sumLow = 0, sumHigh = 0;
+    let cntLow = 0, cntHigh = 0;
+
+    for (let i = 0; i < plates.length; i++) {
+      const m = plates[i];
+      if (!m) continue;
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+
+        const bb = bi.boundingBox;
+        const cx = (bb.minimumWorld.x + bb.maximumWorld.x) * 0.5;
+        const topY = bb.maximumWorld.y;
+
+        if (!Number.isFinite(cx) || !Number.isFinite(topY)) continue;
+
+        if (cx <= (x0 + eps)) {
+          sumLow += topY; cntLow += 1;
+        }
+        if (cx >= (x1 - eps)) {
+          sumHigh += topY; cntHigh += 1;
+        }
+      } catch (e) {}
+    }
+
+    // Conservative fallback if classification was too strict
+    let yLow = cntLow ? (sumLow / cntLow) : null;
+    let yHigh = cntHigh ? (sumHigh / cntHigh) : null;
+
+    if (yLow == null || yHigh == null) {
+      // Try using overall top-Y extremes as a safe fallback while still using real meshes.
+      let minTop = Infinity;
+      let maxTop = -Infinity;
+      for (let i = 0; i < plates.length; i++) {
+        const m = plates[i];
+        if (!m) continue;
+        try {
+          m.computeWorldMatrix(true);
+          const bi = m.getBoundingInfo && m.getBoundingInfo();
+          if (!bi || !bi.boundingBox) continue;
+          const topY = bi.boundingBox.maximumWorld.y;
+          if (!Number.isFinite(topY)) continue;
+          if (topY < minTop) minTop = topY;
+          if (topY > maxTop) maxTop = topY;
+        } catch (e) {}
+      }
+      if (yLow == null && Number.isFinite(minTop)) yLow = minTop;
+      if (yHigh == null && Number.isFinite(maxTop)) yHigh = maxTop;
+    }
+
+    // Absolute fallback to state if still missing
+    if (yLow == null || yHigh == null) {
+      const minH_m = Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000);
+      const maxH_m = Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000);
+      yLow = (yLow == null) ? Math.min(minH_m, maxH_m) : yLow;
+      yHigh = (yHigh == null) ? Math.max(minH_m, maxH_m) : yHigh;
+      return { yLow, yHigh, x0, x1, run, used: "mesh+state-fallback", countLow: cntLow, countHigh: cntHigh };
+    }
+
+    return { yLow, yHigh, x0, x1, run, used: wallTopPlates.length ? "top-plates" : "walls", countLow: cntLow, countHigh: cntHigh };
   }
 
-  const N = 9;
+  const bearing = measurePentBearingPlane();
+  const yLow_m = bearing.yLow;
+  const yHigh_m = bearing.yHigh;
 
-  // Option 1: pitch across X (edges at roofMinX / roofMaxX, sample along Z)
-  const lowX = sampleEdgeAverageY("x", roofMinX_m, roofMinZ_m, roofMaxZ_m, N);
-  const highX = sampleEdgeAverageY("x", roofMaxX_m, roofMinZ_m, roofMaxZ_m, N);
-
-  // Option 2: pitch across Z (edges at roofMinZ / roofMaxZ, sample along X)
-  const lowZ = sampleEdgeAverageY("z", roofMinZ_m, roofMinX_m, roofMaxX_m, N);
-  const highZ = sampleEdgeAverageY("z", roofMaxZ_m, roofMinX_m, roofMaxX_m, N);
-
-  function absRise(pairLow, pairHigh) {
-    if (pairLow.avgY == null || pairHigh.avgY == null) return -1;
-    return Math.abs(pairHigh.avgY - pairLow.avgY);
+  function bearingYAtWorldX(x_m) {
+    const t = (x_m - bearing.x0) / bearing.run; // allow extrapolation for overhang
+    return yLow_m + (yHigh_m - yLow_m) * t;
   }
 
-  const absRiseX = absRise(lowX, highX);
-  const absRiseZ = absRise(lowZ, highZ);
-
-  let chosenPitchAxis = "x";
-  if (absRiseZ > absRiseX) chosenPitchAxis = "z";
-
-  // Fallback if one axis has no usable samples
-  if (absRiseX < 0 && absRiseZ >= 0) chosenPitchAxis = "z";
-  if (absRiseZ < 0 && absRiseX >= 0) chosenPitchAxis = "x";
-  if (absRiseX < 0 && absRiseZ < 0) chosenPitchAxis = "x"; // deterministic
-
-  let lowEdgeY_m = null;
-  let highEdgeY_m = null;
-  let run_m = 1e-6;
-
-  if (chosenPitchAxis === "x") {
-    lowEdgeY_m = lowX.avgY;
-    highEdgeY_m = highX.avgY;
-    run_m = Math.max(1e-6, (roofMaxX_m - roofMinX_m));
-  } else {
-    lowEdgeY_m = lowZ.avgY;
-    highEdgeY_m = highZ.avgY;
-    run_m = Math.max(1e-6, (roofMaxZ_m - roofMinZ_m));
-  }
-
-  // If raycasts failed (walls hidden), fallback to state heights ONLY (no offsets)
-  if (lowEdgeY_m == null || highEdgeY_m == null) {
-    const minH_m = Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000);
-    const maxH_m = Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000);
-    lowEdgeY_m = Math.min(minH_m, maxH_m);
-    highEdgeY_m = Math.max(minH_m, maxH_m);
-    chosenPitchAxis = "x";
-    run_m = Math.max(1e-6, (Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? 1))) / 1000));
-  }
-
-  const rise_m = (highEdgeY_m - lowEdgeY_m);
-  const pitchAngle = Math.atan2(Math.abs(rise_m), run_m);
-
-  // ---- Single roof transform (no per-piece Y sampling; no fragmentation) ----
+  // ---- Single roof transform root (shared origin); NO tilt node ----
   const roofRoot = new BABYLON.TransformNode("roof-root", scene);
   roofRoot.metadata = { dynamic: true };
 
-  const roofTilt = new BABYLON.TransformNode("roof-tilt", scene);
-  roofTilt.metadata = { dynamic: true };
-  roofTilt.parent = roofRoot;
+  // Roof-local origin in X/Z at roofMin corner; y=0 (bearing computed per-part)
+  roofRoot.position = new BABYLON.Vector3(roofMinX_m, 0, roofMinZ_m);
 
-  // Anchor at low edge, roof min corner in X/Z
-  roofRoot.position = new BABYLON.Vector3(roofMinX_m, lowEdgeY_m, roofMinZ_m);
-
-  // Rotation: choose sign so the "high edge" is lifted
-  const rot = new BABYLON.Vector3(0, 0, 0);
-  if (pitchAngle <= 1e-9) {
-    // flat
-  } else if (chosenPitchAxis === "x") {
-    // Across X: rotate about Z
-    // If right edge (roofMaxX) is higher -> +X should rise => -angle
-    if (rise_m > 0) rot.z = -pitchAngle;
-    else if (rise_m < 0) rot.z = +pitchAngle;
-  } else {
-    // Across Z: rotate about X
-    // If back edge (roofMaxZ) is higher -> +Z should rise => -angle
-    if (rise_m > 0) rot.x = -pitchAngle;
-    else if (rise_m < 0) rot.x = +pitchAngle;
-  }
-  roofTilt.rotation = rot;
-
-  // ---- Build roof parts in ROOF-LOCAL space (origin at roofMin corner), y=0 bearing ----
+  // ---- Build roof parts in ROOF-LOCAL space (origin at roofMin corner), y computed per-part ----
   // A/B mapping logic preserved (span shortest dimension; place along long axis @600)
   const rimThkA_mm = data.rafterW_mm;
   const rimRunB_mm = data.B_mm;
@@ -314,33 +289,41 @@ export function build3D(state, ctx) {
     return { x0: b0, z0: a0, lenX: bLen, lenZ: aLen }; // A->Z, B->X
   }
 
+  function localBoxCenterWorldX(x0_mm, lenX_mm) {
+    return roofRoot.position.x + ((x0_mm + (lenX_mm / 2)) / 1000);
+  }
+
   // Rim joists (front/back at ends of A; run along B)
   {
     const m = mapABtoLocalXZ(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+    const cxWorld = localBoxCenterWorldX(m.x0, m.lenX);
+    const yBottom = bearingYAtWorldX(cxWorld);
     mkBoxBottomLocal(
       "roof-rim-front",
       m.lenX,
       data.rafterD_mm,
       m.lenZ,
       m.x0,
-      0,
+      yBottom,
       m.z0,
-      roofTilt,
+      roofRoot,
       joistMat,
       { roof: "pent", part: "rim", edge: "front" }
     );
   }
   {
     const m = mapABtoLocalXZ(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+    const cxWorld = localBoxCenterWorldX(m.x0, m.lenX);
+    const yBottom = bearingYAtWorldX(cxWorld);
     mkBoxBottomLocal(
       "roof-rim-back",
       m.lenX,
       data.rafterD_mm,
       m.lenZ,
       m.x0,
-      0,
+      yBottom,
       m.z0,
-      roofTilt,
+      roofRoot,
       joistMat,
       { roof: "pent", part: "rim", edge: "back" }
     );
@@ -351,24 +334,31 @@ export function build3D(state, ctx) {
     const r = data.rafters[i];
     const mapped = mapABtoLocalXZ(0, r.b0_mm, data.rafterLen_mm, data.rafterW_mm, data.isWShort);
 
+    const cxWorld = localBoxCenterWorldX(mapped.x0, mapped.lenX);
+    const yBottom = bearingYAtWorldX(cxWorld);
+
     mkBoxBottomLocal(
       `roof-rafter-${i}`,
       mapped.lenX,
       data.rafterD_mm,
       mapped.lenZ,
       mapped.x0,
-      0,
+      yBottom,
       mapped.z0,
-      roofTilt,
+      roofRoot,
       joistMat,
       { roof: "pent", part: "rafter" }
     );
   }
 
-  // OSB (bottom on top of rafters)
-  const osbBottomY_m = data.rafterD_mm / 1000;
+  // OSB (bottom on top of rafters; uses same bearingY interpolation)
   for (let i = 0; i < data.osb.all.length; i++) {
     const p = data.osb.all[i];
+
+    const cxWorld = localBoxCenterWorldX(p.x0_mm, p.xLen_mm);
+    const bearingY = bearingYAtWorldX(cxWorld);
+    const osbBottomY_m = bearingY + (data.rafterD_mm / 1000);
+
     mkBoxBottomLocal(
       `roof-osb-${i}`,
       p.xLen_mm,
@@ -377,7 +367,7 @@ export function build3D(state, ctx) {
       p.x0_mm,
       osbBottomY_m,
       p.z0_mm,
-      roofTilt,
+      roofRoot,
       osbMat,
       { roof: "pent", part: "osb", kind: p.kind }
     );
@@ -386,18 +376,18 @@ export function build3D(state, ctx) {
   // Debug (non-invasive)
   try {
     if (typeof window !== "undefined" && window.__dbg) {
-      const missingSamples =
-        (chosenPitchAxis === "x" ? (lowX.missing + highX.missing) : (lowZ.missing + highZ.missing));
-      const sampleCount =
-        (chosenPitchAxis === "x" ? (lowX.count + highX.count) : (lowZ.count + highZ.count));
-
-      window.__dbg.lastRoof = {
-        chosenPitchAxis,
-        lowEdgeY: lowEdgeY_m,
-        highEdgeY: highEdgeY_m,
-        pitchAngle,
-        sampleCount,
-        missingSamples,
+      window.__dbg.roof = {
+        yLow: yLow_m,
+        yHigh: yHigh_m,
+        wallX0: bearing.x0,
+        wallX1: bearing.x1,
+        roofMinX: roofMinX_m,
+        roofMaxX: roofMaxX_m,
+        roofMinZ: roofMinZ_m,
+        roofMaxZ: roofMaxZ_m,
+        used: bearing.used,
+        countLow: bearing.countLow,
+        countHigh: bearing.countHigh,
       };
     }
   } catch (e) {}
@@ -710,3 +700,4 @@ function computeOsbPiecesNoStagger(A_mm, B_mm) {
 
   return { all, totalArea_mm2: area };
 }
+```0
