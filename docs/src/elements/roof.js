@@ -3,14 +3,20 @@
  * Roof (PENT only).
  * - Rafters/joists @600mm spacing (literal).
  * - OSB sheets 1220×2440, no-stagger tiling, thickness 18mm (literal).
- * - Rafters span the shortest roof dimension (A = min(w,d)); placed along the long axis (B = max(w,d)).
  * - Timber cross-section orientation kept as-is: uses CONFIG.timber.w / CONFIG.timber.d with swapped axes.
  *
  * All roof meshes:
  * - name prefix "roof-"
  * - metadata.dynamic === true
  *
- * CHANGE (radical idea #1):
+ * IMPORTANT (NO-DRIFT):
+ * - When roofW <= roofD (depth >= width), current behavior is known-good and must remain unchanged.
+ * - Only when roofW > roofD (width exceeds depth), the roof assembly must reorient by 90° so that:
+ *   - Pent pitch remains along WORLD +X (walls.js definition).
+ *   - Rafters must span WORLD X (width), and be placed along WORLD Z (depth) @600.
+ *   - This fixes the “wrong orientation” case without touching the good case.
+ *
+ * CHANGE (radical idea #1 still applies):
  * - Stop deriving bearing constraints from wall meshes/top-plate meshes.
  * - Use analytic bearing lines from state + resolved dims (authoritative), matching walls.js pent definition:
  *   pitch runs along X (width): x=0 => minHeight, x=frameW => maxHeight.
@@ -327,6 +333,7 @@ export function build3D(state, ctx) {
         run_m: run_m,
         angle: angle,
         rightError_mm: rightError_m == null ? null : (rightError_m * 1000),
+        rule: (data.rule || "shortest-span"),
       };
 
       // Visualize analytic bearing samples
@@ -337,7 +344,20 @@ export function build3D(state, ctx) {
 }
 
 export function updateBOM(state) {
-  const tbody = document.getElementById("roofBomTable");
+  // Backward-compatible with either:
+  // - legacy DOM where #roofBomTable is a <tbody>
+  // - current scaffolding where #roofBomTable is a <table>
+  let host = document.getElementById("roofBomTable");
+  if (!host) return;
+
+  let tbody = host;
+  if (host.tagName && String(host.tagName).toLowerCase() === "table") {
+    tbody = (host.tBodies && host.tBodies[0]) ? host.tBodies[0] : null;
+    if (!tbody) {
+      tbody = document.createElement("tbody");
+      host.appendChild(tbody);
+    }
+  }
   if (!tbody) return;
 
   tbody.innerHTML = "";
@@ -463,10 +483,23 @@ function computeRoofData(state) {
   const originX_mm = 0;
   const originZ_mm = 0;
 
-  const A = Math.min(roofW, roofD);
-  const B = Math.max(roofW, roofD);
+  // NO-DRIFT RULE:
+  // - If roofW <= roofD: keep existing “shortest-span” rule (known-good).
+  // - If roofW > roofD: override to lock span axis to WIDTH (WORLD X) for pent roof.
+  //   That means: A = roofW (span), B = roofD (placement axis).
+  let A = Math.min(roofW, roofD);
+  let B = Math.max(roofW, roofD);
+  let isWShort = (roofW <= roofD);
+  let rule = "shortest-span";
 
-  const isWShort = roofW <= roofD;
+  if (roofW > roofD) {
+    // ONLY this case changes:
+    // lock A->X and B->Z so rafters span width and are placed along depth.
+    A = roofW;
+    B = roofD;
+    isWShort = true;
+    rule = "pent-span-locked-to-width";
+  }
 
   const spacing = 600;
 
@@ -552,6 +585,7 @@ function computeRoofData(state) {
   );
 
   return {
+    rule: rule,
     roofW_mm: roofW,
     roofD_mm: roofD,
     frameW_mm: frameW,
