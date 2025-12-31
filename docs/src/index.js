@@ -483,6 +483,8 @@ function initApp() {
 
     function render(state) {
       try {
+        console.log("[rebuild] called; roof.style =", state && state.roof ? state.roof.style : undefined);
+
         window.__dbg.buildCalls += 1;
 
         var R = resolveDims(state);
@@ -1231,9 +1233,15 @@ function initApp() {
 
     if (roofStyleEl) {
       roofStyleEl.addEventListener("change", function () {
+        console.log("[roofStyle change] raw value:", roofStyleEl ? roofStyleEl.value : undefined);
+
         var v = String(roofStyleEl.value || "apex");
         if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
         store.setState({ roof: { style: v } });
+
+        console.log("[roofStyle change] state.roof.style now:", (store.getState() && store.getState().roof) ? store.getState().roof.style : undefined);
+        try { console.log("[roofStyle change] state snapshot:", JSON.parse(JSON.stringify(store.getState()))); } catch (e) {}
+
         applyWallHeightUiLock(store.getState());
       });
     }
