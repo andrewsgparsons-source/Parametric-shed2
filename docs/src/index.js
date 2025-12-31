@@ -33,6 +33,7 @@ import * as Base from "./elements/base.js";
 import * as Walls from "./elements/walls.js";
 import * as Roof from "./elements/roof.js";
 import { renderBOM } from "./bom/index.js";
+import { initInstancesUI } from "./instances.js";
 
 function $(id) { return document.getElementById(id); }
 function setDisplay(el, val) { if (el && el.style) el.style.display = val; }
@@ -124,11 +125,6 @@ function initApp() {
     var roofMinHeightEl = $("roofMinHeight");
     var roofMaxHeightEl = $("roofMaxHeight");
 
-    var roofApexEaveHeightEl = $("roofApexEaveHeight");
-    var roofApexCrestHeightEl = $("roofApexCrestHeight");
-    var roofHippedEaveHeightEl = $("roofHippedEaveHeight");
-    var roofHippedCrestHeightEl = $("roofHippedCrestHeight");
-
     var overUniformEl = $("roofOverUniform");
     var overFrontEl = $("roofOverFront");
     var overBackEl = $("roofOverBack");
@@ -137,6 +133,7 @@ function initApp() {
 
     var wallSectionEl = $("wallSection"); // NEW
     var wallsVariantEl = $("wallsVariant");
+    var wallHeightEl = $("wallHeight");
 
     var addDoorBtnEl = $("addDoorBtn");
     var removeAllDoorsBtnEl = $("removeAllDoorsBtn");
@@ -154,428 +151,24 @@ function initApp() {
     var deleteInstanceBtnEl = $("deleteInstanceBtn");
     var instancesHintEl = $("instancesHint");
 
-    // ---- Instances (Save/Load Presets) ----
-    var LS_INSTANCES_KEY = "shedInstances_v1";
-    var LS_ACTIVE_KEY = "shedInstancesActive_v1";
+    function applyWallHeightUiLock(state) {
+      if (!wallHeightEl) return;
 
-    var _instProvider = null;
-    var _instUsingFallback = false;
-    var _instProbe = { canRead: false, canWrite: false, persistentOk: false, errName: "", errMsg: "" };
-
-    /* Instances manual test:
-       1) Save As "A"
-       2) Change width/depth (and/or add a door/window)
-       3) Save As "B"
-       4) Switch dropdown between A and B and click Load
-       5) Confirm controls + model update immediately (via existing store.onChange)
-       6) Refresh page -> active remains selected when persistent storage is OK
-    */
-
-    function safeJsonParse(s) {
-      try { return JSON.parse(s); } catch (e) { return null; }
-    }
-    function safeJsonStringify(v) {
-      try { return JSON.stringify(v); } catch (e) { return ""; }
-    }
-
-    function setInstancesHint(msg) {
-      if (!instancesHintEl) return;
-      instancesHintEl.textContent = msg;
-    }
-
-    function cloneJson(obj) {
-      try { return JSON.parse(JSON.stringify(obj)); } catch (e) { return obj; }
-    }
-
-    function isPlainObject(x) {
-      return !!x && typeof x === "object" && !Array.isArray(x);
-    }
-
-    function deepMerge(dst, src) {
-      if (!isPlainObject(dst)) dst = {};
-      if (!isPlainObject(src)) return dst;
-      var keys = Object.keys(src);
-      for (var i = 0; i < keys.length; i++) {
-        var k = keys[i];
-        var sv = src[k];
-        if (Array.isArray(sv)) {
-          dst[k] = sv.slice();
-        } else if (isPlainObject(sv)) {
-          dst[k] = deepMerge(isPlainObject(dst[k]) ? dst[k] : {}, sv);
-        } else {
-          dst[k] = sv;
-        }
-      }
-      return dst;
-    }
-
-    function storageProbe() {
-      var res = { canRead: false, canWrite: false, persistentOk: false, errName: "", errMsg: "" };
-      var ls = null;
-
-      try { ls = window.localStorage; } catch (e0) { ls = null; }
-      if (!ls) {
-        res.errName = "NoLocalStorage";
-        res.errMsg = "window.localStorage unavailable";
-        return res;
-      }
-
+      var style = "";
       try {
-        var tmp = ls.getItem(LS_INSTANCES_KEY);
-        res.canRead = true;
-        void tmp;
-      } catch (e1) {
-        res.canRead = false;
-        res.errName = e1 && e1.name ? String(e1.name) : "ReadError";
-        res.errMsg = e1 && e1.message ? String(e1.message) : String(e1);
-        return res;
-      }
+        style = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "";
+      } catch (e0) { style = ""; }
+      if (!style && roofStyleEl) style = String(roofStyleEl.value || "");
 
-      try {
-        ls.setItem("__shed_probe__", "1");
-        var v = ls.getItem("__shed_probe__");
-        ls.removeItem("__shed_probe__");
-        res.canWrite = (v === "1");
-      } catch (e2) {
-        // QuotaExceededError: treat read OK, write failed
-        res.canWrite = false;
-        res.errName = e2 && e2.name ? String(e2.name) : "WriteError";
-        res.errMsg = e2 && e2.message ? String(e2.message) : String(e2);
-      }
-
-      res.persistentOk = !!(res.canRead && res.canWrite);
-      return res;
-    }
-
-    function createPersistentProvider() {
-      return {
-        getItem: function (k) { return window.localStorage.getItem(k); },
-        setItem: function (k, v) { window.localStorage.setItem(k, v); },
-        removeItem: function (k) { window.localStorage.removeItem(k); }
-      };
-    }
-
-    function createFallbackProvider() {
-      var mem = {};
-      return {
-        getItem: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? String(mem[k]) : null; },
-        setItem: function (k, v) { mem[k] = String(v); },
-        removeItem: function (k) { try { delete mem[k]; } catch (e) {} }
-      };
-    }
-
-    function providerGet(key) {
-      try { return _instProvider ? _instProvider.getItem(key) : null; } catch (e) { return null; }
-    }
-
-    function providerSet(key, val) {
-      try { if (_instProvider) _instProvider.setItem(key, val); } catch (e) { throw e; }
-    }
-
-    function providerRemove(key) {
-      try { if (_instProvider) _instProvider.removeItem(key); } catch (e) { throw e; }
-    }
-
-    function hintStorageStatusIfNeeded(prefix) {
-      if (_instProbe.persistentOk) return;
-      var msg = "";
-      if (_instProbe.canRead && !_instProbe.canWrite) {
-        msg = "Storage read OK, write blocked: " + String(_instProbe.errName || "") + " " + String(_instProbe.errMsg || "");
+      if (style === "pent") {
+        wallHeightEl.disabled = true;
+        wallHeightEl.setAttribute("aria-disabled", "true");
+        wallHeightEl.title = "Disabled for pent roof (use Roof Min/Max Height).";
       } else {
-        msg = "Storage blocked: " + String(_instProbe.errName || "") + " " + String(_instProbe.errMsg || "");
+        wallHeightEl.disabled = false;
+        try { wallHeightEl.removeAttribute("aria-disabled"); } catch (e1) {}
+        try { wallHeightEl.removeAttribute("title"); } catch (e2) {}
       }
-      if (_instUsingFallback) msg += " (session only)";
-      if (prefix) msg = prefix + " — " + msg;
-      setInstancesHint(msg);
-    }
-
-    function readInstances() {
-      var raw = providerGet(LS_INSTANCES_KEY);
-      if (!raw) return {};
-      var parsed = safeJsonParse(raw);
-      if (!parsed || typeof parsed !== "object") return {};
-      return parsed;
-    }
-
-    function writeInstances(map) {
-      var s = safeJsonStringify(map || {});
-      if (!s) return;
-      providerSet(LS_INSTANCES_KEY, s);
-    }
-
-    function readActiveName() {
-      var v = providerGet(LS_ACTIVE_KEY);
-      return v != null ? String(v) : null;
-    }
-
-    function writeActiveName(name) {
-      if (name == null) { providerRemove(LS_ACTIVE_KEY); return; }
-      providerSet(LS_ACTIVE_KEY, String(name));
-    }
-
-    function listInstanceNames(map) {
-      var names = Object.keys(map || {});
-      names.sort(function (a, b) { return String(a).localeCompare(String(b)); });
-      return names;
-    }
-
-    function rebuildInstanceSelect(selectedNameMaybe) {
-      if (!instanceSelectEl) return { map: {}, names: [], selected: null };
-
-      var map = {};
-      try {
-        map = readInstances();
-      } catch (e) {
-        if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-        else hintStorageStatusIfNeeded("Storage unavailable");
-        return { map: {}, names: [], selected: null };
-      }
-
-      var names = listInstanceNames(map);
-
-      if (!names.length) {
-        try {
-          map["Default"] = cloneJson(store.getState());
-          writeInstances(map);
-          writeActiveName("Default");
-          map = readInstances();
-          names = listInstanceNames(map);
-        } catch (e2) {
-          if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-          else hintStorageStatusIfNeeded("Storage unavailable");
-          return { map: {}, names: [], selected: null };
-        }
-      }
-
-      var active = readActiveName();
-      var want = selectedNameMaybe != null ? String(selectedNameMaybe) : null;
-      if (!want && active && map[active] != null) want = active;
-      if (!want || names.indexOf(want) === -1) want = names[0];
-
-      instanceSelectEl.innerHTML = "";
-      for (var i = 0; i < names.length; i++) {
-        var nm = names[i];
-        var opt = document.createElement("option");
-        opt.value = nm;
-        opt.textContent = nm;
-        instanceSelectEl.appendChild(opt);
-      }
-
-      instanceSelectEl.value = want;
-      try { writeActiveName(want); } catch (e3) {}
-
-      if (_instProbe.persistentOk) setInstancesHint("Selected: " + want);
-      else setInstancesHint("Selected: " + want + " (session only)");
-
-      return { map: map, names: names, selected: want };
-    }
-
-    function getSelectedNameSafe(map) {
-      if (!instanceSelectEl) return null;
-      var nm = String(instanceSelectEl.value || "");
-      if (!nm) return null;
-      if (map && typeof map === "object" && map[nm] == null) return null;
-      return nm;
-    }
-
-    function saveCurrentTo(name, overwriteAllowed) {
-      var nm = String(name || "").trim();
-      if (!nm) return false;
-
-      try {
-        var map = readInstances();
-        if (map[nm] != null && !overwriteAllowed) return false;
-
-        map[nm] = cloneJson(store.getState());
-        writeInstances(map);
-        writeActiveName(nm);
-        rebuildInstanceSelect(nm);
-
-        if (_instProbe.persistentOk) setInstancesHint("Saved: " + nm);
-        else setInstancesHint("Saved: " + nm + " (session only)");
-        return true;
-      } catch (e) {
-        if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-        else hintStorageStatusIfNeeded("Storage unavailable");
-        return false;
-      }
-    }
-
-    function loadFrom(name) {
-      var nm = String(name || "").trim();
-      if (!nm) return;
-
-      try {
-        var map = readInstances();
-        var saved = map[nm];
-        if (!saved || typeof saved !== "object") {
-          if (_instProbe.persistentOk) setInstancesHint("No saved instances.");
-          else setInstancesHint("No saved instances. (session only)");
-          rebuildInstanceSelect(null);
-          return;
-        }
-
-        var baseline = cloneJson(DEFAULTS);
-        var merged = deepMerge(baseline, cloneJson(saved));
-        store.setState(merged);
-
-        writeActiveName(nm);
-        rebuildInstanceSelect(nm);
-
-        if (_instProbe.persistentOk) setInstancesHint("Loaded: " + nm);
-        else setInstancesHint("Loaded: " + nm + " (session only)");
-      } catch (e) {
-        if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-        else hintStorageStatusIfNeeded("Storage unavailable");
-      }
-    }
-
-    function deleteSelected() {
-      try {
-        var map = readInstances();
-        var names = listInstanceNames(map);
-        if (names.length <= 1) {
-          if (_instProbe.persistentOk) setInstancesHint("Cannot delete last instance.");
-          else setInstancesHint("Cannot delete last instance. (session only)");
-          return;
-        }
-
-        var name = getSelectedNameSafe(map);
-        if (!name) return;
-
-        delete map[name];
-        writeInstances(map);
-
-        var remaining = listInstanceNames(map);
-        var nextName = remaining.length ? remaining[0] : null;
-
-        if (nextName) {
-          writeActiveName(nextName);
-          rebuildInstanceSelect(nextName);
-          // Optional: auto-load newly selected instance
-          loadFrom(nextName);
-
-          if (_instProbe.persistentOk) setInstancesHint("Deleted: " + name + ", Selected: " + nextName);
-          else setInstancesHint("Deleted: " + name + ", Selected: " + nextName + " (session only)");
-        } else {
-          rebuildInstanceSelect(null);
-          if (_instProbe.persistentOk) setInstancesHint("Deleted: " + name);
-          else setInstancesHint("Deleted: " + name + " (session only)");
-        }
-      } catch (e) {
-        if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-        else hintStorageStatusIfNeeded("Storage unavailable");
-      }
-    }
-
-    function wireInstancesUiOnce() {
-      if (!instanceSelectEl || !saveInstanceBtnEl || !loadInstanceBtnEl || !saveAsInstanceBtnEl || !deleteInstanceBtnEl) return;
-      if (saveInstanceBtnEl._wired) return;
-
-      saveInstanceBtnEl._wired = true;
-      loadInstanceBtnEl._wired = true;
-      saveAsInstanceBtnEl._wired = true;
-      deleteInstanceBtnEl._wired = true;
-      instanceSelectEl._wired = true;
-
-      saveInstanceBtnEl.addEventListener("click", function () {
-        try {
-          var map = readInstances();
-          var name = getSelectedNameSafe(map);
-          if (!name) {
-            if (_instProbe.persistentOk) setInstancesHint("No saved instances.");
-            else setInstancesHint("No saved instances. (session only)");
-            rebuildInstanceSelect(null);
-            return;
-          }
-          saveCurrentTo(name, true);
-        } catch (e) {
-          if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-          else hintStorageStatusIfNeeded("Storage unavailable");
-        }
-      });
-
-      loadInstanceBtnEl.addEventListener("click", function () {
-        try {
-          var map = readInstances();
-          var name = getSelectedNameSafe(map);
-          if (!name) {
-            if (_instProbe.persistentOk) setInstancesHint("No saved instances.");
-            else setInstancesHint("No saved instances. (session only)");
-            rebuildInstanceSelect(null);
-            return;
-          }
-          loadFrom(name);
-        } catch (e) {
-          if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-          else hintStorageStatusIfNeeded("Storage unavailable");
-        }
-      });
-
-      saveAsInstanceBtnEl.addEventListener("click", function () {
-        var name = instanceNameInputEl ? String(instanceNameInputEl.value || "").trim() : "";
-        if (!name) return;
-
-        try {
-          var map = readInstances();
-          if (map[name] != null) {
-            var ok = false;
-            try { ok = window.confirm('Overwrite existing instance "' + name + '"?'); } catch (e0) { ok = false; }
-            if (!ok) return;
-          }
-          saveCurrentTo(name, true);
-          if (instanceNameInputEl) instanceNameInputEl.value = "";
-        } catch (e) {
-          if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-          else hintStorageStatusIfNeeded("Storage unavailable");
-        }
-      });
-
-      deleteInstanceBtnEl.addEventListener("click", function () {
-        deleteSelected();
-      });
-
-      instanceSelectEl.addEventListener("change", function () {
-        try {
-          var map = readInstances();
-          var name = getSelectedNameSafe(map);
-          if (!name) {
-            if (_instProbe.persistentOk) setInstancesHint("No saved instances.");
-            else setInstancesHint("No saved instances. (session only)");
-            rebuildInstanceSelect(null);
-            return;
-          }
-
-          try { writeActiveName(name); } catch (e2) {}
-
-          rebuildInstanceSelect(name);
-          if (_instProbe.persistentOk) setInstancesHint("Selected: " + name);
-          else setInstancesHint("Selected: " + name + " (session only)");
-        } catch (e) {
-          if (_instProbe.persistentOk) setInstancesHint("Storage unavailable");
-          else hintStorageStatusIfNeeded("Storage unavailable");
-        }
-      });
-    }
-
-    function initInstances() {
-      // Probe storage and select provider once.
-      _instProbe = storageProbe();
-      if (_instProbe.persistentOk) {
-        _instProvider = createPersistentProvider();
-        _instUsingFallback = false;
-      } else {
-        _instProvider = createFallbackProvider();
-        _instUsingFallback = true;
-      }
-
-      wireInstancesUiOnce();
-
-      if (!_instProbe.persistentOk) {
-        hintStorageStatusIfNeeded(null);
-      }
-
-      rebuildInstanceSelect(null);
     }
 
     var asPosInt = function (v, def) {
@@ -703,20 +296,26 @@ function initApp() {
       return roofStyle === "pent";
     }
 
-    function isApexRoofStyle(state) {
-      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-      return roofStyle === "apex";
-    }
-
-    function isHippedRoofStyle(state) {
-      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-      return roofStyle === "hipped";
-    }
-
     function clampHeightMm(v, def) {
       var n = Math.max(100, Math.floor(Number(v)));
       return Number.isFinite(n) ? n : def;
     }
+
+    // --- NEW HELPERS: Pent display height calculation (UI only) ---
+    function getPentMinMax(state) {
+      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
+      var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
+      var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
+      var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
+      return { minH: minH, maxH: maxH };
+    }
+
+    function computePentDisplayHeight(state) {
+      var mm = getPentMinMax(state);
+      var mid = Math.round((mm.minH + mm.maxH) / 2);
+      return Math.max(100, mid);
+    }
+    // -------------------------------------------------------------
 
     function getPentHeightsFromState(state) {
       var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
@@ -724,22 +323,6 @@ function initApp() {
       var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
       var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
       return { minH: minH, maxH: maxH, base: base };
-    }
-
-    function getApexHeightsFromState(state) {
-      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
-      var a = (state && state.roof && state.roof.apex) ? state.roof.apex : null;
-      var eaveH = clampHeightMm(a && a.eaveHeight_mm != null ? a.eaveHeight_mm : base, base);
-      var crestH = clampHeightMm(a && a.crestHeight_mm != null ? a.crestHeight_mm : base, base);
-      return { eaveH: eaveH, crestH: crestH, base: base };
-    }
-
-    function getHippedHeightsFromState(state) {
-      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
-      var h = (state && state.roof && state.roof.hipped) ? state.roof.hipped : null;
-      var eaveH = clampHeightMm(h && h.eaveHeight_mm != null ? h.eaveHeight_mm : base, base);
-      var crestH = clampHeightMm(h && h.crestHeight_mm != null ? h.crestHeight_mm : base, base);
-      return { eaveH: eaveH, crestH: crestH, base: base };
     }
 
     function render(state) {
@@ -1408,31 +991,12 @@ function initApp() {
         }
 
         var isPent = isPentRoofStyle(state);
-        var isApex = isApexRoofStyle(state);
-        var isHipped = isHippedRoofStyle(state);
-
         if (roofMinHeightEl && roofMaxHeightEl) {
           var ph = getPentHeightsFromState(state);
           roofMinHeightEl.value = String(ph.minH);
           roofMaxHeightEl.value = String(ph.maxH);
           roofMinHeightEl.disabled = !isPent;
           roofMaxHeightEl.disabled = !isPent;
-        }
-
-        if (roofApexEaveHeightEl && roofApexCrestHeightEl) {
-          var ah = getApexHeightsFromState(state);
-          roofApexEaveHeightEl.value = String(ah.eaveH);
-          roofApexCrestHeightEl.value = String(ah.crestH);
-          roofApexEaveHeightEl.disabled = !isApex;
-          roofApexCrestHeightEl.disabled = !isApex;
-        }
-
-        if (roofHippedEaveHeightEl && roofHippedCrestHeightEl) {
-          var hh = getHippedHeightsFromState(state);
-          roofHippedEaveHeightEl.value = String(hh.eaveH);
-          roofHippedCrestHeightEl.value = String(hh.crestH);
-          roofHippedEaveHeightEl.disabled = !isHipped;
-          roofHippedCrestHeightEl.disabled = !isHipped;
         }
 
         if (state && state.overhang) {
@@ -1458,6 +1022,16 @@ function initApp() {
 
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
 
+        // --- UPDATED: wall height display logic (UI only) ---
+        if (wallHeightEl) {
+          if (isPent) {
+            wallHeightEl.value = String(computePentDisplayHeight(state));
+          } else if (state && state.walls && state.walls.height_mm != null) {
+            wallHeightEl.value = String(state.walls.height_mm);
+          }
+        }
+        // ----------------------------------------------------
+
         if (wallSectionEl && state && state.walls) {
           var h = null;
           try {
@@ -1466,6 +1040,8 @@ function initApp() {
           } catch (e) {}
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
+
+        applyWallHeightUiLock(state);
 
         var dv = validations && validations.doors ? validations.doors : null;
         var wv = validations && validations.windows ? validations.windows : null;
@@ -1508,6 +1084,7 @@ function initApp() {
         var v = String(roofStyleEl.value || "apex");
         if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
         store.setState({ roof: { style: v } });
+        applyWallHeightUiLock(store.getState());
       });
     }
 
@@ -1520,49 +1097,15 @@ function initApp() {
       store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
     }
 
-    function commitApexHeightsFromInputs() {
-      if (!roofApexEaveHeightEl || !roofApexCrestHeightEl) return;
-      var s = store.getState();
-      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
-      var eaveH = clampHeightMm(roofApexEaveHeightEl.value, base);
-      var crestH = clampHeightMm(roofApexCrestHeightEl.value, base);
-      store.setState({ roof: { apex: { eaveHeight_mm: eaveH, crestHeight_mm: crestH } } });
-    }
-
-    function commitHippedHeightsFromInputs() {
-      if (!roofHippedEaveHeightEl || !roofHippedCrestHeightEl) return;
-      var s = store.getState();
-      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
-      var eaveH = clampHeightMm(roofHippedEaveHeightEl.value, base);
-      var crestH = clampHeightMm(roofHippedCrestHeightEl.value, base);
-      store.setState({ roof: { hipped: { eaveHeight_mm: eaveH, crestHeight_mm: crestH } } });
-    }
-
     if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
+      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
     if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
-    });
-
-    if (roofApexEaveHeightEl) roofApexEaveHeightEl.addEventListener("input", function () {
-      if (!isApexRoofStyle(store.getState())) return;
-      commitApexHeightsFromInputs();
-    });
-    if (roofApexCrestHeightEl) roofApexCrestHeightEl.addEventListener("input", function () {
-      if (!isApexRoofStyle(store.getState())) return;
-      commitApexHeightsFromInputs();
-    });
-
-    if (roofHippedEaveHeightEl) roofHippedEaveHeightEl.addEventListener("input", function () {
-      if (!isHippedRoofStyle(store.getState())) return;
-      commitHippedHeightsFromInputs();
-    });
-    if (roofHippedCrestHeightEl) roofHippedCrestHeightEl.addEventListener("input", function () {
-      if (!isHippedRoofStyle(store.getState())) return;
-      commitHippedHeightsFromInputs();
+      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
 
     if (vWallsEl) {
@@ -1649,6 +1192,10 @@ function initApp() {
     }
 
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
+    if (wallHeightEl) wallHeightEl.addEventListener("input", function () {
+      if (wallHeightEl && wallHeightEl.disabled === true) return;
+      store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
+    });
 
     if (addDoorBtnEl) {
       addDoorBtnEl.addEventListener("click", function () {
@@ -1720,33 +1267,40 @@ function initApp() {
     store.onChange(function (s) {
       var v = syncInvalidOpeningsIntoState();
       syncUiFromState(s, v);
+      applyWallHeightUiLock(s);
       render(s);
     });
 
     setInterval(updateOverlay, 1000);
     updateOverlay();
 
-    initInstances();
+    initInstancesUI({
+      store: store,
+      ids: {
+        instanceSelect: "instanceSelect",
+        saveInstanceBtn: "saveInstanceBtn",
+        loadInstanceBtn: "loadInstanceBtn",
+        instanceNameInput: "instanceNameInput",
+        saveAsInstanceBtn: "saveAsInstanceBtn",
+        deleteInstanceBtn: "deleteInstanceBtn",
+        instancesHint: "instancesHint"
+      },
+      dbg: window.__dbg
+    });
 
-    // Ensure roof height defaults exist on first load (no drift if user never touches them)
+    // Ensure pent defaults mirror current wallHeight on first load (no drift if user never touches them)
     try {
       var s0 = store.getState();
-      var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
-
-      if (!(s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null)) {
+      if (s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null) {
+        // already present
+      } else {
+        var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
         store.setState({ roof: { pent: { minHeight_mm: baseH, maxHeight_mm: baseH } } });
-      }
-
-      if (!(s0 && s0.roof && s0.roof.apex && s0.roof.apex.eaveHeight_mm != null && s0.roof.apex.crestHeight_mm != null)) {
-        store.setState({ roof: { apex: { eaveHeight_mm: baseH, crestHeight_mm: baseH } } });
-      }
-
-      if (!(s0 && s0.roof && s0.roof.hipped && s0.roof.hipped.eaveHeight_mm != null && s0.roof.hipped.crestHeight_mm != null)) {
-        store.setState({ roof: { hipped: { eaveHeight_mm: baseH, crestHeight_mm: baseH } } });
       }
     } catch (e0) {}
 
     syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
+    applyWallHeightUiLock(store.getState());
     render(store.getState());
     resume3D();
 
@@ -1762,3 +1316,4 @@ if (document.readyState === "loading") {
 } else {
   initApp();
 }
+```0
