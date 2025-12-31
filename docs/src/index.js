@@ -150,6 +150,26 @@ function initApp() {
     var deleteInstanceBtnEl = $("deleteInstanceBtn");
     var instancesHintEl = $("instancesHint");
 
+    function applyWallHeightUiLock(state) {
+      if (!wallHeightEl) return;
+
+      var style = "";
+      try {
+        style = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "";
+      } catch (e0) { style = ""; }
+      if (!style && roofStyleEl) style = String(roofStyleEl.value || "");
+
+      if (style === "pent") {
+        wallHeightEl.disabled = true;
+        wallHeightEl.setAttribute("aria-disabled", "true");
+        wallHeightEl.title = "Disabled for pent roof (use Roof Min/Max Height).";
+      } else {
+        wallHeightEl.disabled = false;
+        try { wallHeightEl.removeAttribute("aria-disabled"); } catch (e1) {}
+        try { wallHeightEl.removeAttribute("title"); } catch (e2) {}
+      }
+    }
+
     // ---- Instances (Save/Load Presets) ----
     var LS_INSTANCES_KEY = "shedInstances_v1";
     var LS_ACTIVE_KEY = "shedInstancesActive_v1";
@@ -1419,6 +1439,8 @@ function initApp() {
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
 
+        applyWallHeightUiLock(state);
+
         var dv = validations && validations.doors ? validations.doors : null;
         var wv = validations && validations.windows ? validations.windows : null;
 
@@ -1460,6 +1482,7 @@ function initApp() {
         var v = String(roofStyleEl.value || "apex");
         if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
         store.setState({ roof: { style: v } });
+        applyWallHeightUiLock(store.getState());
       });
     }
 
@@ -1565,7 +1588,10 @@ function initApp() {
     }
 
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
-    if (wallHeightEl) wallHeightEl.addEventListener("input", function () { store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } }); });
+    if (wallHeightEl) wallHeightEl.addEventListener("input", function () {
+      if (wallHeightEl && wallHeightEl.disabled === true) return;
+      store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
+    });
 
     if (addDoorBtnEl) {
       addDoorBtnEl.addEventListener("click", function () {
@@ -1637,6 +1663,7 @@ function initApp() {
     store.onChange(function (s) {
       var v = syncInvalidOpeningsIntoState();
       syncUiFromState(s, v);
+      applyWallHeightUiLock(s);
       render(s);
     });
 
@@ -1657,6 +1684,7 @@ function initApp() {
     } catch (e0) {}
 
     syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
+    applyWallHeightUiLock(store.getState());
     render(store.getState());
     resume3D();
 
