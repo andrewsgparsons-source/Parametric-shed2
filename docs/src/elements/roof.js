@@ -858,10 +858,28 @@ function buildApex(state, ctx) {
 
   // Simple sheathing as two sloped OSB "panels" (visual)
   // Panel thickness = 18mm, depth = B, length along slope = rafterLen
+  // IMPORTANT: panels are offset to the OTHER SIDE of the purlins (outside of the roof plane).
   const osbThk = 18;
+
+  // Offset distance from the (rough) truss/purlin center plane to the outside face:
+  // move along the roof normal by (purlin depth/2 + osb thickness/2)
+  const osbOffset_mm = (memberD_mm / 2) + (osbThk / 2);
+
+  // For a slope angle theta, a unit normal (pointing "outwards") in local XY:
+  // left slope (+theta): n = (-sin(theta), +cos(theta))
+  // right slope (-theta): n = (+sin(theta), +cos(theta))
+  const sinT = Math.sin(slopeAng);
+  const cosT = Math.cos(slopeAng);
+
   {
-    const cx = halfSpan_mm / 2;
-    const cy = rise_mm / 2 + osbThk / 2;
+    // Left panel baseline center
+    const baseCx = halfSpan_mm / 2;
+    const baseCy = rise_mm / 2 + osbThk / 2;
+
+    // Offset outward
+    const cx = baseCx + (-sinT) * osbOffset_mm;
+    const cy = baseCy + (cosT) * osbOffset_mm;
+
     const left = mkBoxCenteredLocal(
       "roof-apex-osb-L",
       rafterLen_mm,
@@ -876,9 +894,16 @@ function buildApex(state, ctx) {
     );
     left.rotation = new BABYLON.Vector3(0, 0, slopeAng);
   }
+
   {
-    const cx = halfSpan_mm + (halfSpan_mm / 2);
-    const cy = rise_mm / 2 + osbThk / 2;
+    // Right panel baseline center
+    const baseCx = halfSpan_mm + (halfSpan_mm / 2);
+    const baseCy = rise_mm / 2 + osbThk / 2;
+
+    // Offset outward
+    const cx = baseCx + (sinT) * osbOffset_mm;
+    const cy = baseCy + (cosT) * osbOffset_mm;
+
     const right = mkBoxCenteredLocal(
       "roof-apex-osb-R",
       rafterLen_mm,
@@ -903,8 +928,8 @@ function buildApex(state, ctx) {
   const yaw = ridgeAlongWorldX ? (Math.PI / 2) : 0;
   roofRoot.rotationQuaternion = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), yaw);
 
-  // Corners of local roof rectangle (0..roofW, 0..roofD) in LOCAL XZ:
-  // Our constructed roof rectangle is A x B in local XZ, but roofW/roofD may be swapped depending on which is short.
+  // Corners of local roof rectangle (0..localW, 0..localD) in LOCAL XZ:
+  // Our constructed roof rectangle is A x B in local XZ.
   const localW_mm = A_mm;
   const localD_mm = B_mm;
 
@@ -952,6 +977,7 @@ function buildApex(state, ctx) {
         runB_mm: B_mm,
         rise_mm: rise_mm,
         ridgeAlongWorldX: ridgeAlongWorldX,
+        osbOffset_mm: osbOffset_mm
       };
     }
   } catch (e) {}
