@@ -34,25 +34,25 @@ export function build3D(state, ctx) {
       } catch (e) {}
     });
 
+  // Dispose previous roof transform nodes (pivot/tilt hierarchy)
+  (scene.transformNodes || [])
+    .filter(
+      (n) =>
+        n &&
+        n.metadata &&
+        n.metadata.dynamic === true &&
+        typeof n.name === "string" &&
+        n.name.startsWith("roof-")
+    )
+    .forEach((n) => {
+      try {
+        n.dispose(false);
+      } catch (e) {}
+    });
+
   if (!isPentEnabled(state)) return;
 
   const data = computeRoofData(state);
-
-  // Minimal debug guard (no console)
-  try {
-    if (typeof window !== "undefined" && window.__dbg) {
-      window.__dbg.lastRoof = {
-        isWShort: !!data.isWShort,
-        roofW: data.roofW_mm,
-        roofD: data.roofD_mm,
-        originX: data.originX_mm,
-        originZ: data.originZ_mm,
-        minH: data.minH_mm,
-        maxH: data.maxH_mm,
-        slopeAxis: "X",
-      };
-    }
-  } catch (e) {}
 
   const joistMat = materials && materials.timber ? materials.timber : null;
 
@@ -68,7 +68,7 @@ export function build3D(state, ctx) {
     }
   })();
 
-  function mkBox(name, Lx, Ly, Lz, pos, mat, meta, rotZ_rad) {
+  function mkBox(name, Lx, Ly, Lz, pos, mat, meta) {
     const mesh = BABYLON.MeshBuilder.CreateBox(
       name,
       { width: Lx / 1000, height: Ly / 1000, depth: Lz / 1000 },
@@ -79,93 +79,118 @@ export function build3D(state, ctx) {
       (pos.y + Ly / 2) / 1000,
       (pos.z + Lz / 2) / 1000
     );
-    if (Number.isFinite(rotZ_rad) && rotZ_rad !== 0) {
-      mesh.rotation = mesh.rotation || new BABYLON.Vector3(0, 0, 0);
-      mesh.rotation.z = rotZ_rad;
-    }
     mesh.material = mat;
     mesh.metadata = Object.assign({ dynamic: true }, meta || {});
     return mesh;
   }
 
-  // ---- Bearing plane (single plane height function; fixes fragmentation) ----
-  const plane = computeBearingPlaneFromWalls(scene, data);
-  // Fallback: use roof.pent min/max + walls.height_mm if wall plates cannot be found.
-  const planeK = plane.k; // meters per meter
-  const planeC = plane.c; // meters (Y intercept in world: Y = k*X + c)
-  const theta = plane.theta; // radians, tan(theta)=k
+  // --- Wall shift constants (must match index.js shiftWallMeshes) ---
+  const WALL_SHIFT_X_MM = -25;
+  const WALL_SHIFT_Y_MM = 168;
+  const WALL_SHIFT_Z_MM = -25;
 
-  // Helper: world-Y (meters) on bearing plane at world X (mm)
-  function bearingY_m_atWorldXmm(x_mm) {
-    const X_m = (x_mm) / 1000;
-    return planeK * X_m + planeC;
+  // --- Pitch (single rotation; no per-piece Y stepping) ---
+  const minWallH_mm = Math.max(100, Math.floor(Number(data.minH_mm)));
+  const maxWallH_mm = Math.max(100, Math.floor(Number(data.maxH_mm)));
+  const frameW_mm = Math.max(1, Math.floor(Number(data.frameW_mm)));
+
+  const rise_mm = (maxWallH_mm - minWallH_mm);
+  const run_mm = frameW_mm;
+  const angle = Math.atan2(rise_mm, run_mm);
+
+  // --- Roof hierarchy: pivot at left bearing line; tilt rotates whole assembly ---
+  const roofPivot = new BABYLON.TransformNode("roof-pivot", scene);
+  roofPivot.metadata = { dynamic: true };
+  roofPivot.position = new BABYLON.Vector3(
+    WALL_SHIFT_X_MM / 1000,
+    (minWallH_mm + WALL_SHIFT_Y_MM) / 1000,
+    (data.originZ_mm) / 1000
+  );
+
+  const roofTilt = new BABYLON.TransformNode("roof-tilt", scene);
+  roofTilt.metadata = { dynamic: true };
+  roofTilt.parent = roofPivot;
+  roofTilt.rotation = new BABYLON.Vector3(0, 0, angle);
+
+  // Debug (no console, no UI)
+  try {
+    if (typeof window !== "undefined" && window.__dbg) {
+      window.__dbg.lastRoof = {
+        style: "pent",
+        frameW_mm: frameW_mm,
+        roofW_mm: data.roofW_mm,
+        roofD_mm: data.roofD_mm,
+        originX_mm: data.originX_mm,
+        originZ_mm: data.originZ_mm,
+        minWallH_mm: minWallH_mm,
+        maxWallH_mm: maxWallH_mm,
+        pitchAngle_rad: angle,
+        wallShift: { x: WALL_SHIFT_X_MM, y: WALL_SHIFT_Y_MM, z: WALL_SHIFT_Z_MM },
+      };
+    }
+  } catch (e) {}
+
+  // --- Mapping helpers (world mm -> local mm under pivot/tilt) ---
+  function worldToLocalX_mm(worldX_mm) {
+    return Math.floor(Number(worldX_mm) - WALL_SHIFT_X_MM);
+  }
+  function worldToLocalZ_mm(worldZ_mm) {
+    return Math.floor(Number(worldZ_mm) - data.originZ_mm);
   }
 
-  // Convert a bearing plane (Y = kX + c) into a centerY (mm) for a rotated box:
-  // For a box rotated about Z by theta, the bottom face becomes a plane:
-  //   Y = kX + (cy - k*cx - (h/2)/cosθ)
-  // To make bottom face equal bearing plane, set:
-  //   cy = (k*cx + c) + (h/2)/cosθ
-  function centerY_mm_forBottomOnPlane(xCenter_mm, height_mm) {
-    const Xc_m = xCenter_mm / 1000;
-    const cosT = Math.max(1e-9, Math.cos(theta));
-    const yBottom_m = planeK * Xc_m + planeC;
-    const cy_m = yBottom_m + (height_mm / 1000) / 2 / cosT;
-    return cy_m * 1000;
+  function mapABtoWorldXZ_ForRafter(a0, b0, aLen, bLen, isWShort) {
+    // aLen is rafter length along short span axis
+    // bLen is the rafter "thickness" along the placement axis
+    if (isWShort) return { x0: data.originX_mm + a0, z0: data.originZ_mm + b0, lenX: aLen, lenZ: bLen };
+    return { x0: data.originX_mm + b0, z0: data.originZ_mm + a0, lenX: bLen, lenZ: aLen };
   }
 
-  // For an additional vertical separation between planes, expressed in *plane-normal* distance.
-  // We use plane-parallel offset derived from rotated box geometry (keeps OSB sitting on rafter tops).
-  function centerY_mm_forBottomOnPlaneWithParallelOffset(xCenter_mm, height_mm, planeYOffset_m) {
-    const Xc_m = xCenter_mm / 1000;
-    const cosT = Math.max(1e-9, Math.cos(theta));
-    const yBottom_m = (planeK * Xc_m + planeC) + planeYOffset_m;
-    const cy_m = yBottom_m + (height_mm / 1000) / 2 / cosT;
-    return cy_m * 1000;
+  function mapABtoWorldXZ_ForRim(a0, b0, aLen, bLen, isWShort) {
+    // aLen is rim thickness along short span axis (A)
+    // bLen is rim run length along long axis (B)
+    if (isWShort) return { x0: data.originX_mm + a0, z0: data.originZ_mm + b0, lenX: aLen, lenZ: bLen };
+    return { x0: data.originX_mm + b0, z0: data.originZ_mm + a0, lenX: bLen, lenZ: aLen };
   }
-
-  // Roof slope is along WORLD X (consistent with wall system: left=min at x=0 side).
-  // Apply tilt only when a part spans along X; otherwise keep level but still seat to plane at its X.
-  const partRotZ = theta;
 
   // ---- Rim Joists (front/back at ends of A; run along B) ----
   const rimThkA_mm = data.rafterW_mm;
   const rimRunB_mm = data.B_mm;
   const rimBackA0_mm = Math.max(0, data.A_mm - rimThkA_mm);
 
-  // Rim pieces are placed in AB space then mapped to world X/Z with origin shift.
   // Front rim (A = 0)
   {
-    const m = mapABtoWorldXZ_ForRim(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort, data.originX_mm, data.originZ_mm);
-    const xCenter_mm = m.x0 + m.lenX / 2;
-    const yCenter_mm = centerY_mm_forBottomOnPlane(xCenter_mm, data.rafterD_mm);
-    mkBox(
+    const m = mapABtoWorldXZ_ForRim(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+    const lx = worldToLocalX_mm(m.x0);
+    const lz = worldToLocalZ_mm(m.z0);
+
+    const mesh = mkBox(
       "roof-rim-front",
       m.lenX,
       data.rafterD_mm,
       m.lenZ,
-      { x: m.x0, y: yCenter_mm - data.rafterD_mm / 2, z: m.z0 },
+      { x: lx, y: 0, z: lz },
       joistMat,
-      { roof: "pent", part: "rim", edge: "front" },
-      partRotZ
+      { roof: "pent", part: "rim", edge: "front" }
     );
+    mesh.parent = roofTilt;
   }
 
   // Back rim (A = A - thickness)
   {
-    const m = mapABtoWorldXZ_ForRim(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort, data.originX_mm, data.originZ_mm);
-    const xCenter_mm = m.x0 + m.lenX / 2;
-    const yCenter_mm = centerY_mm_forBottomOnPlane(xCenter_mm, data.rafterD_mm);
-    mkBox(
+    const m = mapABtoWorldXZ_ForRim(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+    const lx = worldToLocalX_mm(m.x0);
+    const lz = worldToLocalZ_mm(m.z0);
+
+    const mesh = mkBox(
       "roof-rim-back",
       m.lenX,
       data.rafterD_mm,
       m.lenZ,
-      { x: m.x0, y: yCenter_mm - data.rafterD_mm / 2, z: m.z0 },
+      { x: lx, y: 0, z: lz },
       joistMat,
-      { roof: "pent", part: "rim", edge: "back" },
-      partRotZ
+      { roof: "pent", part: "rim", edge: "back" }
     );
+    mesh.parent = roofTilt;
   }
 
   // ---- Rafters (span along A, placed along B @600) ----
@@ -177,96 +202,41 @@ export function build3D(state, ctx) {
       r.b0_mm,
       data.rafterLen_mm,
       data.rafterW_mm,
-      data.isWShort,
-      data.originX_mm,
-      data.originZ_mm
+      data.isWShort
     );
 
-    const xCenter_mm = mapped.x0 + mapped.lenX / 2;
+    const lx = worldToLocalX_mm(mapped.x0);
+    const lz = worldToLocalZ_mm(mapped.z0);
 
-    // If the rafter spans along X, rotate and seat its bottom on the plane for all X (single plane, no stepping).
-    // If it spans along Z (lenX is thickness), it can be level; still use plane at its constant X.
-    const spansX = data.isWShort; // A->X when roofW is short => rafters span X
-    if (spansX) {
-      const yCenter_mm = centerY_mm_forBottomOnPlane(xCenter_mm, data.rafterD_mm);
-      mkBox(
-        `roof-rafter-${i}`,
-        mapped.lenX,
-        data.rafterD_mm,
-        mapped.lenZ,
-        { x: mapped.x0, y: yCenter_mm - data.rafterD_mm / 2, z: mapped.z0 },
-        joistMat,
-        { roof: "pent", part: "rafter" },
-        partRotZ
-      );
-    } else {
-      // Level placement (no rotation) at the plane height at this X.
-      const yBottom_m = bearingY_m_atWorldXmm(xCenter_mm);
-      const yBottom_mm = yBottom_m * 1000;
-      mkBox(
-        `roof-rafter-${i}`,
-        mapped.lenX,
-        data.rafterD_mm,
-        mapped.lenZ,
-        { x: mapped.x0, y: yBottom_mm, z: mapped.z0 },
-        joistMat,
-        { roof: "pent", part: "rafter" }
-      );
-    }
+    const mesh = mkBox(
+      `roof-rafter-${i}`,
+      mapped.lenX,
+      data.rafterD_mm,
+      mapped.lenZ,
+      { x: lx, y: 0, z: lz },
+      joistMat,
+      { roof: "pent", part: "rafter" }
+    );
+    mesh.parent = roofTilt;
   }
 
-  // ---- OSB boards laid above rafters (tilted; single plane) ----
-  // OSB bottom must sit on rafter top plane.
-  // For rotated rafters spanning X, the rafter top plane is parallel to bearing plane, offset by (rafterDepth / cosθ) in Y-intercept.
-  // For level rafters (spanning Z), top is bearing + rafterDepth (vertical); however we still rotate OSB to match roof plane.
-  const cosT = Math.max(1e-9, Math.cos(theta));
-  const rafterTopYOffset_m_parallel = (data.rafterD_mm / 1000) / cosT;
-
+  // ---- OSB boards laid above rafters (thickness vertical in local; assembly rotation provides pitch) ----
   for (let i = 0; i < data.osb.all.length; i++) {
     const p = data.osb.all[i];
-    const xCenter_mm = p.x0_mm + p.xLen_mm / 2;
 
-    const spansX = data.isWShort;
-    if (spansX) {
-      const yCenter_mm = centerY_mm_forBottomOnPlaneWithParallelOffset(
-        xCenter_mm,
-        data.osbThickness_mm,
-        rafterTopYOffset_m_parallel
-      );
-      mkBox(
-        `roof-osb-${i}`,
-        p.xLen_mm,
-        data.osbThickness_mm,
-        p.zLen_mm,
-        { x: p.x0_mm, y: yCenter_mm - data.osbThickness_mm / 2, z: p.z0_mm },
-        osbMat,
-        { roof: "pent", part: "osb", kind: p.kind },
-        partRotZ
-      );
-    } else {
-      // Level rafters: OSB still rotates to match the plane; seat OSB bottom at bearing plane + rafterDepth (vertical).
-      // Convert that to an equivalent plane-parallel offset by projecting vertical onto the plane normal (small angles).
-      // We avoid introducing new constants; compute it from theta.
-      const vertOffset_m = data.rafterD_mm / 1000;
-      const planeOffset_m_parallel = vertOffset_m / cosT;
+    const lx = worldToLocalX_mm(p.x0_mm);
+    const lz = worldToLocalZ_mm(p.z0_mm);
 
-      const yCenter_mm = centerY_mm_forBottomOnPlaneWithParallelOffset(
-        xCenter_mm,
-        data.osbThickness_mm,
-        planeOffset_m_parallel
-      );
-
-      mkBox(
-        `roof-osb-${i}`,
-        p.xLen_mm,
-        data.osbThickness_mm,
-        p.zLen_mm,
-        { x: p.x0_mm, y: yCenter_mm - data.osbThickness_mm / 2, z: p.z0_mm },
-        osbMat,
-        { roof: "pent", part: "osb", kind: p.kind },
-        partRotZ
-      );
-    }
+    const mesh = mkBox(
+      `roof-osb-${i}`,
+      p.xLen_mm,
+      data.osbThickness_mm,
+      p.zLen_mm,
+      { x: lx, y: data.rafterD_mm, z: lz },
+      osbMat,
+      { roof: "pent", part: "osb", kind: p.kind }
+    );
+    mesh.parent = roofTilt;
   }
 }
 
@@ -392,26 +362,7 @@ function groupByLWN(pieces) {
   return out;
 }
 
-function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
-}
-
-function mapABtoWorldXZ_ForRafter(a0, b0, aLen, bLen, isWShort, originX_mm, originZ_mm) {
-  // aLen is rafter length along short span axis
-  // bLen is the rafter "thickness" along the placement axis
-  if (isWShort) return { x0: originX_mm + a0, z0: originZ_mm + b0, lenX: aLen, lenZ: bLen };
-  return { x0: originX_mm + b0, z0: originZ_mm + a0, lenX: bLen, lenZ: aLen };
-}
-
-function mapABtoWorldXZ_ForRim(a0, b0, aLen, bLen, isWShort, originX_mm, originZ_mm) {
-  // aLen is rim thickness along short span axis (A)
-  // bLen is rim run length along long axis (B)
-  if (isWShort) return { x0: originX_mm + a0, z0: originZ_mm + b0, lenX: aLen, lenZ: bLen };
-  return { x0: originX_mm + b0, z0: originZ_mm + a0, lenX: bLen, lenZ: aLen };
-}
-
 function computeRoofData(state) {
-  // Use resolved dims (includes overhang) but keep roof-only behavior when pent is enabled.
   const dims = resolveDims(state);
 
   const roofW = Math.max(1, Math.floor(Number(dims?.roof?.w_mm)));
@@ -422,8 +373,7 @@ function computeRoofData(state) {
 
   const ovh = dims?.overhang || { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
 
-  // Coordinate reference: walls are shifted in index.js by -25mm in X/Z.
-  // Roof origin must match that shifted frame origin, and then extend by per-side overhang.
+  // Roof origin in world mm (must match shifted walls space and include symmetric overhang)
   const WALL_OVERHANG_MM = 25;
   const originX_mm = -WALL_OVERHANG_MM - Math.max(0, Math.floor(Number(ovh.l_mm || 0)));
   const originZ_mm = -WALL_OVERHANG_MM - Math.max(0, Math.floor(Number(ovh.f_mm || 0)));
@@ -432,9 +382,7 @@ function computeRoofData(state) {
   const A = Math.min(roofW, roofD);
   const B = Math.max(roofW, roofD);
 
-  // Determine mapping to X/Z:
-  // If roofW is the short axis => A->X, B->Z
-  // Else => A->Z, B->X
+  // If roofW is the short axis => A->X, B->Z, else A->Z, B->X
   const isWShort = roofW <= roofD;
 
   const spacing = 600;
@@ -449,7 +397,7 @@ function computeRoofData(state) {
 
   const rafterLen_mm = A;
 
-  // Placement positions along B: include 0; step 600; ensure last at (B - rafterW_mm) if possible
+  // Placement positions along B
   const pos = [];
   const maxP = Math.max(0, B - rafterW_mm);
 
@@ -466,9 +414,7 @@ function computeRoofData(state) {
   }
 
   const rafters = [];
-  for (let i = 0; i < pos.length; i++) {
-    rafters.push({ b0_mm: pos[i] });
-  }
+  for (let i = 0; i < pos.length; i++) rafters.push({ b0_mm: pos[i] });
 
   // OSB tiling in AB space: 1220 along A, 2440 along B (no stagger)
   const osbAB = computeOsbPiecesNoStagger(A, B);
@@ -477,10 +423,6 @@ function computeRoofData(state) {
   const mappedAll = [];
   for (let i = 0; i < osbAB.all.length; i++) {
     const p2 = osbAB.all[i];
-
-    // In AB space:
-    // - W_mm is along A (1220 direction)
-    // - L_mm is along B (2440 direction)
     if (isWShort) {
       // A->X, B->Z
       mappedAll.push({
@@ -506,8 +448,18 @@ function computeRoofData(state) {
     }
   }
 
-  const minH = Math.max(100, Math.floor(Number(state?.roof?.pent?.minHeight_mm ?? state?.walls?.height_mm ?? 2400)));
-  const maxH = Math.max(100, Math.floor(Number(state?.roof?.pent?.maxHeight_mm ?? state?.walls?.height_mm ?? 2400)));
+  const minH = Math.max(
+    100,
+    Math.floor(
+      Number(state?.roof?.pent?.minHeight_mm ?? state?.walls?.height_mm ?? 2400)
+    )
+  );
+  const maxH = Math.max(
+    100,
+    Math.floor(
+      Number(state?.roof?.pent?.maxHeight_mm ?? state?.walls?.height_mm ?? 2400)
+    )
+  );
 
   return {
     roofW_mm: roofW,
@@ -531,89 +483,6 @@ function computeRoofData(state) {
     minH_mm: minH,
     maxH_mm: maxH,
   };
-}
-
-function computeBearingPlaneFromWalls(scene, data) {
-  // Find all wall top plate meshes (including basic panel tops)
-  const candidates = scene.meshes.filter((m) => {
-    if (!m || !m.name || typeof m.name !== "string") return false;
-    if (!m.name.startsWith("wall-")) return false;
-    return m.name.indexOf("plate-top") >= 0;
-  });
-
-  // Fallback plane if none: use roof.pent min/max with wall rise inferred from current walls height.
-  if (!candidates.length) {
-    // World X reference: walls are shifted by -25mm in index.js
-    const x0_m = (-25) / 1000;
-    const frameW_m = Math.max(1, Math.floor(Number(data.frameW_mm))) / 1000;
-
-    // Use state-driven heights in mm and assume they already include rise via walls build; we only need a consistent plane.
-    const leftY_m = Math.max(0, Number.isFinite(data.minH_mm) ? data.minH_mm : 2400) / 1000;
-    const rightY_m = Math.max(0, Number.isFinite(data.maxH_mm) ? data.maxH_mm : 2400) / 1000;
-
-    const k = frameW_m > 0 ? (rightY_m - leftY_m) / frameW_m : 0;
-    const c = leftY_m - k * x0_m;
-    const theta = Math.atan(k);
-    return { k, c, theta };
-  }
-
-  // Compute centerX and group by min/max centerX with tolerance based on bbox extents (no guessed constants)
-  const items = [];
-  for (let i = 0; i < candidates.length; i++) {
-    const m = candidates[i];
-    try {
-      const bi = m.getBoundingInfo && m.getBoundingInfo();
-      if (!bi || !bi.boundingBox) continue;
-      const bb = bi.boundingBox;
-      const minW = bb.minimumWorld;
-      const maxW = bb.maximumWorld;
-      const centerX = (minW.x + maxW.x) / 2;
-      const extX = Math.max(0, maxW.x - minW.x);
-      items.push({ m, centerX, extX, topY: maxW.y });
-    } catch (e) {}
-  }
-
-  if (!items.length) {
-    const k = 0, c = 0, theta = 0;
-    return { k, c, theta };
-  }
-
-  let minCX = items[0].centerX;
-  let maxCX = items[0].centerX;
-  let maxExtX = items[0].extX;
-  for (let i = 1; i < items.length; i++) {
-    minCX = Math.min(minCX, items[i].centerX);
-    maxCX = Math.max(maxCX, items[i].centerX);
-    maxExtX = Math.max(maxExtX, items[i].extX);
-  }
-
-  const tol = Math.max(1e-6, maxExtX); // bbox-based tolerance (meters)
-
-  const left = [];
-  const right = [];
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (Math.abs(it.centerX - minCX) <= tol) left.push(it);
-    if (Math.abs(it.centerX - maxCX) <= tol) right.push(it);
-  }
-
-  const leftBearingY = left.length
-    ? left.reduce((a, b) => (b.topY > a ? b.topY : a), left[0].topY)
-    : items.reduce((a, b) => (b.topY > a ? b.topY : a), items[0].topY);
-
-  const rightBearingY = right.length
-    ? right.reduce((a, b) => (b.topY > a ? b.topY : a), right[0].topY)
-    : items.reduce((a, b) => (b.topY > a ? b.topY : a), items[0].topY);
-
-  // Frame width is along WORLD X; reference X0 is the shifted wall frame origin (-25mm)
-  const x0_m = (-25) / 1000;
-  const frameW_m = Math.max(1, Math.floor(Number(data.frameW_mm))) / 1000;
-
-  const k = frameW_m > 0 ? (rightBearingY - leftBearingY) / frameW_m : 0;
-  const c = leftBearingY - k * x0_m;
-  const theta = Math.atan(k);
-
-  return { k, c, theta };
 }
 
 /**
