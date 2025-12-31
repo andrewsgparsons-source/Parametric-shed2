@@ -9,11 +9,6 @@
  * All roof meshes:
  * - name prefix "roof-"
  * - metadata.dynamic === true
- *
- * CHANGE (radical idea #1):
- * - Stop deriving bearing constraints from wall meshes/top-plate meshes.
- * - Use analytic bearing lines from state + resolved dims (authoritative), matching walls.js pent definition:
- *   pitch runs along X (width): x=0 => minHeight, x=frameW => maxHeight.
  */
 
 import { CONFIG, resolveDims } from "../params.js";
@@ -41,6 +36,7 @@ export function build3D(state, ctx) {
     if (nm === "roof-root" || nm.startsWith("roof-")) roofNodes.add(n);
   }
 
+  // Dispose meshes first
   for (let i = 0; i < roofMeshes.length; i++) {
     const m = roofMeshes[i];
     try {
@@ -48,6 +44,7 @@ export function build3D(state, ctx) {
     } catch (e) {}
   }
 
+  // Dispose transform nodes (deepest first)
   const nodesArr = Array.from(roofNodes);
   nodesArr.sort((a, b) => {
     const depth = (n) => {
@@ -72,21 +69,8 @@ export function build3D(state, ctx) {
 
   const data = computeRoofData(state);
   const dims = resolveDims(state);
-
   const ovh = (dims && dims.overhang) ? dims.overhang : { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
-  const l_mm = Math.max(0, Math.floor(Number(ovh.l_mm || 0)));
-  const r_mm = Math.max(0, Math.floor(Number(ovh.r_mm || 0)));
-  const f_mm = Math.max(0, Math.floor(Number(ovh.f_mm || 0)));
-  const b_mm = Math.max(0, Math.floor(Number(ovh.b_mm || 0)));
 
-  const frameW_mm = Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? state?.w ?? 1)));
-  const frameD_mm = Math.max(1, Math.floor(Number(dims?.frame?.d_mm ?? state?.d ?? 1)));
-
-  // Analytic pent heights (authoritative for roof bearing)
-  const minH_mm = Math.max(100, Math.floor(Number(data.minH_mm || 2400)));
-  const maxH_mm = Math.max(100, Math.floor(Number(data.maxH_mm || 2400)));
-
-  // Materials
   const joistMat = materials && materials.timber ? materials.timber : null;
 
   const osbMat = (() => {
@@ -119,6 +103,188 @@ export function build3D(state, ctx) {
     if (parentNode) mesh.parent = parentNode;
     return mesh;
   }
+
+  function boundsForMeshes(meshes) {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    let found = false;
+    for (let i = 0; i < meshes.length; i++) {
+      const m = meshes[i];
+      if (!m) continue;
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const bb = bi.boundingBox;
+        const ax = bb.minimumWorld.x, bx = bb.maximumWorld.x;
+        const az = bb.minimumWorld.z, bz = bb.maximumWorld.z;
+        if (Number.isFinite(ax) && Number.isFinite(bx) && Number.isFinite(az) && Number.isFinite(bz)) {
+          found = true;
+          if (ax < minX) minX = ax;
+          if (bx > maxX) maxX = bx;
+          if (az < minZ) minZ = az;
+          if (bz > maxZ) maxZ = bz;
+        }
+      } catch (e) {}
+    }
+    if (!found) return null;
+    return { minX, maxX, minZ, maxZ };
+  }
+
+  // ---- Overhang footprint extents derived from actual wall bounds (no guessed offsets) ----
+  const wallAll = [];
+  for (let i = 0; i < (scene.meshes || []).length; i++) {
+    const m = scene.meshes[i];
+    if (!m) continue;
+    const nm = String(m.name || "");
+    if (!nm.startsWith("wall-")) continue;
+    if (m.isDisposed && m.isDisposed()) continue;
+    wallAll.push(m);
+  }
+
+  const wallBounds = boundsForMeshes(wallAll);
+  const wallMinX_m = wallBounds ? wallBounds.minX : 0;
+  const wallMaxX_m = wallBounds ? wallBounds.maxX : (wallMinX_m + (Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? 1))) / 1000));
+  const wallMinZ_m = wallBounds ? wallBounds.minZ : 0;
+  const wallMaxZ_m = wallBounds ? wallBounds.maxZ : (wallMinZ_m + (Math.max(1, Math.floor(Number(dims?.frame?.d_mm ?? 1))) / 1000));
+
+  const l_m = Math.max(0, Math.floor(Number(ovh.l_mm || 0))) / 1000;
+  const r_m = Math.max(0, Math.floor(Number(ovh.r_mm || 0))) / 1000;
+  const f_m = Math.max(0, Math.floor(Number(ovh.f_mm || 0))) / 1000;
+  const b_m = Math.max(0, Math.floor(Number(ovh.b_mm || 0))) / 1000;
+
+  const roofMinX_m = wallMinX_m - l_m;
+  const roofMaxX_m = wallMaxX_m + r_m;
+  const roofMinZ_m = wallMinZ_m - f_m;
+  const roofMaxZ_m = wallMaxZ_m + b_m;
+
+  // ---- Robust top-plate finder (front/back) ----
+  function findTopPlateMesh(wallId) {
+    const prefix = `wall-${wallId}-`;
+    let best = null;
+    let bestLen = -1;
+
+    for (let i = 0; i < (scene.meshes || []).length; i++) {
+      const m = scene.meshes[i];
+      if (!m) continue;
+      if (m.isDisposed && m.isDisposed()) continue;
+      if (!m.metadata || m.metadata.dynamic !== true) continue;
+
+      const nm = String(m.name || "");
+      if (!nm.startsWith(prefix)) continue;
+      if (!nm.endsWith("plate-top")) continue;
+
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const bb = bi.boundingBox;
+        const dx = Math.abs(bb.maximumWorld.x - bb.minimumWorld.x);
+        const dz = Math.abs(bb.maximumWorld.z - bb.minimumWorld.z);
+        const planLen = Math.max(dx, dz);
+        if (Number.isFinite(planLen) && planLen > bestLen) {
+          bestLen = planLen;
+          best = m;
+        }
+      } catch (e) {}
+    }
+
+    return best;
+  }
+
+  function plateInfoFromMesh(mesh) {
+    if (!mesh) return null;
+    try {
+      mesh.computeWorldMatrix(true);
+      const bi = mesh.getBoundingInfo && mesh.getBoundingInfo();
+      if (!bi || !bi.boundingBox) return null;
+      const bb = bi.boundingBox;
+
+      const minX = bb.minimumWorld.x, maxX = bb.maximumWorld.x;
+      const minZ = bb.minimumWorld.z, maxZ = bb.maximumWorld.z;
+      const dx = Math.abs(maxX - minX);
+      const dz = Math.abs(maxZ - minZ);
+      const planLen = Math.max(dx, dz);
+
+      const cx = (minX + maxX) * 0.5;
+      const cz = (minZ + maxZ) * 0.5;
+      const topY = bb.maximumWorld.y;
+
+      let axis = "x";
+      if (dz > dx) axis = "z";
+
+      return {
+        name: String(mesh.name || ""),
+        mesh,
+        topY_m: Number.isFinite(topY) ? topY : null,
+        cx_m: Number.isFinite(cx) ? cx : null,
+        cz_m: Number.isFinite(cz) ? cz : null,
+        planLen_m: Number.isFinite(planLen) ? planLen : null,
+        axis
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  let frontPlateMesh = findTopPlateMesh("front");
+  let backPlateMesh = findTopPlateMesh("back");
+
+  let frontPlate = plateInfoFromMesh(frontPlateMesh);
+  let backPlate = plateInfoFromMesh(backPlateMesh);
+
+  // Fallback plate info if meshes missing (walls hidden/not built)
+  if (!frontPlate || frontPlate.topY_m == null || frontPlate.cx_m == null || frontPlate.cz_m == null) {
+    frontPlate = {
+      name: frontPlateMesh ? String(frontPlateMesh.name || "") : "",
+      mesh: frontPlateMesh || null,
+      topY_m: Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000),
+      cx_m: (roofMinX_m + roofMaxX_m) * 0.5,
+      cz_m: wallMinZ_m,
+      planLen_m: Math.abs(wallMaxX_m - wallMinX_m),
+      axis: "x"
+    };
+  }
+  if (!backPlate || backPlate.topY_m == null || backPlate.cx_m == null || backPlate.cz_m == null) {
+    backPlate = {
+      name: backPlateMesh ? String(backPlateMesh.name || "") : "",
+      mesh: backPlateMesh || null,
+      topY_m: Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000),
+      cx_m: (roofMinX_m + roofMaxX_m) * 0.5,
+      cz_m: wallMaxZ_m,
+      planLen_m: Math.abs(wallMaxX_m - wallMinX_m),
+      axis: "x"
+    };
+  }
+
+  // Defensive: ensure front/back are ordered by world Z (front = smaller Z)
+  if (Number.isFinite(frontPlate.cz_m) && Number.isFinite(backPlate.cz_m) && frontPlate.cz_m > backPlate.cz_m) {
+    const tmp = frontPlate;
+    frontPlate = backPlate;
+    backPlate = tmp;
+  }
+
+  // ---- Determine long axis from plates (axis-aligned) ----
+  let longAxisWorld = "x";
+  if (frontPlate.axis === backPlate.axis) {
+    longAxisWorld = frontPlate.axis;
+  } else {
+    const fL = Number(frontPlate.planLen_m);
+    const bL = Number(backPlate.planLen_m);
+    if (Number.isFinite(fL) && Number.isFinite(bL)) {
+      longAxisWorld = (fL >= bL) ? frontPlate.axis : backPlate.axis;
+    } else {
+      longAxisWorld = frontPlate.axis;
+    }
+  }
+
+  const longAxisVec = (longAxisWorld === "x")
+    ? new BABYLON.Vector3(1, 0, 0)
+    : new BABYLON.Vector3(0, 0, 1);
+
+  const pitchAxisWorld = (longAxisWorld === "x") ? "z" : "x";
+  const pitchAxisVec = (pitchAxisWorld === "x")
+    ? new BABYLON.Vector3(1, 0, 0)
+    : new BABYLON.Vector3(0, 0, 1);
 
   // ---- Build rigid roof assembly under roofRoot at identity (local underside y=0) ----
   const roofRoot = new BABYLON.TransformNode("roof-root", scene);
@@ -204,106 +370,220 @@ export function build3D(state, ctx) {
     );
   }
 
-  // ---- Analytic alignment (no wall mesh queries) ----
-  // Authoritative roof plan extents in world:
-  // - Frame is at world X:[0..frameW], Z:[0..frameD]
-  // - Roof should cover X:[-l..frameW+r], Z:[-f..frameD+b]
-  const targetMinX_m = (-l_mm) / 1000;
-  const targetMinZ_m = (-f_mm) / 1000;
+  // ---- Compute combined local bounds of roof children (roofRoot is identity) ----
+  let localMinX = Infinity, localMaxX = -Infinity, localMinZ = Infinity, localMaxZ = -Infinity;
+  const kids = roofRoot.getChildMeshes ? roofRoot.getChildMeshes(false) : [];
+  for (let i = 0; i < kids.length; i++) {
+    const m = kids[i];
+    if (!m) continue;
+    try {
+      m.computeWorldMatrix(true);
+      const bi = m.getBoundingInfo && m.getBoundingInfo();
+      if (!bi || !bi.boundingBox) continue;
+      const bb = bi.boundingBox;
+      const ax = bb.minimumWorld.x;
+      const bx = bb.maximumWorld.x;
+      const az = bb.minimumWorld.z;
+      const bz = bb.maximumWorld.z;
+      if (Number.isFinite(ax) && Number.isFinite(bx) && Number.isFinite(az) && Number.isFinite(bz)) {
+        if (ax < localMinX) localMinX = ax;
+        if (bx > localMaxX) localMaxX = bx;
+        if (az < localMinZ) localMinZ = az;
+        if (bz > localMaxZ) localMaxZ = bz;
+      }
+    } catch (e) {}
+  }
+  if (!Number.isFinite(localMinX) || !Number.isFinite(localMaxX) || !Number.isFinite(localMinZ) || !Number.isFinite(localMaxZ)) {
+    localMinX = 0;
+    localMaxX = Math.max(1, Math.floor(Number(dims?.roof?.w_mm ?? 1))) / 1000;
+    localMinZ = 0;
+    localMaxZ = Math.max(1, Math.floor(Number(dims?.roof?.d_mm ?? 1))) / 1000;
+  }
 
-  // Rotation:
-  // - Pent slope is along WORLD +X (walls.js definition)
-  // - So the roof's "span axis" (A axis) must align to WORLD +X.
-  const slopeAxisWorld = new BABYLON.Vector3(1, 0, 0);
-  const pitchAxisWorld = new BABYLON.Vector3(0, 0, 1); // rotate about Z to raise +X end
+  const midX = (localMinX + localMaxX) * 0.5;
+  const midZ = (localMinZ + localMaxZ) * 0.5;
 
-  // Source axis in roof local that represents A (rafter span axis):
-  // data.isWShort => A maps to local X, else A maps to local Z
-  const slopeAxisLocal = data.isWShort ? new BABYLON.Vector3(1, 0, 0) : new BABYLON.Vector3(0, 0, 1);
+  const frontContactLocal = (pitchAxisWorld === "z")
+    ? new BABYLON.Vector3(midX, 0, localMinZ)
+    : new BABYLON.Vector3(localMinX, 0, midZ);
 
-  // Yaw around Y to align slopeAxisLocal -> +X
-  const dotYaw = clamp((slopeAxisLocal.x * slopeAxisWorld.x + slopeAxisLocal.z * slopeAxisWorld.z), -1, 1);
-  const crossYawY = (slopeAxisLocal.x * slopeAxisWorld.z - slopeAxisLocal.z * slopeAxisWorld.x);
-  let yaw = (Math.acos(dotYaw)) * (crossYawY >= 0 ? 1 : -1);
+  const backContactLocal = (pitchAxisWorld === "z")
+    ? new BABYLON.Vector3(midX, 0, localMaxZ)
+    : new BABYLON.Vector3(localMaxX, 0, midZ);
+
+  const roofCenterLocal = new BABYLON.Vector3(midX, 0, midZ);
+
+  // ---- Step A: reset transforms (already identity) ----
+  roofRoot.position = new BABYLON.Vector3(0, 0, 0);
+  roofRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
+
+  // ---- Step B: yaw so rafters (local axis) align parallel to longAxisWorld ----
+  const rafterAxisLocal = data.isWShort ? "x" : "z";
+  const rafterAxisLocalVec = (rafterAxisLocal === "x")
+    ? new BABYLON.Vector3(1, 0, 0)
+    : new BABYLON.Vector3(0, 0, 1);
+
+  const dotYaw = clamp(rafterAxisLocalVec.x * longAxisVec.x + rafterAxisLocalVec.z * longAxisVec.z, -1, 1);
+  const crossYawY = (rafterAxisLocalVec.x * longAxisVec.z - rafterAxisLocalVec.z * longAxisVec.x);
+  const yaw = (Math.acos(dotYaw)) * (crossYawY >= 0 ? 1 : -1);
+
   const qYaw = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), yaw);
 
-  // Pitch angle derived from analytic rise/run (frameW)
-  const rise_m = (maxH_mm - minH_mm) / 1000;
-  const run_m = Math.max(1e-6, frameW_mm / 1000);
+  // ---- Step C: pitch around long axis by angle derived from plate heights/run ----
+  const rise_m = (Number(backPlate.topY_m) - Number(frontPlate.topY_m));
+
+  let run_m = 0;
+  if (pitchAxisWorld === "z") run_m = Math.abs(Number(backPlate.cz_m) - Number(frontPlate.cz_m));
+  else run_m = Math.abs(Number(backPlate.cx_m) - Number(frontPlate.cx_m));
+  run_m = Math.max(1e-6, run_m);
+
   const angle = Math.atan2(rise_m, run_m);
-  const qPitch = BABYLON.Quaternion.RotationAxis(pitchAxisWorld, angle);
+
+  const qPitch = BABYLON.Quaternion.RotationAxis(longAxisVec, angle);
 
   roofRoot.rotationQuaternion = qPitch.multiply(qYaw);
 
-  // Step 1: translate in X/Z so rotated roof's PLAN min corner lands on targetMinX/Z.
-  // Compute 4 plan corners of the *roof rectangle* in local (0..roofW, 0..roofD).
-  const roofW_mm = Math.max(1, Math.floor(Number(dims?.roof?.w_mm ?? data.roofW_mm ?? 1)));
-  const roofD_mm = Math.max(1, Math.floor(Number(dims?.roof?.d_mm ?? data.roofD_mm ?? 1)));
-
-  const cornersLocal = [
-    new BABYLON.Vector3(0 / 1000, 0, 0 / 1000),
-    new BABYLON.Vector3(roofW_mm / 1000, 0, 0 / 1000),
-    new BABYLON.Vector3(0 / 1000, 0, roofD_mm / 1000),
-    new BABYLON.Vector3(roofW_mm / 1000, 0, roofD_mm / 1000),
-  ];
-
-  function worldOfLocal(pLocal) {
-    try {
-      const wm = roofRoot.getWorldMatrix();
-      return BABYLON.Vector3.TransformCoordinates(pLocal, wm);
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // With position at (0,0,0), get minX/minZ in world for the rotated corners
-  let minCornerX = Infinity;
-  let minCornerZ = Infinity;
-  for (let i = 0; i < cornersLocal.length; i++) {
-    const wpt = worldOfLocal(cornersLocal[i]);
-    if (!wpt) continue;
-    if (Number.isFinite(wpt.x) && wpt.x < minCornerX) minCornerX = wpt.x;
-    if (Number.isFinite(wpt.z) && wpt.z < minCornerZ) minCornerZ = wpt.z;
-  }
-  if (!Number.isFinite(minCornerX)) minCornerX = 0;
-  if (!Number.isFinite(minCornerZ)) minCornerZ = 0;
-
-  roofRoot.position.x += (targetMinX_m - minCornerX);
-  roofRoot.position.z += (targetMinZ_m - minCornerZ);
-
-  // Step 2: translate Y so the underside at frame's LEFT edge (x=0) hits minH,
-  // and (by construction) frame RIGHT edge (x=frameW) hits maxH.
-  // Choose two analytic bearing sample points at mid-depth of the frame.
-  const midFrameZ_mm = Math.floor(frameD_mm / 2);
-  const pLeftLocal = new BABYLON.Vector3((l_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
-  const pRightLocal = new BABYLON.Vector3((l_mm + frameW_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
-
-  const worldLeft = worldOfLocal(pLeftLocal);
-  if (worldLeft) {
-    const targetYLeft_m = (minH_mm / 1000);
-    roofRoot.position.y += (targetYLeft_m - worldLeft.y);
-  } else {
-    roofRoot.position.y = (minH_mm / 1000);
-  }
-
-  // Debug-only: report right-edge error after final placement
-  let worldRight = null;
-  let rightError_m = null;
+  // ---- Step D: translate Y so front underside contact hits frontPlateTopY ----
+  let worldFront = null;
   try {
-    worldRight = worldOfLocal(pRightLocal);
-    if (worldRight) {
-      const targetYRight_m = (maxH_mm / 1000);
-      rightError_m = targetYRight_m - worldRight.y;
+    const wm = roofRoot.getWorldMatrix();
+    worldFront = BABYLON.Vector3.TransformCoordinates(frontContactLocal, wm);
+  } catch (e) {}
+
+  if (worldFront) {
+    const dy = Number(frontPlate.topY_m) - worldFront.y;
+    roofRoot.position.y += dy;
+  } else {
+    roofRoot.position.y = Number(frontPlate.topY_m);
+  }
+
+  // ---- Step F: translate X/Z so roof plan centers over plate centers (average) ----
+  let worldRoofCenter = null;
+  try {
+    const wm2 = roofRoot.getWorldMatrix();
+    worldRoofCenter = BABYLON.Vector3.TransformCoordinates(roofCenterLocal, wm2);
+  } catch (e) {}
+
+  const targetCenterX = (Number(frontPlate.cx_m) + Number(backPlate.cx_m)) * 0.5;
+  const targetCenterZ = (Number(frontPlate.cz_m) + Number(backPlate.cz_m)) * 0.5;
+
+  if (worldRoofCenter) {
+    roofRoot.position.x += (targetCenterX - worldRoofCenter.x);
+    roofRoot.position.z += (targetCenterZ - worldRoofCenter.z);
+  } else {
+    roofRoot.position.x = targetCenterX;
+    roofRoot.position.z = targetCenterZ;
+  }
+
+  // ---- Validate back contact (debug only; no iterative fitting) ----
+  let worldBack = null;
+  let backError_m = null;
+  try {
+    const wm3 = roofRoot.getWorldMatrix();
+    worldBack = BABYLON.Vector3.TransformCoordinates(backContactLocal, wm3);
+    backError_m = Number(backPlate.topY_m) - worldBack.y;
+  } catch (e) {}
+
+  // ---- Instrumentation: sample bearing-edge errors along the long axis ----
+  function stats(arr) {
+    if (!arr || !arr.length) return { n: 0, min: null, max: null, mean: null, meanAbs: null };
+    let mn = Infinity, mx = -Infinity, sum = 0, sumAbs = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const v = Number(arr[i]);
+      if (!Number.isFinite(v)) continue;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+      sum += v;
+      sumAbs += Math.abs(v);
+    }
+    const n = arr.length;
+    return {
+      n,
+      min: Number.isFinite(mn) ? mn : null,
+      max: Number.isFinite(mx) ? mx : null,
+      mean: n ? (sum / n) : null,
+      meanAbs: n ? (sumAbs / n) : null
+    };
+  }
+
+  function clamp01(t) { return Math.max(0, Math.min(1, Number(t))); }
+
+  // Analytic wall-top height along X (pent pitch runs along X per walls.js)
+  const minH_m = Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000);
+  const maxH_m = Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000);
+  const wallSpanX_m = Math.max(1e-6, (wallMaxX_m - wallMinX_m));
+  function heightAtWorldX_m(x_m) {
+    const t = clamp01((Number(x_m) - wallMinX_m) / wallSpanX_m);
+    return minH_m + (maxH_m - minH_m) * t;
+  }
+
+  // Sample underside edge points in local space, transform to world, compare to expected bearing line.
+  const sampleN = 21;
+  const frontErrY = [], backErrY = [], frontErrZ = [], backErrZ = [];
+
+  try {
+    const wmS = roofRoot.getWorldMatrix();
+
+    if (pitchAxisWorld === "z") {
+      // Front/back edges are at local z = minZ/maxZ. Sample along local X.
+      for (let i = 0; i < sampleN; i++) {
+        const t = sampleN === 1 ? 0 : (i / (sampleN - 1));
+        const lx = localMinX + (localMaxX - localMinX) * t;
+
+        const pF = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(lx, 0, localMinZ), wmS);
+        const pB = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(lx, 0, localMaxZ), wmS);
+
+        const yExpF = heightAtWorldX_m(pF.x);
+        const yExpB = heightAtWorldX_m(pB.x);
+
+        // Compare underside Y to expected top-plate top at that X
+        frontErrY.push((yExpF - pF.y));
+        backErrY.push((yExpB - pB.y));
+
+        // Compare Z to the wall bearing lines (front wall ~ minZ, back wall ~ maxZ)
+        frontErrZ.push((wallMinZ_m - pF.z));
+        backErrZ.push((wallMaxZ_m - pB.z));
+      }
+    } else {
+      // Front/back edges are at local x = minX/maxX. Sample along local Z.
+      for (let i = 0; i < sampleN; i++) {
+        const t = sampleN === 1 ? 0 : (i / (sampleN - 1));
+        const lz = localMinZ + (localMaxZ - localMinZ) * t;
+
+        const pF = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(localMinX, 0, lz), wmS);
+        const pB = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(localMaxX, 0, lz), wmS);
+
+        const yExpF = heightAtWorldX_m(pF.x);
+        const yExpB = heightAtWorldX_m(pB.x);
+
+        frontErrY.push((yExpF - pF.y));
+        backErrY.push((yExpB - pB.y));
+
+        frontErrZ.push((wallMinZ_m - pF.z));
+        backErrZ.push((wallMaxZ_m - pB.z));
+      }
     }
   } catch (e) {}
 
+  const sampleSummary = {
+    n: sampleN,
+    front: {
+      dy_m: stats(frontErrY),
+      dz_m: stats(frontErrZ)
+    },
+    back: {
+      dy_m: stats(backErrY),
+      dz_m: stats(backErrZ)
+    }
+  };
+
   // ---- Debug visuals + dbg object (roof.js only) ----
-  function mkDbgSphere(name, x_m, y_m, z_m, isGood) {
+  function mkDbgSphere(name, x_m, y_m, z_m, isFront) {
     try {
       const s = BABYLON.MeshBuilder.CreateSphere(name, { diameter: 0.06 }, scene);
       s.position = new BABYLON.Vector3(x_m, y_m, z_m);
       const mat = new BABYLON.StandardMaterial(name + "-mat", scene);
-      if (isGood) mat.emissiveColor = new BABYLON.Color3(0.1, 0.9, 0.1);
+      if (isFront) mat.emissiveColor = new BABYLON.Color3(0.1, 0.9, 0.1);
       else mat.emissiveColor = new BABYLON.Color3(0.9, 0.1, 0.1);
       s.material = mat;
       s.metadata = { dynamic: true };
@@ -315,23 +595,74 @@ export function build3D(state, ctx) {
 
   try {
     if (typeof window !== "undefined" && window.__dbg) {
-      const leftW = worldOfLocal(pLeftLocal);
-      const rightW = worldOfLocal(pRightLocal);
-
       window.__dbg.roofFit = {
-        mode: "analytic-bearing-lines",
-        frame: { w_mm: frameW_mm, d_mm: frameD_mm },
-        overhang_mm: { l: l_mm, r: r_mm, f: f_mm, b: b_mm },
-        heights_mm: { minH: minH_mm, maxH: maxH_mm },
-        rise_m: rise_m,
-        run_m: run_m,
+        frontPlate: {
+          name: String(frontPlate.name || ""),
+          topY: Number(frontPlate.topY_m),
+          cx: Number(frontPlate.cx_m),
+          cz: Number(frontPlate.cz_m),
+          planLen: Number(frontPlate.planLen_m)
+        },
+        backPlate: {
+          name: String(backPlate.name || ""),
+          topY: Number(backPlate.topY_m),
+          cx: Number(backPlate.cx_m),
+          cz: Number(backPlate.cz_m),
+          planLen: Number(backPlate.planLen_m)
+        },
+        longAxis: { x: longAxisWorld === "x" ? 1 : 0, z: longAxisWorld === "z" ? 1 : 0 },
+        pitchAxis: { x: pitchAxisWorld === "x" ? 1 : 0, z: pitchAxisWorld === "z" ? 1 : 0 },
+        rise: rise_m,
+        run: run_m,
         angle: angle,
-        rightError_mm: rightError_m == null ? null : (rightError_m * 1000),
+        backError_mm: backError_m == null ? null : (backError_m * 1000),
+
+        // Instrumentation (analytic bearing-line comparison, sampled along long axis)
+        sample: {
+          n: sampleSummary.n,
+          front: {
+            dy_mm: {
+              min: sampleSummary.front.dy_m.min == null ? null : sampleSummary.front.dy_m.min * 1000,
+              max: sampleSummary.front.dy_m.max == null ? null : sampleSummary.front.dy_m.max * 1000,
+              mean: sampleSummary.front.dy_m.mean == null ? null : sampleSummary.front.dy_m.mean * 1000,
+              meanAbs: sampleSummary.front.dy_m.meanAbs == null ? null : sampleSummary.front.dy_m.meanAbs * 1000
+            },
+            dz_mm: {
+              min: sampleSummary.front.dz_m.min == null ? null : sampleSummary.front.dz_m.min * 1000,
+              max: sampleSummary.front.dz_m.max == null ? null : sampleSummary.front.dz_m.max * 1000,
+              mean: sampleSummary.front.dz_m.mean == null ? null : sampleSummary.front.dz_m.mean * 1000,
+              meanAbs: sampleSummary.front.dz_m.meanAbs == null ? null : sampleSummary.front.dz_m.meanAbs * 1000
+            }
+          },
+          back: {
+            dy_mm: {
+              min: sampleSummary.back.dy_m.min == null ? null : sampleSummary.back.dy_m.min * 1000,
+              max: sampleSummary.back.dy_m.max == null ? null : sampleSummary.back.dy_m.max * 1000,
+              mean: sampleSummary.back.dy_m.mean == null ? null : sampleSummary.back.dy_m.mean * 1000,
+              meanAbs: sampleSummary.back.dy_m.meanAbs == null ? null : sampleSummary.back.dy_m.meanAbs * 1000
+            },
+            dz_mm: {
+              min: sampleSummary.back.dz_m.min == null ? null : sampleSummary.back.dz_m.min * 1000,
+              max: sampleSummary.back.dz_m.max == null ? null : sampleSummary.back.dz_m.max * 1000,
+              mean: sampleSummary.back.dz_m.mean == null ? null : sampleSummary.back.dz_m.mean * 1000,
+              meanAbs: sampleSummary.back.dz_m.meanAbs == null ? null : sampleSummary.back.dz_m.meanAbs * 1000
+            }
+          }
+        }
       };
 
-      // Visualize analytic bearing samples
-      if (leftW) mkDbgSphere("roof-dbg-bearing-left", leftW.x, leftW.y, leftW.z, true);
-      if (rightW) mkDbgSphere("roof-dbg-bearing-right", rightW.x, rightW.y, rightW.z, false);
+      // Optional: quick console signal when debugging
+      try {
+        if (window.__dbg && window.__dbg.roofFit && typeof console !== "undefined" && console.log) {
+          console.log("[roofFit] sample dy/dz (mm):", window.__dbg.roofFit.sample);
+        }
+      } catch (e) {}
+
+      mkDbgSphere("roof-dbg-frontPlate", Number(frontPlate.cx_m), Number(frontPlate.topY_m), Number(frontPlate.cz_m), true);
+      mkDbgSphere("roof-dbg-backPlate", Number(backPlate.cx_m), Number(backPlate.topY_m), Number(backPlate.cz_m), false);
+
+      if (worldFront) mkDbgSphere("roof-dbg-frontContact", worldFront.x, worldFront.y, worldFront.z, true);
+      if (worldBack) mkDbgSphere("roof-dbg-backContact", worldBack.x, worldBack.y, worldBack.z, false);
     }
   } catch (e) {}
 }
@@ -460,24 +791,29 @@ function computeRoofData(state) {
   const frameW = Math.max(1, Math.floor(Number(dims?.frame?.w_mm)));
   const frameD = Math.max(1, Math.floor(Number(dims?.frame?.d_mm)));
 
+  // Roof-local origin is (0,0). World alignment is handled by roofRoot positioning.
   const originX_mm = 0;
   const originZ_mm = 0;
 
+  // A = shortest (rafter span), B = longest (placement axis)
   const A = Math.min(roofW, roofD);
   const B = Math.max(roofW, roofD);
 
+  // If roofW is the short axis => A->X, B->Z, else A->Z, B->X
   const isWShort = roofW <= roofD;
 
   const spacing = 600;
 
-  const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w)));
-  const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d)));
+  // Timber section from CONFIG, rotated orientation:
+  const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w))); // typically 50
+  const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d))); // typically 100
 
   const rafterW_mm = baseD;
   const rafterD_mm = baseW;
 
   const rafterLen_mm = A;
 
+  // Placement positions along B
   const pos = [];
   const maxP = Math.max(0, B - rafterW_mm);
 
@@ -496,12 +832,15 @@ function computeRoofData(state) {
   const rafters = [];
   for (let i = 0; i < pos.length; i++) rafters.push({ b0_mm: pos[i] });
 
+  // OSB tiling in AB space: 1220 along A, 2440 along B (no stagger)
   const osbAB = computeOsbPiecesNoStagger(A, B);
 
+  // Map AB pieces to roof-local X/Z consistent with rafter mapping
   const mappedAll = [];
   for (let i = 0; i < osbAB.all.length; i++) {
     const p2 = osbAB.all[i];
     if (isWShort) {
+      // A->X, B->Z
       mappedAll.push({
         kind: p2.kind,
         x0_mm: originX_mm + p2.a0_mm,
@@ -512,6 +851,7 @@ function computeRoofData(state) {
         W_mm: p2.W_mm,
       });
     } else {
+      // A->Z, B->X
       mappedAll.push({
         kind: p2.kind,
         x0_mm: originX_mm + p2.b0_mm,
@@ -575,6 +915,12 @@ function computeRoofData(state) {
   };
 }
 
+/**
+ * No-stagger tiling for 1220×2440 sheets in AB space:
+ * - A axis uses 1220
+ * - B axis uses 2440
+ * Returns all pieces with A/B origins (a0_mm,b0_mm) and sizes (W_mm along A, L_mm along B).
+ */
 function computeOsbPiecesNoStagger(A_mm, B_mm) {
   const A = Math.max(1, Math.floor(A_mm));
   const B = Math.max(1, Math.floor(B_mm));
@@ -594,28 +940,33 @@ function computeOsbPiecesNoStagger(A_mm, B_mm) {
     all.push({ kind, a0_mm: a0, b0_mm: b0, W_mm: W, L_mm: L });
   }
 
+  // Full sheets
   for (let bi = 0; bi < bFull; bi++) {
     for (let ai = 0; ai < aFull; ai++) {
       pushPiece("std", ai * SHEET_A, bi * SHEET_B, SHEET_A, SHEET_B);
     }
   }
 
+  // A remainder strip across full B rows (aRem × 2440)
   if (aRem > 0 && bFull > 0) {
     for (let bi = 0; bi < bFull; bi++) {
       pushPiece("rip", aFull * SHEET_A, bi * SHEET_B, aRem, SHEET_B);
     }
   }
 
+  // B remainder strip across full A cols (1220 × bRem)
   if (bRem > 0 && aFull > 0) {
     for (let ai = 0; ai < aFull; ai++) {
       pushPiece("rip", ai * SHEET_A, bFull * SHEET_B, SHEET_A, bRem);
     }
   }
 
+  // Corner remainder (aRem × bRem)
   if (aRem > 0 && bRem > 0) {
     pushPiece("rip", aFull * SHEET_A, bFull * SHEET_B, aRem, bRem);
   }
 
+  // Total area
   let area = 0;
   for (let i = 0; i < all.length; i++) {
     area += Math.max(0, all[i].W_mm) * Math.max(0, all[i].L_mm);
