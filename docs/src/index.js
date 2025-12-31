@@ -124,6 +124,11 @@ function initApp() {
     var roofMinHeightEl = $("roofMinHeight");
     var roofMaxHeightEl = $("roofMaxHeight");
 
+    var roofApexEaveHeightEl = $("roofApexEaveHeight");
+    var roofApexCrestHeightEl = $("roofApexCrestHeight");
+    var roofHippedEaveHeightEl = $("roofHippedEaveHeight");
+    var roofHippedCrestHeightEl = $("roofHippedCrestHeight");
+
     var overUniformEl = $("roofOverUniform");
     var overFrontEl = $("roofOverFront");
     var overBackEl = $("roofOverBack");
@@ -132,7 +137,6 @@ function initApp() {
 
     var wallSectionEl = $("wallSection"); // NEW
     var wallsVariantEl = $("wallsVariant");
-    var wallHeightEl = $("wallHeight");
 
     var addDoorBtnEl = $("addDoorBtn");
     var removeAllDoorsBtnEl = $("removeAllDoorsBtn");
@@ -149,26 +153,6 @@ function initApp() {
     var saveAsInstanceBtnEl = $("saveAsInstanceBtn");
     var deleteInstanceBtnEl = $("deleteInstanceBtn");
     var instancesHintEl = $("instancesHint");
-
-    function applyWallHeightUiLock(state) {
-      if (!wallHeightEl) return;
-
-      var style = "";
-      try {
-        style = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "";
-      } catch (e0) { style = ""; }
-      if (!style && roofStyleEl) style = String(roofStyleEl.value || "");
-
-      if (style === "pent") {
-        wallHeightEl.disabled = true;
-        wallHeightEl.setAttribute("aria-disabled", "true");
-        wallHeightEl.title = "Disabled for pent roof (use Roof Min/Max Height).";
-      } else {
-        wallHeightEl.disabled = false;
-        try { wallHeightEl.removeAttribute("aria-disabled"); } catch (e1) {}
-        try { wallHeightEl.removeAttribute("title"); } catch (e2) {}
-      }
-    }
 
     // ---- Instances (Save/Load Presets) ----
     var LS_INSTANCES_KEY = "shedInstances_v1";
@@ -719,26 +703,20 @@ function initApp() {
       return roofStyle === "pent";
     }
 
+    function isApexRoofStyle(state) {
+      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
+      return roofStyle === "apex";
+    }
+
+    function isHippedRoofStyle(state) {
+      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
+      return roofStyle === "hipped";
+    }
+
     function clampHeightMm(v, def) {
       var n = Math.max(100, Math.floor(Number(v)));
       return Number.isFinite(n) ? n : def;
     }
-
-    // --- NEW HELPERS: Pent display height calculation (UI only) ---
-    function getPentMinMax(state) {
-      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
-      var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
-      var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
-      var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
-      return { minH: minH, maxH: maxH };
-    }
-
-    function computePentDisplayHeight(state) {
-      var mm = getPentMinMax(state);
-      var mid = Math.round((mm.minH + mm.maxH) / 2);
-      return Math.max(100, mid);
-    }
-    // -------------------------------------------------------------
 
     function getPentHeightsFromState(state) {
       var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
@@ -746,6 +724,22 @@ function initApp() {
       var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
       var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
       return { minH: minH, maxH: maxH, base: base };
+    }
+
+    function getApexHeightsFromState(state) {
+      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
+      var a = (state && state.roof && state.roof.apex) ? state.roof.apex : null;
+      var eaveH = clampHeightMm(a && a.eaveHeight_mm != null ? a.eaveHeight_mm : base, base);
+      var crestH = clampHeightMm(a && a.crestHeight_mm != null ? a.crestHeight_mm : base, base);
+      return { eaveH: eaveH, crestH: crestH, base: base };
+    }
+
+    function getHippedHeightsFromState(state) {
+      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
+      var h = (state && state.roof && state.roof.hipped) ? state.roof.hipped : null;
+      var eaveH = clampHeightMm(h && h.eaveHeight_mm != null ? h.eaveHeight_mm : base, base);
+      var crestH = clampHeightMm(h && h.crestHeight_mm != null ? h.crestHeight_mm : base, base);
+      return { eaveH: eaveH, crestH: crestH, base: base };
     }
 
     function render(state) {
@@ -1414,12 +1408,31 @@ function initApp() {
         }
 
         var isPent = isPentRoofStyle(state);
+        var isApex = isApexRoofStyle(state);
+        var isHipped = isHippedRoofStyle(state);
+
         if (roofMinHeightEl && roofMaxHeightEl) {
           var ph = getPentHeightsFromState(state);
           roofMinHeightEl.value = String(ph.minH);
           roofMaxHeightEl.value = String(ph.maxH);
           roofMinHeightEl.disabled = !isPent;
           roofMaxHeightEl.disabled = !isPent;
+        }
+
+        if (roofApexEaveHeightEl && roofApexCrestHeightEl) {
+          var ah = getApexHeightsFromState(state);
+          roofApexEaveHeightEl.value = String(ah.eaveH);
+          roofApexCrestHeightEl.value = String(ah.crestH);
+          roofApexEaveHeightEl.disabled = !isApex;
+          roofApexCrestHeightEl.disabled = !isApex;
+        }
+
+        if (roofHippedEaveHeightEl && roofHippedCrestHeightEl) {
+          var hh = getHippedHeightsFromState(state);
+          roofHippedEaveHeightEl.value = String(hh.eaveH);
+          roofHippedCrestHeightEl.value = String(hh.crestH);
+          roofHippedEaveHeightEl.disabled = !isHipped;
+          roofHippedCrestHeightEl.disabled = !isHipped;
         }
 
         if (state && state.overhang) {
@@ -1445,16 +1458,6 @@ function initApp() {
 
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
 
-        // --- UPDATED: wall height display logic (UI only) ---
-        if (wallHeightEl) {
-          if (isPent) {
-            wallHeightEl.value = String(computePentDisplayHeight(state));
-          } else if (state && state.walls && state.walls.height_mm != null) {
-            wallHeightEl.value = String(state.walls.height_mm);
-          }
-        }
-        // ----------------------------------------------------
-
         if (wallSectionEl && state && state.walls) {
           var h = null;
           try {
@@ -1463,8 +1466,6 @@ function initApp() {
           } catch (e) {}
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
         }
-
-        applyWallHeightUiLock(state);
 
         var dv = validations && validations.doors ? validations.doors : null;
         var wv = validations && validations.windows ? validations.windows : null;
@@ -1507,7 +1508,6 @@ function initApp() {
         var v = String(roofStyleEl.value || "apex");
         if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
         store.setState({ roof: { style: v } });
-        applyWallHeightUiLock(store.getState());
       });
     }
 
@@ -1520,15 +1520,49 @@ function initApp() {
       store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
     }
 
+    function commitApexHeightsFromInputs() {
+      if (!roofApexEaveHeightEl || !roofApexCrestHeightEl) return;
+      var s = store.getState();
+      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
+      var eaveH = clampHeightMm(roofApexEaveHeightEl.value, base);
+      var crestH = clampHeightMm(roofApexCrestHeightEl.value, base);
+      store.setState({ roof: { apex: { eaveHeight_mm: eaveH, crestHeight_mm: crestH } } });
+    }
+
+    function commitHippedHeightsFromInputs() {
+      if (!roofHippedEaveHeightEl || !roofHippedCrestHeightEl) return;
+      var s = store.getState();
+      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
+      var eaveH = clampHeightMm(roofHippedEaveHeightEl.value, base);
+      var crestH = clampHeightMm(roofHippedCrestHeightEl.value, base);
+      store.setState({ roof: { hipped: { eaveHeight_mm: eaveH, crestHeight_mm: crestH } } });
+    }
+
     if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
-      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
     if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
-      // store.onChange will trigger syncUiFromState; no extra timers needed.
+    });
+
+    if (roofApexEaveHeightEl) roofApexEaveHeightEl.addEventListener("input", function () {
+      if (!isApexRoofStyle(store.getState())) return;
+      commitApexHeightsFromInputs();
+    });
+    if (roofApexCrestHeightEl) roofApexCrestHeightEl.addEventListener("input", function () {
+      if (!isApexRoofStyle(store.getState())) return;
+      commitApexHeightsFromInputs();
+    });
+
+    if (roofHippedEaveHeightEl) roofHippedEaveHeightEl.addEventListener("input", function () {
+      if (!isHippedRoofStyle(store.getState())) return;
+      commitHippedHeightsFromInputs();
+    });
+    if (roofHippedCrestHeightEl) roofHippedCrestHeightEl.addEventListener("input", function () {
+      if (!isHippedRoofStyle(store.getState())) return;
+      commitHippedHeightsFromInputs();
     });
 
     if (vWallsEl) {
@@ -1615,10 +1649,6 @@ function initApp() {
     }
 
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
-    if (wallHeightEl) wallHeightEl.addEventListener("input", function () {
-      if (wallHeightEl && wallHeightEl.disabled === true) return;
-      store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
-    });
 
     if (addDoorBtnEl) {
       addDoorBtnEl.addEventListener("click", function () {
@@ -1690,7 +1720,6 @@ function initApp() {
     store.onChange(function (s) {
       var v = syncInvalidOpeningsIntoState();
       syncUiFromState(s, v);
-      applyWallHeightUiLock(s);
       render(s);
     });
 
@@ -1699,19 +1728,25 @@ function initApp() {
 
     initInstances();
 
-    // Ensure pent defaults mirror current wallHeight on first load (no drift if user never touches them)
+    // Ensure roof height defaults exist on first load (no drift if user never touches them)
     try {
       var s0 = store.getState();
-      if (s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null) {
-        // already present
-      } else {
-        var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
+      var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
+
+      if (!(s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null)) {
         store.setState({ roof: { pent: { minHeight_mm: baseH, maxHeight_mm: baseH } } });
+      }
+
+      if (!(s0 && s0.roof && s0.roof.apex && s0.roof.apex.eaveHeight_mm != null && s0.roof.apex.crestHeight_mm != null)) {
+        store.setState({ roof: { apex: { eaveHeight_mm: baseH, crestHeight_mm: baseH } } });
+      }
+
+      if (!(s0 && s0.roof && s0.roof.hipped && s0.roof.hipped.eaveHeight_mm != null && s0.roof.hipped.crestHeight_mm != null)) {
+        store.setState({ roof: { hipped: { eaveHeight_mm: baseH, crestHeight_mm: baseH } } });
       }
     } catch (e0) {}
 
     syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-    applyWallHeightUiLock(store.getState());
     render(store.getState());
     resume3D();
 
