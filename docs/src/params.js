@@ -76,10 +76,15 @@ export function selectWallsProfile(state) {
 /** Resolve per-side overhangs; blanks fall back to uniform. */
 function resolveOverhangSides(ovh) {
   const uni = clampNonNeg(num(ovh?.uniform_mm, 0));
-  const l = ovh?.left_mm  == null ? uni : clampNonNeg(num(ovh.left_mm, 0));
-  const r = ovh?.right_mm == null ? uni : clampNonNeg(num(ovh.right_mm, 0));
-  const f = ovh?.front_mm == null ? uni : clampNonNeg(num(ovh.front_mm, 0));
-  const b = ovh?.back_mm  == null ? uni : clampNonNeg(num(ovh.back_mm, 0));
+
+  // Treat "" as unset (same as null/undefined), but preserve explicit 0 ("0"/0)
+  const isUnset = (v) => v == null || v === "";
+
+  const l = isUnset(ovh?.left_mm)  ? uni : clampNonNeg(num(ovh.left_mm, 0));
+  const r = isUnset(ovh?.right_mm) ? uni : clampNonNeg(num(ovh.right_mm, 0));
+  const f = isUnset(ovh?.front_mm) ? uni : clampNonNeg(num(ovh.front_mm, 0));
+  const b = isUnset(ovh?.back_mm)  ? uni : clampNonNeg(num(ovh.back_mm, 0));
+
   return { l_mm: l, r_mm: r, f_mm: f, b_mm: b };
 }
 
