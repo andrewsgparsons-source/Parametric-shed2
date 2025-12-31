@@ -68,63 +68,6 @@ export function build3D(state, ctx) {
     }
   })();
 
-  function findWallTopY_m(scene, state) {
-    let maxY = -Infinity;
-    let found = false;
-    for (let i = 0; i < scene.meshes.length; i++) {
-      const m = scene.meshes[i];
-      if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
-      const nm = String(m.name || "");
-      if (!nm.startsWith("wall-")) continue;
-      try {
-        m.computeWorldMatrix(true);
-        const bi = m.getBoundingInfo && m.getBoundingInfo();
-        if (!bi || !bi.boundingBox) continue;
-        const y = bi.boundingBox.maximumWorld.y;
-        if (Number.isFinite(y)) {
-          found = true;
-          if (y > maxY) maxY = y;
-        }
-      } catch (e) {}
-    }
-
-    if (found && Number.isFinite(maxY)) return maxY;
-
-    const h = Math.max(
-      100,
-      Math.floor(
-        Number(
-          state && state.walls && state.walls.height_mm != null
-            ? state.walls.height_mm
-            : 2400
-        )
-      )
-    );
-    return h / 1000;
-  }
-
-  function findWallMinX_m(scene) {
-    let minX = Infinity;
-    let found = false;
-    for (let i = 0; i < scene.meshes.length; i++) {
-      const m = scene.meshes[i];
-      if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
-      const nm = String(m.name || "");
-      if (!nm.startsWith("wall-")) continue;
-      try {
-        m.computeWorldMatrix(true);
-        const bi = m.getBoundingInfo && m.getBoundingInfo();
-        if (!bi || !bi.boundingBox) continue;
-        const x = bi.boundingBox.minimumWorld.x;
-        if (Number.isFinite(x)) {
-          found = true;
-          if (x < minX) minX = x;
-        }
-      } catch (e) {}
-    }
-    return found && Number.isFinite(minX) ? minX : 0;
-  }
-
   function mkBoxBottomLocal(
     name,
     Lx_mm,
@@ -155,21 +98,130 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  const wallTopY_m = findWallTopY_m(scene, state);
-  const roofRootY_m = wallTopY_m;
+  function topYForMeshes(meshes) {
+    let maxY = -Infinity;
+    let found = false;
+    for (let i = 0; i < meshes.length; i++) {
+      const m = meshes[i];
+      if (!m) continue;
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const y = bi.boundingBox.maximumWorld.y;
+        if (Number.isFinite(y)) {
+          found = true;
+          if (y > maxY) maxY = y;
+        }
+      } catch (e) {}
+    }
+    return found && Number.isFinite(maxY) ? maxY : null;
+  }
 
-  const minWallH_mm = Math.max(100, Math.floor(Number(data.minH_mm)));
-  const maxWallH_mm = Math.max(100, Math.floor(Number(data.maxH_mm)));
+  function getLeftRightWallTopY_m(scene, state) {
+    const leftAll = [];
+    const rightAll = [];
+    const leftTop = [];
+    const rightTop = [];
 
-  const rise_mm = Math.floor(maxWallH_mm - minWallH_mm);
-  const run_mm = Math.max(1, Math.floor(Number(resolveDims(state)?.frame?.w_mm ?? data.frameW_mm ?? 1)));
-  const angle = Math.atan2(rise_mm, run_mm);
+    for (let i = 0; i < scene.meshes.length; i++) {
+      const m = scene.meshes[i];
+      if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
+      const nm = String(m.name || "");
+      if (!nm.startsWith("wall-")) continue;
+
+      if (nm.startsWith("wall-left-")) {
+        leftAll.push(m);
+        if (nm.indexOf("plate-top") !== -1) leftTop.push(m);
+      } else if (nm.startsWith("wall-right-")) {
+        rightAll.push(m);
+        if (nm.indexOf("plate-top") !== -1) rightTop.push(m);
+      }
+    }
+
+    const leftY = (leftTop.length ? topYForMeshes(leftTop) : null) ?? topYForMeshes(leftAll);
+    const rightY = (rightTop.length ? topYForMeshes(rightTop) : null) ?? topYForMeshes(rightAll);
+
+    if (leftY != null && rightY != null) return { leftTopY_m: leftY, rightTopY_m: rightY };
+
+    // Fallback when walls hidden/missing: use state heights (NO guessed offsets)
+    const baseH_mm = Math.max(
+      100,
+      Math.floor(
+        Number(
+          state && state.walls && state.walls.height_mm != null ? state.walls.height_mm : 2400
+        )
+      )
+    );
+    const minH_mm = Math.max(
+      100,
+      Math.floor(
+        Number(
+          state && state.roof && state.roof.pent && state.roof.pent.minHeight_mm != null
+            ? state.roof.pent.minHeight_mm
+            : baseH_mm
+        )
+      )
+    );
+    const maxH_mm = Math.max(
+      100,
+      Math.floor(
+        Number(
+          state && state.roof && state.roof.pent && state.roof.pent.maxHeight_mm != null
+            ? state.roof.pent.maxHeight_mm
+            : baseH_mm
+        )
+      )
+    );
+
+    return { leftTopY_m: minH_mm / 1000, rightTopY_m: maxH_mm / 1000 };
+  }
+
+  function findWallMinX_m(scene) {
+    let minX = Infinity;
+    let found = false;
+    for (let i = 0; i < scene.meshes.length; i++) {
+      const m = scene.meshes[i];
+      if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
+      const nm = String(m.name || "");
+      if (!nm.startsWith("wall-")) continue;
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const x = bi.boundingBox.minimumWorld.x;
+        if (Number.isFinite(x)) {
+          found = true;
+          if (x < minX) minX = x;
+        }
+      } catch (e) {}
+    }
+    return found && Number.isFinite(minX) ? minX : 0;
+  }
+
+  const { leftTopY_m, rightTopY_m } = getLeftRightWallTopY_m(scene, state);
+  const roofRootY_m = Math.min(leftTopY_m, rightTopY_m);
+
+  const dims = resolveDims(state);
+  const run_m = Math.max(1e-6, (Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? 1))) / 1000));
+  const rise_m = (rightTopY_m - leftTopY_m);
+
+  const absRise_m = Math.abs(rise_m);
+  const angle = absRise_m <= 1e-9 ? 0 : Math.atan2(absRise_m, run_m);
+
+  // Rotate about Z so +X is higher when right side is higher.
+  let rotZ = 0;
+  if (angle !== 0) {
+    if (rightTopY_m > leftTopY_m) rotZ = -angle;
+    else if (leftTopY_m > rightTopY_m) rotZ = +angle;
+    else rotZ = 0;
+  }
 
   // Root pivot X derived from actual wall geometry (no guessed constants)
   const wallMinX_m = findWallMinX_m(scene);
   const pivotX_mm = wallMinX_m * 1000;
 
-  // Roof hierarchy (prevents fragmentation; anchors Y exactly once)
+  // Roof hierarchy: single rigid tilt (no per-piece Y stepping / no fragmentation)
   const roofRoot = new BABYLON.TransformNode("roof-root", scene);
   roofRoot.metadata = { dynamic: true };
   roofRoot.position = new BABYLON.Vector3(wallMinX_m, roofRootY_m, 0);
@@ -177,16 +229,18 @@ export function build3D(state, ctx) {
   const roofTilt = new BABYLON.TransformNode("roof-tilt", scene);
   roofTilt.metadata = { dynamic: true };
   roofTilt.parent = roofRoot;
-  roofTilt.rotation = new BABYLON.Vector3(0, 0, rise_mm === 0 ? 0 : angle);
+  roofTilt.rotation = new BABYLON.Vector3(0, 0, rotZ);
 
   try {
     if (typeof window !== "undefined" && window.__dbg) {
       window.__dbg.lastRoofSeat = {
-        wallTopY_m,
+        leftTopY_m,
+        rightTopY_m,
         roofRootY_m,
-        rise_mm,
-        run_mm,
-        angle: rise_mm === 0 ? 0 : angle,
+        rise_m,
+        run_m,
+        angle,
+        rotZ,
       };
     }
   } catch (e) {}
@@ -295,8 +349,8 @@ export function build3D(state, ctx) {
         roofD: data.roofD_mm,
         originX: data.originX_mm,
         originZ: data.originZ_mm,
-        minH: minWallH_mm,
-        maxH: maxWallH_mm,
+        minH: data.minH_mm,
+        maxH: data.maxH_mm,
         slopeAxis: "X",
       };
     }
@@ -511,16 +565,30 @@ function computeRoofData(state) {
     }
   }
 
+  const baseH_mm = Math.max(
+    100,
+    Math.floor(
+      Number(state && state.walls && state.walls.height_mm != null ? state.walls.height_mm : 2400)
+    )
+  );
   const minH = Math.max(
     100,
     Math.floor(
-      Number(state?.roof?.pent?.minHeight_mm ?? state?.walls?.height_mm ?? 2400)
+      Number(
+        state && state.roof && state.roof.pent && state.roof.pent.minHeight_mm != null
+          ? state.roof.pent.minHeight_mm
+          : baseH_mm
+      )
     )
   );
   const maxH = Math.max(
     100,
     Math.floor(
-      Number(state?.roof?.pent?.maxHeight_mm ?? state?.walls?.height_mm ?? 2400)
+      Number(
+        state && state.roof && state.roof.pent && state.roof.pent.maxHeight_mm != null
+          ? state.roof.pent.maxHeight_mm
+          : baseH_mm
+      )
     )
   );
 
