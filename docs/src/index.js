@@ -121,6 +121,9 @@ function initApp() {
 
     var roofStyleEl = $("roofStyle");
 
+    var roofMinHeightEl = $("roofMinHeight");
+    var roofMaxHeightEl = $("roofMaxHeight");
+
     var overUniformEl = $("roofOverUniform");
     var overFrontEl = $("roofOverFront");
     var overBackEl = $("roofOverBack");
@@ -628,10 +631,13 @@ function initApp() {
 
       var bomPage = $("bomPage");
       var wallsPage = $("wallsBomPage");
+      var roofPage = $("roofBomPage");
       setDisplay(bomPage, "none");
       setDisplay(wallsPage, "none");
+      setDisplay(roofPage, "none");
       setAriaHidden(bomPage, true);
       setAriaHidden(wallsPage, true);
+      setAriaHidden(roofPage, true);
 
       try { if (engine && typeof engine.resize === "function") engine.resize(); } catch (e) {}
       try { if (camera && typeof camera.attachControl === "function") camera.attachControl(canvas, true); } catch (e) {}
@@ -686,6 +692,24 @@ function initApp() {
         try { disposeAll(ctx && ctx.scene ? ctx.scene : null); return; } catch (e) {}
         try { disposeAll(); } catch (e) {}
       } catch (e) {}
+    }
+
+    function isPentRoofStyle(state) {
+      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
+      return roofStyle === "pent";
+    }
+
+    function clampHeightMm(v, def) {
+      var n = Math.max(100, Math.floor(Number(v)));
+      return Number.isFinite(n) ? n : def;
+    }
+
+    function getPentHeightsFromState(state) {
+      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
+      var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
+      var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
+      var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
+      return { minH: minH, maxH: maxH, base: base };
     }
 
     function render(state) {
@@ -1353,6 +1377,15 @@ function initApp() {
           roofStyleEl.value = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
         }
 
+        var isPent = isPentRoofStyle(state);
+        if (roofMinHeightEl && roofMaxHeightEl) {
+          var ph = getPentHeightsFromState(state);
+          roofMinHeightEl.value = String(ph.minH);
+          roofMaxHeightEl.value = String(ph.maxH);
+          roofMinHeightEl.disabled = !isPent;
+          roofMaxHeightEl.disabled = !isPent;
+        }
+
         if (state && state.overhang) {
           if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
           if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
@@ -1429,6 +1462,24 @@ function initApp() {
         store.setState({ roof: { style: v } });
       });
     }
+
+    function commitPentHeightsFromInputs() {
+      if (!roofMinHeightEl || !roofMaxHeightEl) return;
+      var s = store.getState();
+      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
+      var minH = clampHeightMm(roofMinHeightEl.value, base);
+      var maxH = clampHeightMm(roofMaxHeightEl.value, base);
+      store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
+    }
+
+    if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
+      if (!isPentRoofStyle(store.getState())) return;
+      commitPentHeightsFromInputs();
+    });
+    if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
+      if (!isPentRoofStyle(store.getState())) return;
+      commitPentHeightsFromInputs();
+    });
 
     if (vWallsEl) {
       vWallsEl.addEventListener("change", function (e) {
@@ -1593,6 +1644,17 @@ function initApp() {
     updateOverlay();
 
     initInstances();
+
+    // Ensure pent defaults mirror current wallHeight on first load (no drift if user never touches them)
+    try {
+      var s0 = store.getState();
+      if (s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null) {
+        // already present
+      } else {
+        var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
+        store.setState({ roof: { pent: { minHeight_mm: baseH, maxHeight_mm: baseH } } });
+      }
+    } catch (e0) {}
 
     syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
     render(store.getState());
