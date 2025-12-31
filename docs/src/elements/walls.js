@@ -583,7 +583,15 @@ export function build3D(state, ctx) {
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
         const pref = wallPrefix + `panel-${p + 1}-`;
-        buildBasicPanel(pref, axis, pan.len, origin, pan.start, openingsX, isAlongX ? studLenForXStart : null);
+        buildBasicPanel(
+          pref,
+          axis,
+          pan.len,
+          origin,
+          pan.start,
+          openingsX,
+          isAlongX ? studLenForXStart : (() => studLenFlat)
+        );
       }
 
       for (let i = 0; i < doors.length; i++) {
@@ -1154,3 +1162,4 @@ export function updateBOM(state) {
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
 }
+```0
