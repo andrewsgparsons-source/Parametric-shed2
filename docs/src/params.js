@@ -48,7 +48,11 @@ export const DEFAULTS = {
   },
 
   roof: {
-    style: "apex"
+    style: "apex",
+    pent: {
+      minHeight_mm: 2400,
+      maxHeight_mm: 2400
+    }
   },
 
   // Walls configuration (v1)
