@@ -724,6 +724,22 @@ function initApp() {
       return Number.isFinite(n) ? n : def;
     }
 
+    // --- NEW HELPERS: Pent display height calculation (UI only) ---
+    function getPentMinMax(state) {
+      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
+      var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
+      var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
+      var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
+      return { minH: minH, maxH: maxH };
+    }
+
+    function computePentDisplayHeight(state) {
+      var mm = getPentMinMax(state);
+      var mid = Math.round((mm.minH + mm.maxH) / 2);
+      return Math.max(100, mid);
+    }
+    // -------------------------------------------------------------
+
     function getPentHeightsFromState(state) {
       var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
       var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
@@ -1428,7 +1444,16 @@ function initApp() {
         if (vWallRightEl) vWallRightEl.checked = !!parts.right;
 
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
-        if (wallHeightEl && state && state.walls && state.walls.height_mm != null) wallHeightEl.value = String(state.walls.height_mm);
+
+        // --- UPDATED: wall height display logic (UI only) ---
+        if (wallHeightEl) {
+          if (isPent) {
+            wallHeightEl.value = String(computePentDisplayHeight(state));
+          } else if (state && state.walls && state.walls.height_mm != null) {
+            wallHeightEl.value = String(state.walls.height_mm);
+          }
+        }
+        // ----------------------------------------------------
 
         if (wallSectionEl && state && state.walls) {
           var h = null;
@@ -1498,10 +1523,12 @@ function initApp() {
     if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
+      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
     if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
+      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
 
     if (vWallsEl) {
