@@ -21,6 +21,12 @@
  * - Doors: width_mm is the CLEAR OPENING (gap) between the uprights (studs).
  * - Windows: same horizontal logic, plus y_mm (from bottom plate top) and height_mm must fit within the stud cavity.
  *
+ * PENT ROOF PITCH (conditioned on state.roof.style === "pent"):
+ * - Pitch runs along X (width): x=0 => minHeight, x=frameW => maxHeight.
+ * - Left wall uses minHeight; Right wall uses maxHeight.
+ * - Front/Back walls vary height along X; studs use local heightAtX(studXCenter).
+ * - Front/Back top plates are sloped prisms (not constant-height boxes).
+ *
  * @param {any} state Derived state for walls (w/d already resolved to frame outer dims)
  * @param {{scene:BABYLON.Scene, materials:any}} ctx
  */
@@ -44,7 +50,23 @@ export function build3D(state, ctx) {
 
   const plateY = prof.studW;
   const wallThk = prof.studH;
-  const studLen = Math.max(1, height - 2 * plateY);
+
+  const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
+
+  const minH = isPent
+    ? Math.max(100, Math.floor(Number(state?.roof?.pent?.minHeight_mm ?? height)))
+    : height;
+  const maxH = isPent
+    ? Math.max(100, Math.floor(Number(state?.roof?.pent?.maxHeight_mm ?? height)))
+    : height;
+
+  const frameW = Math.max(1, dims.w);
+
+  function heightAtX(x_mm) {
+    const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
+    const t = frameW > 0 ? (x / frameW) : 0;
+    return Math.max(100, Math.floor(minH + (maxH - minH) * t));
+  }
 
   const flags = normalizeWallFlags(state);
 
@@ -85,6 +107,54 @@ export function build3D(state, ctx) {
       (pos.y + Ly / 2) / 1000,
       (pos.z + Lz / 2) / 1000
     );
+    mesh.material = mat;
+    mesh.metadata = Object.assign({ dynamic: true }, meta || {});
+    return mesh;
+  }
+
+  function mkSlopedPlateAlongX(name, Lx, Lz, origin, yTopAtX0, yTopAtX1, mat, meta) {
+    const x0 = origin.x;
+    const x1 = origin.x + Lx;
+    const z0 = origin.z;
+    const z1 = origin.z + Lz;
+
+    const yTop0 = Math.max(0, Math.floor(Number(yTopAtX0)));
+    const yTop1 = Math.max(0, Math.floor(Number(yTopAtX1)));
+    const yBot0 = Math.max(0, yTop0 - plateY);
+    const yBot1 = Math.max(0, yTop1 - plateY);
+
+    const positions = [
+      x0, yBot0, z0,
+      x1, yBot1, z0,
+      x1, yBot1, z1,
+      x0, yBot0, z1,
+
+      x0, yTop0, z0,
+      x1, yTop1, z0,
+      x1, yTop1, z1,
+      x0, yTop0, z1,
+    ].map((v, i) => (i % 3 === 1 ? v : v) / 1000);
+
+    const indices = [
+      0, 1, 2, 0, 2, 3, // bottom
+      4, 6, 5, 4, 7, 6, // top
+      0, 5, 1, 0, 4, 5, // z0 face
+      3, 2, 6, 3, 6, 7, // z1 face
+      0, 3, 7, 0, 7, 4, // x0 face
+      1, 5, 6, 1, 6, 2  // x1 face
+    ];
+
+    const normals = [];
+    BABYLON.VertexData.ComputeNormals(positions, indices, normals);
+
+    const vd = new BABYLON.VertexData();
+    vd.positions = positions;
+    vd.indices = indices;
+    vd.normals = normals;
+
+    const mesh = new BABYLON.Mesh(name, scene);
+    vd.applyToMesh(mesh, true);
+
     mesh.material = mat;
     mesh.metadata = Object.assign({ dynamic: true }, meta || {});
     return mesh;
@@ -139,10 +209,18 @@ export function build3D(state, ctx) {
     const doorX0 = door.x0;
     const doorX1 = door.x1;
 
+    const isSlopeWall = isPent && (wallId === "front" || wallId === "back");
+    const centerX = origin.x + Math.floor((doorX0 + doorX1) / 2);
+
+    const wallTop = isSlopeWall ? heightAtX(centerX) : (wallId === "left" ? minH : wallId === "right" ? maxH : height);
+    const studLenLocal = Math.max(1, wallTop - 2 * plateY);
+
+    const uprightH = studLenLocal;
+
     mkBox(
       `wall-${wallId}-door-${id}-upright-left`,
       prof.studW,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       thickness,
       { x: origin.x + (doorX0 - prof.studW), y: plateY, z: origin.z },
       mat,
@@ -151,7 +229,7 @@ export function build3D(state, ctx) {
     mkBox(
       `wall-${wallId}-door-${id}-upright-right`,
       prof.studW,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       thickness,
       { x: origin.x + doorX1, y: plateY, z: origin.z },
       mat,
@@ -159,12 +237,17 @@ export function build3D(state, ctx) {
     );
 
     const headerL = (door.w + 2 * prof.studW);
+
+    const desiredHeaderY = plateY + doorH;
+    const maxHeaderY = Math.max(plateY, wallTop - prof.studH);
+    const headerY = Math.min(desiredHeaderY, maxHeaderY);
+
     mkBox(
       `wall-${wallId}-door-${id}-header`,
       headerL,
       prof.studH,
       thickness,
-      { x: origin.x + (doorX0 - prof.studW), y: plateY + doorH, z: origin.z },
+      { x: origin.x + (doorX0 - prof.studW), y: headerY, z: origin.z },
       mat,
       { doorId: id }
     );
@@ -180,10 +263,14 @@ export function build3D(state, ctx) {
     const doorZ0 = door.x0;
     const doorZ1 = door.x1;
 
+    const wallTop = isPent ? (wallId === "left" ? minH : maxH) : height;
+    const studLenLocal = Math.max(1, wallTop - 2 * plateY);
+    const uprightH = studLenLocal;
+
     mkBox(
       `wall-${wallId}-door-${id}-upright-left`,
       thickness,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + (doorZ0 - prof.studW) },
       mat,
@@ -192,7 +279,7 @@ export function build3D(state, ctx) {
     mkBox(
       `wall-${wallId}-door-${id}-upright-right`,
       thickness,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + doorZ1 },
       mat,
@@ -200,12 +287,17 @@ export function build3D(state, ctx) {
     );
 
     const headerL = (door.w + 2 * prof.studW);
+
+    const desiredHeaderY = plateY + doorH;
+    const maxHeaderY = Math.max(plateY, wallTop - prof.studH);
+    const headerY = Math.min(desiredHeaderY, maxHeaderY);
+
     mkBox(
       `wall-${wallId}-door-${id}-header`,
       thickness,
       prof.studH,
       headerL,
-      { x: origin.x, y: plateY + doorH, z: origin.z + (doorZ0 - prof.studW) },
+      { x: origin.x, y: headerY, z: origin.z + (doorZ0 - prof.studW) },
       mat,
       { doorId: id }
     );
@@ -220,13 +312,25 @@ export function build3D(state, ctx) {
     const x0 = win.x0;
     const x1 = win.x1;
 
-    const y0 = plateY + Math.max(0, Math.floor(win.y));
-    const yTop = y0 + Math.max(100, Math.floor(win.h));
+    const isSlopeWall = isPent && (wallId === "front" || wallId === "back");
+    const centerX = origin.x + Math.floor((x0 + x1) / 2);
+    const wallTop = isSlopeWall ? heightAtX(centerX) : (wallId === "left" ? minH : wallId === "right" ? maxH : height);
+    const studLenLocal = Math.max(1, wallTop - 2 * plateY);
+
+    const uprightH = studLenLocal;
+
+    const y0Raw = plateY + Math.max(0, Math.floor(win.y));
+    const yTopRaw = y0Raw + Math.max(100, Math.floor(win.h));
+
+    const maxFeatureY = Math.max(plateY, wallTop - prof.studH);
+
+    const y0 = Math.min(y0Raw, maxFeatureY);
+    const yTop = Math.min(yTopRaw, maxFeatureY);
 
     mkBox(
       `wall-${wallId}-win-${id}-upright-left`,
       prof.studW,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       thickness,
       { x: origin.x + (x0 - prof.studW), y: plateY, z: origin.z },
       mat,
@@ -235,7 +339,7 @@ export function build3D(state, ctx) {
     mkBox(
       `wall-${wallId}-win-${id}-upright-right`,
       prof.studW,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       thickness,
       { x: origin.x + x1, y: plateY, z: origin.z },
       mat,
@@ -273,13 +377,22 @@ export function build3D(state, ctx) {
     const z0 = win.x0;
     const z1 = win.x1;
 
-    const y0 = plateY + Math.max(0, Math.floor(win.y));
-    const yTop = y0 + Math.max(100, Math.floor(win.h));
+    const wallTop = isPent ? (wallId === "left" ? minH : maxH) : height;
+    const studLenLocal = Math.max(1, wallTop - 2 * plateY);
+    const uprightH = studLenLocal;
+
+    const y0Raw = plateY + Math.max(0, Math.floor(win.y));
+    const yTopRaw = y0Raw + Math.max(100, Math.floor(win.h));
+
+    const maxFeatureY = Math.max(plateY, wallTop - prof.studH);
+
+    const y0 = Math.min(y0Raw, maxFeatureY);
+    const yTop = Math.min(yTopRaw, maxFeatureY);
 
     mkBox(
       `wall-${wallId}-win-${id}-upright-left`,
       thickness,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + (z0 - prof.studW) },
       mat,
@@ -288,7 +401,7 @@ export function build3D(state, ctx) {
     mkBox(
       `wall-${wallId}-win-${id}-upright-right`,
       thickness,
-      Math.max(1, height - 2 * plateY),
+      uprightH,
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + z1 },
       mat,
@@ -317,8 +430,13 @@ export function build3D(state, ctx) {
     );
   }
 
-  function buildBasicPanel(wallPrefix, axis, panelLen, origin, offsetAlong, openings) {
+  function buildBasicPanel(wallPrefix, axis, panelLen, origin, offsetAlong, openings, studLenForPosStart) {
     const isAlongX = axis === "x";
+
+    const hForStart = (posStart) => {
+      if (!studLenForPosStart) return Math.max(1, height - 2 * plateY);
+      return Math.max(1, Math.floor(studLenForPosStart(posStart)));
+    };
 
     if (isAlongX) {
       mkBox(
@@ -327,14 +445,6 @@ export function build3D(state, ctx) {
         plateY,
         wallThk,
         { x: origin.x + offsetAlong, y: 0, z: origin.z },
-        materials.plate
-      );
-      mkBox(
-        wallPrefix + "plate-top",
-        panelLen,
-        plateY,
-        wallThk,
-        { x: origin.x + offsetAlong, y: height - plateY, z: origin.z },
         materials.plate
       );
     } else {
@@ -346,17 +456,10 @@ export function build3D(state, ctx) {
         { x: origin.x, y: 0, z: origin.z + offsetAlong },
         materials.plate
       );
-      mkBox(
-        wallPrefix + "plate-top",
-        wallThk,
-        plateY,
-        panelLen,
-        { x: origin.x, y: height - plateY, z: origin.z + offsetAlong },
-        materials.plate
-      );
     }
 
-    const placeStud = (x, z, h, idx) => {
+    const placeStud = (x, z, idx, posStartRel) => {
+      const h = hForStart(posStartRel);
       if (isAlongX) {
         mkBox(
           wallPrefix + "stud-" + idx,
@@ -400,8 +503,8 @@ export function build3D(state, ctx) {
       const x1 = origin.x + offsetAlong + panelLen - prof.studW;
       const xm = Math.max(x0, Math.floor(origin.x + offsetAlong + panelLen / 2 - prof.studW / 2));
 
-      if (studAt(offsetAlong)) placeStud(x0, origin.z, studLen, 0);
-      if (studAt(offsetAlong + panelLen - prof.studW)) placeStud(x1, origin.z, studLen, 1);
+      if (studAt(offsetAlong)) placeStud(x0, origin.z, 0, offsetAlong);
+      if (studAt(offsetAlong + panelLen - prof.studW)) placeStud(x1, origin.z, 1, offsetAlong + panelLen - prof.studW);
 
       let midAllowed = true;
       for (let i = 0; i < panelOpenings.length; i++) {
@@ -409,14 +512,14 @@ export function build3D(state, ctx) {
         const ms = (xm - origin.x);
         if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
       }
-      if (midAllowed) placeStud(xm, origin.z, studLen, 2);
+      if (midAllowed) placeStud(xm, origin.z, 2, (xm - origin.x));
     } else {
       const z0 = origin.z + offsetAlong;
       const z1 = origin.z + offsetAlong + panelLen - prof.studW;
       const zm = Math.max(z0, Math.floor(origin.z + offsetAlong + panelLen / 2 - prof.studW / 2));
 
-      if (studAt(offsetAlong)) placeStud(origin.x, z0, studLen, 0);
-      if (studAt(offsetAlong + panelLen - prof.studW)) placeStud(origin.x, z1, studLen, 1);
+      if (studAt(offsetAlong)) placeStud(origin.x, z0, 0, offsetAlong);
+      if (studAt(offsetAlong + panelLen - prof.studW)) placeStud(origin.x, z1, 1, offsetAlong + panelLen - prof.studW);
 
       let midAllowed = true;
       for (let i = 0; i < panelOpenings.length; i++) {
@@ -424,7 +527,7 @@ export function build3D(state, ctx) {
         const ms = (zm - origin.z);
         if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
       }
-      if (midAllowed) placeStud(origin.x, zm, studLen, 2);
+      if (midAllowed) placeStud(origin.x, zm, 2, (zm - origin.z));
     }
   }
 
@@ -436,13 +539,43 @@ export function build3D(state, ctx) {
     const wins = windowIntervalsForWall(wallId);
     const openingsX = doors.concat(wins);
 
+    const isSlopeWall = isPent && isAlongX && (wallId === "front" || wallId === "back");
+
+    const wallHeightFlat = isPent
+      ? (wallId === "left" ? minH : wallId === "right" ? maxH : height)
+      : height;
+
+    const studLenFlat = Math.max(1, wallHeightFlat - 2 * plateY);
+
     if (isAlongX) {
       mkBox(wallPrefix + "plate-bottom", length, plateY, wallThk, { x: origin.x, y: 0, z: origin.z }, materials.plate);
-      mkBox(wallPrefix + "plate-top", length, plateY, wallThk, { x: origin.x, y: height - plateY, z: origin.z }, materials.plate);
+      if (!isSlopeWall) {
+        mkBox(wallPrefix + "plate-top", length, plateY, wallThk, { x: origin.x, y: wallHeightFlat - plateY, z: origin.z }, materials.plate);
+      } else {
+        const yTop0 = heightAtX(origin.x);
+        const yTop1 = heightAtX(origin.x + length);
+        mkSlopedPlateAlongX(
+          wallPrefix + "plate-top",
+          length,
+          wallThk,
+          { x: origin.x, z: origin.z },
+          yTop0,
+          yTop1,
+          materials.plate,
+          {}
+        );
+      }
     } else {
       mkBox(wallPrefix + "plate-bottom", wallThk, plateY, length, { x: origin.x, y: 0, z: origin.z }, materials.plate);
-      mkBox(wallPrefix + "plate-top", wallThk, plateY, length, { x: origin.x, y: height - plateY, z: origin.z }, materials.plate);
+      mkBox(wallPrefix + "plate-top", wallThk, plateY, length, { x: origin.x, y: wallHeightFlat - plateY, z: origin.z }, materials.plate);
     }
+
+    const studLenForXStart = (xStartRel) => {
+      if (!isSlopeWall) return studLenFlat;
+      const xCenter = origin.x + Math.floor(xStartRel + prof.studW / 2);
+      const wallTop = heightAtX(xCenter);
+      return Math.max(1, wallTop - 2 * plateY);
+    };
 
     if (variant === "basic") {
       const panels = computeBasicPanels(length, prof, openingsX);
@@ -450,7 +583,7 @@ export function build3D(state, ctx) {
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
         const pref = wallPrefix + `panel-${p + 1}-`;
-        buildBasicPanel(pref, axis, pan.len, origin, pan.start, openingsX);
+        buildBasicPanel(pref, axis, pan.len, origin, pan.start, openingsX, isAlongX ? studLenForXStart : null);
       }
 
       for (let i = 0; i < doors.length; i++) {
@@ -469,7 +602,8 @@ export function build3D(state, ctx) {
     }
 
     const studs = [];
-    const placeStud = (x, z, h) => {
+    const placeStud = (x, z, posStartRel) => {
+      const h = isAlongX ? studLenForXStart(posStartRel) : studLenFlat;
       if (isAlongX) {
         studs.push(mkBox(wallPrefix + "stud-" + studs.length, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber));
       } else {
@@ -478,25 +612,25 @@ export function build3D(state, ctx) {
     };
 
     if (isAlongX) {
-      if (!isInsideAnyOpening(0, openingsX)) placeStud(origin.x + 0, origin.z + 0, studLen);
-      if (!isInsideAnyOpening(length - prof.studW, openingsX)) placeStud(origin.x + (length - prof.studW), origin.z + 0, studLen);
+      if (!isInsideAnyOpening(0, openingsX)) placeStud(origin.x + 0, origin.z + 0, 0);
+      if (!isInsideAnyOpening(length - prof.studW, openingsX)) placeStud(origin.x + (length - prof.studW), origin.z + 0, length - prof.studW);
     } else {
-      if (!isInsideAnyOpening(0, openingsX)) placeStud(origin.x + 0, origin.z + 0, studLen);
-      if (!isInsideAnyOpening(length - prof.studW, openingsX)) placeStud(origin.x + 0, origin.z + (length - prof.studW), studLen);
+      if (!isInsideAnyOpening(0, openingsX)) placeStud(origin.x + 0, origin.z + 0, 0);
+      if (!isInsideAnyOpening(length - prof.studW, openingsX)) placeStud(origin.x + 0, origin.z + (length - prof.studW), length - prof.studW);
     }
 
     if (isAlongX) {
       let x = 400;
       while (x <= length - prof.studW) {
         if (Math.abs(x - (length - prof.studW)) < 1) break;
-        if (!isInsideAnyOpening(x, openingsX)) placeStud(origin.x + x, origin.z, studLen);
+        if (!isInsideAnyOpening(x, openingsX)) placeStud(origin.x + x, origin.z, x);
         x += prof.spacing;
       }
     } else {
       let z = 400;
       while (z <= length - prof.studW) {
         if (Math.abs(z - (length - prof.studW)) < 1) break;
-        if (!isInsideAnyOpening(z, openingsX)) placeStud(origin.x, origin.z + z, studLen);
+        if (!isInsideAnyOpening(z, openingsX)) placeStud(origin.x, origin.z + z, z);
         z += prof.spacing;
       }
     }
@@ -698,18 +832,134 @@ function pickPanelIndexForCenter(panels, x0, x1) {
 }
 
 export function updateBOM(state) {
+  const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
+  if (!isPent) {
+    const sections = [];
+    const variant = state.walls?.variant || "insulated";
+    const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
+
+    const prof = resolveProfile(state, variant);
+
+    const plateY = prof.studW;
+    const wallThk = prof.studH;
+    const studLen = Math.max(1, height - 2 * plateY);
+
+    const frameW = Math.max(1, Math.floor(state.w));
+    const frameD = Math.max(1, Math.floor(state.d));
+
+    const lengths = {
+      front: frameW,
+      back: frameW,
+      left: Math.max(1, frameD - 2 * wallThk),
+      right: Math.max(1, frameD - 2 * wallThk),
+    };
+
+    const flags = normalizeWallFlags(state);
+    const walls = ["front", "back", "left", "right"].filter((w) => flags[w]);
+
+    for (const wname of walls) {
+      const L = lengths[wname];
+
+      // Wall header row
+      sections.push([`WALL: ${wname} (${variant})`, "", "", "", "", `Frame L=${L}mm`]);
+
+      // Panels for grouping (no geometry changes; basic uses same segmentation as buildWall)
+      let panels = [{ start: 0, len: L }];
+      if (variant === "basic") {
+        const doors = getDoorIntervalsForWallFromState(state, wname);
+        const wins = getWindowIntervalsForWallFromState(state, wname);
+        const openingsX = doors.concat(wins);
+        panels = computeBasicPanels(L, prof, openingsX);
+        if (!panels.length) panels = [{ start: 0, len: L }];
+      }
+
+      // Precompute per-wall openings for attribution
+      const doorsW = getDoorIntervalsForWallFromState(state, wname);
+      const winsW = getWindowIntervalsForWallFromState(state, wname);
+
+      const openingItemsByPanel = {};
+      for (let i = 0; i < panels.length; i++) openingItemsByPanel[i] = [];
+
+      // Doors -> panel that contains center point
+      for (let i = 0; i < doorsW.length; i++) {
+        const d = doorsW[i];
+        const pi = pickPanelIndexForCenter(panels, d.x0, d.x1);
+        if (pi < 0) continue;
+
+        const id = String(d.id || "");
+        const headerL = (d.w + 2 * prof.studW);
+
+        openingItemsByPanel[pi].push(["  Door Uprights", 2, studLen, prof.studW, wallThk, `door ${id}`]);
+        openingItemsByPanel[pi].push(["  Door Header", 1, headerL, prof.studH, wallThk, `door ${id}`]);
+      }
+
+      // Windows -> panel that contains center point
+      for (let i = 0; i < winsW.length; i++) {
+        const w = winsW[i];
+        const pi = pickPanelIndexForCenter(panels, w.x0, w.x1);
+        if (pi < 0) continue;
+
+        const id = String(w.id || "");
+        const headerL = (w.w + 2 * prof.studW);
+
+        openingItemsByPanel[pi].push(["  Window Uprights", 2, studLen, prof.studW, wallThk, `window ${id}`]);
+        openingItemsByPanel[pi].push(["  Window Header", 1, headerL, prof.studH, wallThk, `window ${id}`]);
+        openingItemsByPanel[pi].push(["  Window Sill", 1, headerL, prof.studH, wallThk, `window ${id}`]);
+      }
+
+      for (let p = 0; p < panels.length; p++) {
+        const pan = panels[p];
+
+        // Panel header row
+        sections.push([`  PANEL ${p + 1}`, "", "", "", "", `start=${pan.start}mm, len=${pan.len}mm`]);
+
+        // Panel contents (all include L/W/D)
+        sections.push([`  Bottom Plate`, 1, pan.len, plateY, wallThk, ""]);
+        sections.push([`  Top Plate`, 1, pan.len, plateY, wallThk, ""]);
+
+        if (variant === "basic") {
+          // Mirrors current basic wall panel stud policy (3 studs per panel in buildBasicPanel; suppression is geometric-only)
+          sections.push([`  Studs`, 3, studLen, prof.studW, wallThk, "basic"]);
+        } else {
+          // Insulated stud count logic preserved (was previously per wall; now attributed under single panel)
+          let count = 2;
+          let run = 400;
+          while (run <= pan.len - prof.studW) {
+            count += 1;
+            run += prof.spacing;
+          }
+          sections.push([`  Studs`, count, studLen, prof.studW, wallThk, "@400"]);
+        }
+
+        // Opening framing items attributed to this panel
+        const items = openingItemsByPanel[p] || [];
+        for (let i = 0; i < items.length; i++) sections.push(items[i]);
+      }
+    }
+
+    return { sections };
+  }
+
   const sections = [];
   const variant = state.walls?.variant || "insulated";
-  const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
+  const baseHeight = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
 
   const prof = resolveProfile(state, variant);
 
   const plateY = prof.studW;
   const wallThk = prof.studH;
-  const studLen = Math.max(1, height - 2 * plateY);
 
   const frameW = Math.max(1, Math.floor(state.w));
   const frameD = Math.max(1, Math.floor(state.d));
+
+  const minH = Math.max(100, Math.floor(Number(state?.roof?.pent?.minHeight_mm ?? baseHeight)));
+  const maxH = Math.max(100, Math.floor(Number(state?.roof?.pent?.maxHeight_mm ?? baseHeight)));
+
+  function heightAtX(x_mm) {
+    const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
+    const t = frameW > 0 ? (x / frameW) : 0;
+    return Math.max(100, Math.floor(minH + (maxH - minH) * t));
+  }
 
   const lengths = {
     front: frameW,
@@ -721,15 +971,28 @@ export function updateBOM(state) {
   const flags = normalizeWallFlags(state);
   const walls = ["front", "back", "left", "right"].filter((w) => flags[w]);
 
+  function isInsideAnyOpeningAt(pos, intervals) {
+    for (let i = 0; i < intervals.length; i++) {
+      const d = intervals[i];
+      const c = pos + prof.studW / 2;
+      if (c > d.x0 && c < d.x1) return true;
+    }
+    return false;
+  }
+
   for (const wname of walls) {
     const L = lengths[wname];
 
-    // Wall header row
-    sections.push([`WALL: ${wname} (${variant})`, "", "", "", "", `Frame L=${L}mm`]);
+    const isFrontBack = (wname === "front" || wname === "back");
+    const isSlopeWall = isFrontBack;
 
-    // Panels for grouping (no geometry changes; basic uses same segmentation as buildWall)
+    const wallHFlat = (wname === "left") ? minH : (wname === "right") ? maxH : baseHeight;
+    const studLenFlat = Math.max(1, wallHFlat - 2 * plateY);
+
+    sections.push([`WALL: ${wname} (${variant})`, "", "", "", "", `pent slope X; minH=${minH}mm, maxH=${maxH}mm; L=${L}mm`]);
+
     let panels = [{ start: 0, len: L }];
-    if (variant === "basic") {
+    if (variant === "basic" && isFrontBack) {
       const doors = getDoorIntervalsForWallFromState(state, wname);
       const wins = getWindowIntervalsForWallFromState(state, wname);
       const openingsX = doors.concat(wins);
@@ -737,14 +1000,13 @@ export function updateBOM(state) {
       if (!panels.length) panels = [{ start: 0, len: L }];
     }
 
-    // Precompute per-wall openings for attribution
     const doorsW = getDoorIntervalsForWallFromState(state, wname);
     const winsW = getWindowIntervalsForWallFromState(state, wname);
+    const openingsX = doorsW.concat(winsW);
 
     const openingItemsByPanel = {};
     for (let i = 0; i < panels.length; i++) openingItemsByPanel[i] = [];
 
-    // Doors -> panel that contains center point
     for (let i = 0; i < doorsW.length; i++) {
       const d = doorsW[i];
       const pi = pickPanelIndexForCenter(panels, d.x0, d.x1);
@@ -753,11 +1015,14 @@ export function updateBOM(state) {
       const id = String(d.id || "");
       const headerL = (d.w + 2 * prof.studW);
 
-      openingItemsByPanel[pi].push(["  Door Uprights", 2, studLen, prof.studW, wallThk, `door ${id}`]);
-      openingItemsByPanel[pi].push(["  Door Header", 1, headerL, prof.studH, wallThk, `door ${id}`]);
+      const cx = Math.floor((d.x0 + d.x1) / 2);
+      const topH = isSlopeWall ? heightAtX(cx) : wallHFlat;
+      const studLenLocal = Math.max(1, topH - 2 * plateY);
+
+      openingItemsByPanel[pi].push(["  Door Uprights", 2, studLenLocal, prof.studW, wallThk, `door ${id}; pent slope; ${wname}`]);
+      openingItemsByPanel[pi].push(["  Door Header", 1, headerL, prof.studH, wallThk, `door ${id}; pent slope; ${wname}`]);
     }
 
-    // Windows -> panel that contains center point
     for (let i = 0; i < winsW.length; i++) {
       const w = winsW[i];
       const pi = pickPanelIndexForCenter(panels, w.x0, w.x1);
@@ -766,36 +1031,118 @@ export function updateBOM(state) {
       const id = String(w.id || "");
       const headerL = (w.w + 2 * prof.studW);
 
-      openingItemsByPanel[pi].push(["  Window Uprights", 2, studLen, prof.studW, wallThk, `window ${id}`]);
-      openingItemsByPanel[pi].push(["  Window Header", 1, headerL, prof.studH, wallThk, `window ${id}`]);
-      openingItemsByPanel[pi].push(["  Window Sill", 1, headerL, prof.studH, wallThk, `window ${id}`]);
+      const cx = Math.floor((w.x0 + w.x1) / 2);
+      const topH = isSlopeWall ? heightAtX(cx) : wallHFlat;
+      const studLenLocal = Math.max(1, topH - 2 * plateY);
+
+      openingItemsByPanel[pi].push(["  Window Uprights", 2, studLenLocal, prof.studW, wallThk, `window ${id}; pent slope; ${wname}`]);
+      openingItemsByPanel[pi].push(["  Window Header", 1, headerL, prof.studH, wallThk, `window ${id}; pent slope; ${wname}`]);
+      openingItemsByPanel[pi].push(["  Window Sill", 1, headerL, prof.studH, wallThk, `window ${id}; pent slope; ${wname}`]);
     }
 
     for (let p = 0; p < panels.length; p++) {
       const pan = panels[p];
 
-      // Panel header row
       sections.push([`  PANEL ${p + 1}`, "", "", "", "", `start=${pan.start}mm, len=${pan.len}mm`]);
 
-      // Panel contents (all include L/W/D)
-      sections.push([`  Bottom Plate`, 1, pan.len, plateY, wallThk, ""]);
-      sections.push([`  Top Plate`, 1, pan.len, plateY, wallThk, ""]);
+      sections.push([`  Bottom Plate`, 1, pan.len, plateY, wallThk, isSlopeWall ? `pent slope; ${wname}` : ""]);
 
-      if (variant === "basic") {
-        // Mirrors current basic wall panel stud policy (3 studs per panel in buildBasicPanel; suppression is geometric-only)
-        sections.push([`  Studs`, 3, studLen, prof.studW, wallThk, "basic"]);
+      if (isSlopeWall) {
+        const x0 = pan.start;
+        const x1 = pan.start + pan.len;
+        const h0 = heightAtX(x0);
+        const h1 = heightAtX(x1);
+        sections.push([`  Top Plate (Sloped)`, 1, pan.len, plateY, wallThk, `pent slope; ${wname}; minH=${h0}mm maxH=${h1}mm`]);
       } else {
-        // Insulated stud count logic preserved (was previously per wall; now attributed under single panel)
-        let count = 2;
-        let run = 400;
-        while (run <= pan.len - prof.studW) {
-          count += 1;
-          run += prof.spacing;
-        }
-        sections.push([`  Studs`, count, studLen, prof.studW, wallThk, "@400"]);
+        sections.push([`  Top Plate`, 1, pan.len, plateY, wallThk, `pent; ${wname}; H=${wallHFlat}mm`]);
       }
 
-      // Opening framing items attributed to this panel
+      if (!isSlopeWall) {
+        if (variant === "basic") sections.push([`  Studs`, 3, studLenFlat, prof.studW, wallThk, `pent; ${wname}`]);
+        else {
+          let count = 2;
+          let run = 400;
+          while (run <= pan.len - prof.studW) { count += 1; run += prof.spacing; }
+          sections.push([`  Studs`, count, studLenFlat, prof.studW, wallThk, `pent; ${wname}; @400`]);
+        }
+      } else {
+        const studsByLen = {};
+
+        function addStudLen(len) {
+          const Lmm = Math.max(1, Math.floor(len));
+          studsByLen[Lmm] = (studsByLen[Lmm] || 0) + 1;
+        }
+
+        if (variant === "basic") {
+          const offsetAlong = pan.start;
+          const panelLen = pan.len;
+
+          const x0s = offsetAlong;
+          const x1s = offsetAlong + panelLen - prof.studW;
+          const xm = Math.max(x0s, Math.floor(offsetAlong + panelLen / 2 - prof.studW / 2));
+
+          const panelOpenings = openingsX.filter((d) => {
+            const s = d.x0;
+            const e = d.x1;
+            return e > offsetAlong && s < (offsetAlong + panelLen);
+          });
+
+          const studAt = (posStart) => {
+            for (let i = 0; i < panelOpenings.length; i++) {
+              const d = panelOpenings[i];
+              if (posStart + prof.studW > d.x0 && posStart < d.x1) return false;
+            }
+            return true;
+          };
+
+          if (studAt(x0s)) {
+            const cx = Math.floor(x0s + prof.studW / 2);
+            addStudLen(Math.max(1, heightAtX(cx) - 2 * plateY));
+          }
+          if (studAt(x1s)) {
+            const cx = Math.floor(x1s + prof.studW / 2);
+            addStudLen(Math.max(1, heightAtX(cx) - 2 * plateY));
+          }
+
+          let midAllowed = true;
+          for (let i = 0; i < panelOpenings.length; i++) {
+            const d = panelOpenings[i];
+            if (xm + prof.studW > d.x0 && xm < d.x1) { midAllowed = false; break; }
+          }
+          if (midAllowed) {
+            const cx = Math.floor(xm + prof.studW / 2);
+            addStudLen(Math.max(1, heightAtX(cx) - 2 * plateY));
+          }
+        } else {
+          const offset = pan.start;
+          const len = pan.len;
+
+          if (!isInsideAnyOpeningAt(offset, openingsX)) {
+            const cx = Math.floor(offset + prof.studW / 2);
+            addStudLen(Math.max(1, heightAtX(cx) - 2 * plateY));
+          }
+          if (!isInsideAnyOpeningAt(offset + (len - prof.studW), openingsX)) {
+            const cx = Math.floor(offset + (len - prof.studW) + prof.studW / 2);
+            addStudLen(Math.max(1, heightAtX(cx) - 2 * plateY));
+          }
+
+          let x = 400;
+          while (x <= len - prof.studW) {
+            if (Math.abs(x - (len - prof.studW)) < 1) break;
+            const posStart = offset + x;
+            if (!isInsideAnyOpeningAt(posStart, openingsX)) {
+              const cx = Math.floor(posStart + prof.studW / 2);
+              addStudLen(Math.max(1, heightAtX(cx) - 2 * plateY));
+            }
+            x += prof.spacing;
+          }
+        }
+
+        Object.keys(studsByLen).sort((a, b) => Number(a) - Number(b)).forEach((k) => {
+          sections.push([`  Studs`, studsByLen[k], Number(k), prof.studW, wallThk, `pent slope; ${wname}`]);
+        });
+      }
+
       const items = openingItemsByPanel[p] || [];
       for (let i = 0; i < items.length; i++) sections.push(items[i]);
     }
