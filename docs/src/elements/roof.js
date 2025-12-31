@@ -130,175 +130,6 @@ export function build3D(state, ctx) {
     return { minX, maxX, minZ, maxZ };
   }
 
-  function clamp01(v) { return Math.max(0, Math.min(1, v)); }
-
-  function quatFromToXZ(fromVec, toVec) {
-    const a = new BABYLON.Vector3(fromVec.x, 0, fromVec.z);
-    const b = new BABYLON.Vector3(toVec.x, 0, toVec.z);
-    const la = a.length();
-    const lb = b.length();
-    if (la < 1e-9 || lb < 1e-9) return BABYLON.Quaternion.Identity();
-    a.scaleInPlace(1 / la);
-    b.scaleInPlace(1 / lb);
-
-    const dot = clamp(a.x * b.x + a.z * b.z, -1, 1);
-    if (dot > 0.999999) return BABYLON.Quaternion.Identity();
-
-    // 180° case
-    if (dot < -0.999999) {
-      return BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), Math.PI);
-    }
-
-    const crossY = (a.x * b.z - a.z * b.x);
-    const ang = Math.acos(dot);
-    return BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), ang * (crossY >= 0 ? 1 : -1));
-  }
-
-  function findTopPlateMesh(wallId) {
-    const prefix = `wall-${wallId}-`;
-    let best = null;
-    let bestLen = -1;
-
-    for (let i = 0; i < (scene.meshes || []).length; i++) {
-      const m = scene.meshes[i];
-      if (!m) continue;
-      if (m.isDisposed && m.isDisposed()) continue;
-      if (!m.metadata || m.metadata.dynamic !== true) continue;
-
-      const nm = String(m.name || "");
-      if (!nm.startsWith(prefix)) continue;
-      if (!nm.endsWith("plate-top")) continue;
-
-      try {
-        m.computeWorldMatrix(true);
-        const bi = m.getBoundingInfo && m.getBoundingInfo();
-        if (!bi || !bi.boundingBox) continue;
-        const bb = bi.boundingBox;
-        const dx = Math.abs(bb.maximumWorld.x - bb.minimumWorld.x);
-        const dz = Math.abs(bb.maximumWorld.z - bb.minimumWorld.z);
-        const planLen = Math.max(dx, dz);
-        if (Number.isFinite(planLen) && planLen > bestLen) {
-          bestLen = planLen;
-          best = m;
-        }
-      } catch (e) {}
-    }
-
-    return best;
-  }
-
-  // Extract the *outer top edge* line from a plate mesh in WORLD SPACE.
-  // For sloped plates created by walls.js mkSlopedPlateAlongX, the mesh has 8 vertices:
-  // indices 4..7 are the top ring. We use those so we don't "lose" the slope by using bbox maxY.
-  function plateOuterTopEdgeInfo(mesh, wantOuter /* "minZ" | "maxZ" */) {
-    if (!mesh) return null;
-    try {
-      mesh.computeWorldMatrix(true);
-      const wm = mesh.getWorldMatrix();
-
-      const vcount = (typeof mesh.getTotalVertices === "function") ? mesh.getTotalVertices() : 0;
-      const pos = (typeof mesh.getVerticesData === "function")
-        ? mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind)
-        : null;
-
-      // Sloped custom prism path (8 verts)
-      if (pos && vcount === 8 && pos.length >= 8 * 3) {
-        const topIdx = [4, 5, 6, 7];
-        const topWorld = [];
-        for (let k = 0; k < topIdx.length; k++) {
-          const i = topIdx[k] * 3;
-          const lp = new BABYLON.Vector3(pos[i + 0], pos[i + 1], pos[i + 2]);
-          const wp = BABYLON.Vector3.TransformCoordinates(lp, wm);
-          topWorld.push(wp);
-        }
-
-        // Pick the two vertices on the outer edge by z extreme among the top ring.
-        let extremeZ = wantOuter === "minZ" ? Infinity : -Infinity;
-        for (let i = 0; i < topWorld.length; i++) {
-          const z = topWorld[i].z;
-          if (wantOuter === "minZ") { if (z < extremeZ) extremeZ = z; }
-          else { if (z > extremeZ) extremeZ = z; }
-        }
-
-        // Collect verts close to that extreme (tolerance)
-        const tol = 1e-4;
-        const edge = [];
-        for (let i = 0; i < topWorld.length; i++) {
-          const z = topWorld[i].z;
-          if (Math.abs(z - extremeZ) <= tol) edge.push(topWorld[i]);
-        }
-
-        // Fallback if tolerance too tight: take the closest two by z
-        if (edge.length < 2) {
-          topWorld.sort((a, b) => (wantOuter === "minZ" ? (a.z - b.z) : (b.z - a.z)));
-          edge.length = 0;
-          edge.push(topWorld[0], topWorld[1]);
-        }
-
-        // Ensure we have exactly 2 endpoints (choose farthest apart)
-        let p0 = edge[0], p1 = edge[1];
-        if (edge.length > 2) {
-          let bestD = -1;
-          for (let i = 0; i < edge.length; i++) {
-            for (let j = i + 1; j < edge.length; j++) {
-              const d = BABYLON.Vector3.DistanceSquared(edge[i], edge[j]);
-              if (d > bestD) { bestD = d; p0 = edge[i]; p1 = edge[j]; }
-            }
-          }
-        }
-
-        // Long axis direction (XZ)
-        const dir = new BABYLON.Vector3(p1.x - p0.x, 0, p1.z - p0.z);
-        const len = dir.length();
-        const dirN = (len > 1e-9) ? dir.scale(1 / len) : new BABYLON.Vector3(1, 0, 0);
-
-        const mid = new BABYLON.Vector3((p0.x + p1.x) * 0.5, (p0.y + p1.y) * 0.5, (p0.z + p1.z) * 0.5);
-
-        return {
-          name: String(mesh.name || ""),
-          mesh,
-          p0_m: p0,
-          p1_m: p1,
-          mid_m: mid,
-          dirLong_m: dirN,
-          topY_m: mid.y
-        };
-      }
-
-      // Box/other mesh fallback: use bbox top at outer Z face and X endpoints.
-      const bi = mesh.getBoundingInfo && mesh.getBoundingInfo();
-      if (!bi || !bi.boundingBox) return null;
-      const bb = bi.boundingBox;
-
-      const minX = bb.minimumWorld.x, maxX = bb.maximumWorld.x;
-      const minZ = bb.minimumWorld.z, maxZ = bb.maximumWorld.z;
-      const topY = bb.maximumWorld.y;
-
-      const zOuter = (wantOuter === "minZ") ? minZ : maxZ;
-
-      const p0 = new BABYLON.Vector3(minX, topY, zOuter);
-      const p1 = new BABYLON.Vector3(maxX, topY, zOuter);
-
-      const dir = new BABYLON.Vector3(p1.x - p0.x, 0, p1.z - p0.z);
-      const len = dir.length();
-      const dirN = (len > 1e-9) ? dir.scale(1 / len) : new BABYLON.Vector3(1, 0, 0);
-
-      const mid = new BABYLON.Vector3((p0.x + p1.x) * 0.5, topY, zOuter);
-
-      return {
-        name: String(mesh.name || ""),
-        mesh,
-        p0_m: p0,
-        p1_m: p1,
-        mid_m: mid,
-        dirLong_m: dirN,
-        topY_m: topY
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
   // ---- Overhang footprint extents derived from actual wall bounds (no guessed offsets) ----
   const wallAll = [];
   for (let i = 0; i < (scene.meshes || []).length; i++) {
@@ -326,62 +157,263 @@ export function build3D(state, ctx) {
   const roofMinZ_m = wallMinZ_m - f_m;
   const roofMaxZ_m = wallMaxZ_m + b_m;
 
-  // ---- Plate targets in WORLD SPACE: use OUTER top edges ----
-  const frontPlateMesh = findTopPlateMesh("front");
-  const backPlateMesh = findTopPlateMesh("back");
+  // ---- Robust top-plate finder (front/back) ----
+  function findTopPlateMesh(wallId) {
+    const prefix = `wall-${wallId}-`;
+    let best = null;
+    let bestLen = -1;
 
-  // For the front wall (at smaller Z), the outer face is at minZ.
-  // For the back wall (at larger Z), the outer face is at maxZ.
-  let frontEdge = plateOuterTopEdgeInfo(frontPlateMesh, "minZ");
-  let backEdge = plateOuterTopEdgeInfo(backPlateMesh, "maxZ");
+    for (let i = 0; i < (scene.meshes || []).length; i++) {
+      const m = scene.meshes[i];
+      if (!m) continue;
+      if (m.isDisposed && m.isDisposed()) continue;
+      if (!m.metadata || m.metadata.dynamic !== true) continue;
 
-  // Fallback targets if plates missing (walls hidden/not built)
-  if (!frontEdge) {
-    frontEdge = {
+      const nm = String(m.name || "");
+      if (!nm.startsWith(prefix)) continue;
+      if (!nm.endsWith("plate-top")) continue;
+
+      // Prefer longer plan-length candidates (but actual bearing edge comes from vertex sampling below)
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const bb = bi.boundingBox;
+        const dx = Math.abs(bb.maximumWorld.x - bb.minimumWorld.x);
+        const dz = Math.abs(bb.maximumWorld.z - bb.minimumWorld.z);
+        const planLen = Math.max(dx, dz);
+        if (Number.isFinite(planLen) && planLen > bestLen) {
+          bestLen = planLen;
+          best = m;
+        }
+      } catch (e) {}
+    }
+
+    return best;
+  }
+
+  // ---- TRUE bearing-edge extraction (world-space vertex sampling) ----
+  function getWorldPositions(mesh) {
+    if (!mesh) return null;
+    try {
+      const arr = mesh.getVerticesData && mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+      if (!arr || arr.length < 3) return null;
+
+      mesh.computeWorldMatrix(true);
+      const wm = mesh.getWorldMatrix();
+
+      const pts = [];
+      for (let i = 0; i < arr.length; i += 3) {
+        const v = new BABYLON.Vector3(arr[i], arr[i + 1], arr[i + 2]);
+        const w = BABYLON.Vector3.TransformCoordinates(v, wm);
+        if (Number.isFinite(w.x) && Number.isFinite(w.y) && Number.isFinite(w.z)) pts.push(w);
+      }
+      return pts.length ? pts : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function computeBearingEdge(mesh, frontOrBackHint) {
+    const pts = getWorldPositions(mesh);
+    if (!pts || !pts.length) return null;
+
+    // Find top-surface band by Y (robust to slight FP noise)
+    let yMax = -Infinity;
+    for (let i = 0; i < pts.length; i++) if (pts[i].y > yMax) yMax = pts[i].y;
+    if (!Number.isFinite(yMax)) return null;
+
+    const epsY = 0.0005; // 0.5mm in meters
+    const top = [];
+    for (let i = 0; i < pts.length; i++) if (Math.abs(pts[i].y - yMax) <= epsY) top.push(pts[i]);
+
+    // If too few, widen slightly (still top band)
+    if (top.length < 4) {
+      const epsY2 = 0.002; // 2mm
+      top.length = 0;
+      for (let i = 0; i < pts.length; i++) if (Math.abs(pts[i].y - yMax) <= epsY2) top.push(pts[i]);
+    }
+    if (top.length < 2) return null;
+
+    // Compute plan extents on top band
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    let sumX = 0, sumY = 0, sumZ = 0;
+    for (let i = 0; i < top.length; i++) {
+      const p = top[i];
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
+      sumX += p.x; sumY += p.y; sumZ += p.z;
+    }
+
+    const dx = Math.abs(maxX - minX);
+    const dz = Math.abs(maxZ - minZ);
+
+    // Determine length axis (plan)
+    const longAxis = (dx >= dz) ? "x" : "z";
+    const shortAxis = (longAxis === "x") ? "z" : "x";
+
+    // Determine which side of thickness is the bearing edge.
+    // Use wall bounds: "front" plate tends to sit near wallMinZ; "back" near wallMaxZ.
+    // If caller gave a hint, trust it; else infer from centroid Z.
+    const cx = sumX / top.length;
+    const cy = sumY / top.length;
+    const cz = sumZ / top.length;
+
+    let which = frontOrBackHint;
+    if (which !== "front" && which !== "back") {
+      const dToFront = Math.abs(cz - wallMinZ_m);
+      const dToBack = Math.abs(cz - wallMaxZ_m);
+      which = (dToFront <= dToBack) ? "front" : "back";
+    }
+
+    // For bearing edge selection: for a front plate, choose the Z-min side; for back, Z-max side.
+    // If the plate's long axis is Z (rare for front/back), apply similarly using X bounds.
+    const epsEdge = 0.0008; // 0.8mm
+    let edgeVal = 0;
+    if (shortAxis === "z") {
+      edgeVal = (which === "front") ? minZ : maxZ;
+    } else {
+      // shortAxis === "x"
+      edgeVal = (which === "front") ? minX : maxX;
+    }
+
+    const edgePts = [];
+    for (let i = 0; i < top.length; i++) {
+      const p = top[i];
+      const v = (shortAxis === "z") ? p.z : p.x;
+      if (Math.abs(v - edgeVal) <= epsEdge) edgePts.push(p);
+    }
+
+    // If the edge extraction is too sparse (custom meshes sometimes duplicate/omit),
+    // fall back to using all top-band points but still compute endpoints along long axis.
+    const usePts = edgePts.length >= 2 ? edgePts : top;
+
+    // Endpoints along long axis on chosen edge/top band
+    let pMin = null, pMax = null;
+    let uMin = Infinity, uMax = -Infinity;
+    for (let i = 0; i < usePts.length; i++) {
+      const p = usePts[i];
+      const u = (longAxis === "x") ? p.x : p.z;
+      if (u < uMin) { uMin = u; pMin = p; }
+      if (u > uMax) { uMax = u; pMax = p; }
+    }
+    if (!pMin || !pMax) return null;
+
+    // Bearing-midpoint (for pitch/run and translation anchoring)
+    const mid = new BABYLON.Vector3(
+      (pMin.x + pMax.x) * 0.5,
+      (pMin.y + pMax.y) * 0.5,
+      (pMin.z + pMax.z) * 0.5
+    );
+
+    // Plan length (bearing edge)
+    const planLen = Math.sqrt(
+      Math.pow(pMax.x - pMin.x, 2) + Math.pow(pMax.z - pMin.z, 2)
+    );
+
+    const dirXZ = new BABYLON.Vector3(pMax.x - pMin.x, 0, pMax.z - pMin.z);
+    const dirLen = Math.sqrt(dirXZ.x * dirXZ.x + dirXZ.z * dirXZ.z);
+    const dir = dirLen > 1e-9 ? new BABYLON.Vector3(dirXZ.x / dirLen, 0, dirXZ.z / dirLen) : new BABYLON.Vector3(1, 0, 0);
+
+    return {
+      name: String(mesh.name || ""),
+      mesh,
+      which: which,
+      p0_m: pMin.clone(),
+      p1_m: pMax.clone(),
+      mid_m: mid,
+      cx_m: cx,
+      cy_m: cy,
+      cz_m: cz,
+      topY_m: yMax, // still useful for debug
+      planLen_m: planLen,
+      longAxisHint: longAxis,
+      dirXZ_m: dir
+    };
+  }
+
+  let frontPlateMesh = findTopPlateMesh("front");
+  let backPlateMesh = findTopPlateMesh("back");
+
+  let frontBear = computeBearingEdge(frontPlateMesh, "front");
+  let backBear = computeBearingEdge(backPlateMesh, "back");
+
+  // Fallback if meshes missing (walls hidden/not built) - keep previous behavior shape
+  if (!frontBear) {
+    frontBear = {
       name: frontPlateMesh ? String(frontPlateMesh.name || "") : "",
       mesh: frontPlateMesh || null,
+      which: "front",
       p0_m: new BABYLON.Vector3(roofMinX_m, Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000), wallMinZ_m),
       p1_m: new BABYLON.Vector3(roofMaxX_m, Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000), wallMinZ_m),
       mid_m: new BABYLON.Vector3((roofMinX_m + roofMaxX_m) * 0.5, Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000), wallMinZ_m),
-      dirLong_m: new BABYLON.Vector3(1, 0, 0),
-      topY_m: Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000)
+      cx_m: (roofMinX_m + roofMaxX_m) * 0.5,
+      cy_m: Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000),
+      cz_m: wallMinZ_m,
+      topY_m: Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000),
+      planLen_m: Math.abs(wallMaxX_m - wallMinX_m),
+      longAxisHint: "x",
+      dirXZ_m: new BABYLON.Vector3(1, 0, 0)
     };
   }
-  if (!backEdge) {
-    backEdge = {
+  if (!backBear) {
+    backBear = {
       name: backPlateMesh ? String(backPlateMesh.name || "") : "",
       mesh: backPlateMesh || null,
+      which: "back",
       p0_m: new BABYLON.Vector3(roofMinX_m, Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000), wallMaxZ_m),
       p1_m: new BABYLON.Vector3(roofMaxX_m, Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000), wallMaxZ_m),
       mid_m: new BABYLON.Vector3((roofMinX_m + roofMaxX_m) * 0.5, Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000), wallMaxZ_m),
-      dirLong_m: new BABYLON.Vector3(1, 0, 0),
-      topY_m: Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000)
+      cx_m: (roofMinX_m + roofMaxX_m) * 0.5,
+      cy_m: Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000),
+      cz_m: wallMaxZ_m,
+      topY_m: Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000),
+      planLen_m: Math.abs(wallMaxX_m - wallMinX_m),
+      longAxisHint: "x",
+      dirXZ_m: new BABYLON.Vector3(1, 0, 0)
     };
   }
 
-  // Defensive ordering by Z (front = smaller Z)
-  if (Number.isFinite(frontEdge.mid_m.z) && Number.isFinite(backEdge.mid_m.z) && frontEdge.mid_m.z > backEdge.mid_m.z) {
-    const tmp = frontEdge;
-    frontEdge = backEdge;
-    backEdge = tmp;
+  // Defensive: ensure "front" is the one with smaller Z in world (swap if needed)
+  if (Number.isFinite(frontBear.mid_m.z) && Number.isFinite(backBear.mid_m.z) && frontBear.mid_m.z > backBear.mid_m.z) {
+    const tmp = frontBear;
+    frontBear = backBear;
+    backBear = tmp;
   }
 
-  // Long axis in WORLD is the plate top-edge direction (XZ)
-  let longAxisVec = new BABYLON.Vector3(frontEdge.dirLong_m.x, 0, frontEdge.dirLong_m.z);
-  if (longAxisVec.length() < 1e-9) longAxisVec = new BABYLON.Vector3(1, 0, 0);
-  longAxisVec.normalize();
+  // ---- Determine long axis (world) from bearing edge direction (not AABB) ----
+  const longAxisVec = (() => {
+    const f = frontBear && frontBear.dirXZ_m ? frontBear.dirXZ_m : null;
+    const b = backBear && backBear.dirXZ_m ? backBear.dirXZ_m : null;
+    let v = null;
+    if (f && b) {
+      const sx = f.x + b.x;
+      const sz = f.z + b.z;
+      const L = Math.sqrt(sx * sx + sz * sz);
+      v = L > 1e-9 ? new BABYLON.Vector3(sx / L, 0, sz / L) : f.clone();
+    } else if (f) v = f.clone();
+    else if (b) v = b.clone();
+    else v = new BABYLON.Vector3(1, 0, 0);
+    // Ensure normalized
+    const L2 = Math.sqrt(v.x * v.x + v.z * v.z);
+    return L2 > 1e-9 ? new BABYLON.Vector3(v.x / L2, 0, v.z / L2) : new BABYLON.Vector3(1, 0, 0);
+  })();
 
-  // Pitch axis is perpendicular to long axis in XZ, oriented from front -> back
-  let pitchAxisVec = BABYLON.Vector3.Cross(new BABYLON.Vector3(0, 1, 0), longAxisVec);
-  pitchAxisVec.y = 0;
-  if (pitchAxisVec.length() < 1e-9) pitchAxisVec = new BABYLON.Vector3(0, 0, 1);
-  pitchAxisVec.normalize();
+  // Pitch axis points from front bearing mid to back bearing mid in XZ
+  const pitchAxisVec = (() => {
+    const dx = Number(backBear.mid_m.x) - Number(frontBear.mid_m.x);
+    const dz = Number(backBear.mid_m.z) - Number(frontBear.mid_m.z);
+    const L = Math.sqrt(dx * dx + dz * dz);
+    if (L > 1e-9) return new BABYLON.Vector3(dx / L, 0, dz / L);
+    // fallback to perpendicular in XZ
+    return new BABYLON.Vector3(-longAxisVec.z, 0, longAxisVec.x);
+  })();
 
-  const fb = new BABYLON.Vector3(backEdge.mid_m.x - frontEdge.mid_m.x, 0, backEdge.mid_m.z - frontEdge.mid_m.z);
-  if (fb.length() > 1e-9) {
-    fb.normalize();
-    if ((fb.x * pitchAxisVec.x + fb.z * pitchAxisVec.z) < 0) pitchAxisVec.scaleInPlace(-1);
-  }
+  // For legacy local-contact selection logic, pick dominant axis labels (only used for local edge picking)
+  const longAxisWorld = (Math.abs(longAxisVec.x) >= Math.abs(longAxisVec.z)) ? "x" : "z";
+  const pitchAxisWorld = (Math.abs(pitchAxisVec.x) >= Math.abs(pitchAxisVec.z)) ? "x" : "z";
 
   // ---- Build rigid roof assembly under roofRoot at identity (local underside y=0) ----
   const roofRoot = new BABYLON.TransformNode("roof-root", scene);
@@ -500,84 +532,84 @@ export function build3D(state, ctx) {
   const midX = (localMinX + localMaxX) * 0.5;
   const midZ = (localMinZ + localMaxZ) * 0.5;
 
-  // Local underside contact points at the *pitch ends* of the roof footprint.
-  // We always define them along the local axis that corresponds to WORLD pitchAxis (after yaw).
-  const roofCenterLocal = new BABYLON.Vector3(midX, 0, midZ);
+  // Local underside "front/back" contact midpoints (used for anchoring translation)
+  const frontContactLocal = (pitchAxisWorld === "z")
+    ? new BABYLON.Vector3(midX, 0, localMinZ)
+    : new BABYLON.Vector3(localMinX, 0, midZ);
 
-  // These are provisional in local; after yaw we recompute by transforming them, so we keep them as
-  // "min/max on the axis orthogonal to long axis".
-  const frontContactLocal = new BABYLON.Vector3(midX, 0, localMinZ);
-  const backContactLocal = new BABYLON.Vector3(midX, 0, localMaxZ);
+  const backContactLocal = (pitchAxisWorld === "z")
+    ? new BABYLON.Vector3(midX, 0, localMaxZ)
+    : new BABYLON.Vector3(localMaxX, 0, midZ);
 
-  // ---- Step A: identity ----
+  // ---- Step A: reset transforms (already identity) ----
   roofRoot.position = new BABYLON.Vector3(0, 0, 0);
   roofRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
-  try { roofRoot.computeWorldMatrix(true); } catch (e) {}
 
-  // ---- Step B: yaw so rafters (local axis) align to WORLD long axis (plate edge direction) ----
+  // ---- Step B: yaw so rafters (local axis) align parallel to longAxisVec (world) ----
   const rafterAxisLocal = data.isWShort ? "x" : "z";
   const rafterAxisLocalVec = (rafterAxisLocal === "x")
     ? new BABYLON.Vector3(1, 0, 0)
     : new BABYLON.Vector3(0, 0, 1);
 
-  const qYaw = quatFromToXZ(rafterAxisLocalVec, longAxisVec);
+  // Use dot/cross in XZ only
+  const dotYaw = clamp(rafterAxisLocalVec.x * longAxisVec.x + rafterAxisLocalVec.z * longAxisVec.z, -1, 1);
+  const crossYawY = (rafterAxisLocalVec.x * longAxisVec.z - rafterAxisLocalVec.z * longAxisVec.x);
+  const yaw = (Math.acos(dotYaw)) * (crossYawY >= 0 ? 1 : -1);
 
-  // ---- Step C: pitch around WORLD long axis by angle from edge mids ----
-  const rise_m = Number(backEdge.mid_m.y) - Number(frontEdge.mid_m.y);
+  const qYaw = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), yaw);
 
-  const fbRunVec = new BABYLON.Vector3(
-    Number(backEdge.mid_m.x) - Number(frontEdge.mid_m.x),
+  // ---- Step C: pitch around long axis by angle derived from bearing-edge mids ----
+  const rise_m = (Number(backBear.mid_m.y) - Number(frontBear.mid_m.y));
+
+  // Run = distance between bearing mids projected onto pitch axis (XZ)
+  const dMid = new BABYLON.Vector3(
+    Number(backBear.mid_m.x) - Number(frontBear.mid_m.x),
     0,
-    Number(backEdge.mid_m.z) - Number(frontEdge.mid_m.z)
+    Number(backBear.mid_m.z) - Number(frontBear.mid_m.z)
   );
-  let run_m = Math.abs(fbRunVec.x * pitchAxisVec.x + fbRunVec.z * pitchAxisVec.z);
-  run_m = Math.max(1e-6, run_m);
+  const run_m_raw = Math.abs(dMid.x * pitchAxisVec.x + dMid.z * pitchAxisVec.z);
+  const run_m = Math.max(1e-6, run_m_raw);
 
   const angle = Math.atan2(rise_m, run_m);
+
   const qPitch = BABYLON.Quaternion.RotationAxis(longAxisVec, angle);
 
   roofRoot.rotationQuaternion = qPitch.multiply(qYaw);
-  try { roofRoot.computeWorldMatrix(true); } catch (e) {}
 
-  // ---- Step D: translate so FRONT underside contact hits FRONT plate outer top edge MID ----
+  // ---- Step D: translate so transformed front underside contact hits front bearing-mid (X/Y/Z) ----
   let worldFront = null;
   try {
-    roofRoot.computeWorldMatrix(true);
     const wm = roofRoot.getWorldMatrix();
     worldFront = BABYLON.Vector3.TransformCoordinates(frontContactLocal, wm);
   } catch (e) {}
 
   if (worldFront) {
-    roofRoot.position.x += (frontEdge.mid_m.x - worldFront.x);
-    roofRoot.position.y += (frontEdge.mid_m.y - worldFront.y);
-    roofRoot.position.z += (frontEdge.mid_m.z - worldFront.z);
-    try { roofRoot.computeWorldMatrix(true); } catch (e) {}
+    roofRoot.position.x += (Number(frontBear.mid_m.x) - worldFront.x);
+    roofRoot.position.y += (Number(frontBear.mid_m.y) - worldFront.y);
+    roofRoot.position.z += (Number(frontBear.mid_m.z) - worldFront.z);
   } else {
-    roofRoot.position = new BABYLON.Vector3(frontEdge.mid_m.x, frontEdge.mid_m.y, frontEdge.mid_m.z);
-    try { roofRoot.computeWorldMatrix(true); } catch (e) {}
+    roofRoot.position.x = Number(frontBear.mid_m.x);
+    roofRoot.position.y = Number(frontBear.mid_m.y);
+    roofRoot.position.z = Number(frontBear.mid_m.z);
   }
 
   // ---- Validate back contact error (debug only; no iterative fitting) ----
   let worldBack = null;
-  let backErrVec = null;
+  let backError_m = null;
   try {
-    roofRoot.computeWorldMatrix(true);
-    const wm2 = roofRoot.getWorldMatrix();
-    worldBack = BABYLON.Vector3.TransformCoordinates(backContactLocal, wm2);
-    backErrVec = new BABYLON.Vector3(
-      backEdge.mid_m.x - worldBack.x,
-      backEdge.mid_m.y - worldBack.y,
-      backEdge.mid_m.z - worldBack.z
-    );
+    const wm3 = roofRoot.getWorldMatrix();
+    worldBack = BABYLON.Vector3.TransformCoordinates(backContactLocal, wm3);
+    backError_m = Number(backBear.mid_m.y) - worldBack.y;
   } catch (e) {}
 
   // ---- Debug visuals + dbg object (roof.js only) ----
-  function mkDbgSphere(name, x_m, y_m, z_m, r, g, b) {
+  function mkDbgSphere(name, x_m, y_m, z_m, isFront) {
     try {
       const s = BABYLON.MeshBuilder.CreateSphere(name, { diameter: 0.06 }, scene);
       s.position = new BABYLON.Vector3(x_m, y_m, z_m);
       const mat = new BABYLON.StandardMaterial(name + "-mat", scene);
-      mat.emissiveColor = new BABYLON.Color3(r, g, b);
+      if (isFront) mat.emissiveColor = new BABYLON.Color3(0.1, 0.9, 0.1);
+      else mat.emissiveColor = new BABYLON.Color3(0.9, 0.1, 0.1);
       s.material = mat;
       s.metadata = { dynamic: true };
       return s;
@@ -590,37 +622,45 @@ export function build3D(state, ctx) {
     if (typeof window !== "undefined" && window.__dbg) {
       window.__dbg.roofFit = {
         frontPlate: {
-          name: String(frontEdge.name || ""),
-          mid: { x: Number(frontEdge.mid_m.x), y: Number(frontEdge.mid_m.y), z: Number(frontEdge.mid_m.z) },
-          p0: { x: Number(frontEdge.p0_m.x), y: Number(frontEdge.p0_m.y), z: Number(frontEdge.p0_m.z) },
-          p1: { x: Number(frontEdge.p1_m.x), y: Number(frontEdge.p1_m.y), z: Number(frontEdge.p1_m.z) },
+          name: String(frontBear.name || ""),
+          topY: Number(frontBear.topY_m),
+          cx: Number(frontBear.cx_m),
+          cz: Number(frontBear.cz_m),
+          planLen: Number(frontBear.planLen_m),
+          bear0: { x: Number(frontBear.p0_m.x), y: Number(frontBear.p0_m.y), z: Number(frontBear.p0_m.z) },
+          bear1: { x: Number(frontBear.p1_m.x), y: Number(frontBear.p1_m.y), z: Number(frontBear.p1_m.z) },
+          mid:   { x: Number(frontBear.mid_m.x), y: Number(frontBear.mid_m.y), z: Number(frontBear.mid_m.z) }
         },
         backPlate: {
-          name: String(backEdge.name || ""),
-          mid: { x: Number(backEdge.mid_m.x), y: Number(backEdge.mid_m.y), z: Number(backEdge.mid_m.z) },
-          p0: { x: Number(backEdge.p0_m.x), y: Number(backEdge.p0_m.y), z: Number(backEdge.p0_m.z) },
-          p1: { x: Number(backEdge.p1_m.x), y: Number(backEdge.p1_m.y), z: Number(backEdge.p1_m.z) },
+          name: String(backBear.name || ""),
+          topY: Number(backBear.topY_m),
+          cx: Number(backBear.cx_m),
+          cz: Number(backBear.cz_m),
+          planLen: Number(backBear.planLen_m),
+          bear0: { x: Number(backBear.p0_m.x), y: Number(backBear.p0_m.y), z: Number(backBear.p0_m.z) },
+          bear1: { x: Number(backBear.p1_m.x), y: Number(backBear.p1_m.y), z: Number(backBear.p1_m.z) },
+          mid:   { x: Number(backBear.mid_m.x), y: Number(backBear.mid_m.y), z: Number(backBear.mid_m.z) }
         },
         longAxis: { x: Number(longAxisVec.x), z: Number(longAxisVec.z) },
         pitchAxis: { x: Number(pitchAxisVec.x), z: Number(pitchAxisVec.z) },
-        rise_m: rise_m,
-        run_m: run_m,
-        angle_rad: angle,
-        backError_mm: backErrVec ? { x: backErrVec.x * 1000, y: backErrVec.y * 1000, z: backErrVec.z * 1000 } : null
+        rise: rise_m,
+        run: run_m,
+        angle: angle,
+        backError_mm: backError_m == null ? null : (backError_m * 1000)
       };
 
-      // plate edge endpoints (blue) and mids (green/red)
-      mkDbgSphere("roof-dbg-frontMid", Number(frontEdge.mid_m.x), Number(frontEdge.mid_m.y), Number(frontEdge.mid_m.z), 0.1, 0.9, 0.1);
-      mkDbgSphere("roof-dbg-backMid", Number(backEdge.mid_m.x), Number(backEdge.mid_m.y), Number(backEdge.mid_m.z), 0.9, 0.1, 0.1);
+      // Plate bearing endpoints + mids
+      mkDbgSphere("roof-dbg-frontBear0", Number(frontBear.p0_m.x), Number(frontBear.p0_m.y), Number(frontBear.p0_m.z), true);
+      mkDbgSphere("roof-dbg-frontBear1", Number(frontBear.p1_m.x), Number(frontBear.p1_m.y), Number(frontBear.p1_m.z), true);
+      mkDbgSphere("roof-dbg-frontBearMid", Number(frontBear.mid_m.x), Number(frontBear.mid_m.y), Number(frontBear.mid_m.z), true);
 
-      mkDbgSphere("roof-dbg-frontP0", Number(frontEdge.p0_m.x), Number(frontEdge.p0_m.y), Number(frontEdge.p0_m.z), 0.1, 0.3, 0.9);
-      mkDbgSphere("roof-dbg-frontP1", Number(frontEdge.p1_m.x), Number(frontEdge.p1_m.y), Number(frontEdge.p1_m.z), 0.1, 0.3, 0.9);
+      mkDbgSphere("roof-dbg-backBear0", Number(backBear.p0_m.x), Number(backBear.p0_m.y), Number(backBear.p0_m.z), false);
+      mkDbgSphere("roof-dbg-backBear1", Number(backBear.p1_m.x), Number(backBear.p1_m.y), Number(backBear.p1_m.z), false);
+      mkDbgSphere("roof-dbg-backBearMid", Number(backBear.mid_m.x), Number(backBear.mid_m.y), Number(backBear.mid_m.z), false);
 
-      mkDbgSphere("roof-dbg-backP0", Number(backEdge.p0_m.x), Number(backEdge.p0_m.y), Number(backEdge.p0_m.z), 0.1, 0.3, 0.9);
-      mkDbgSphere("roof-dbg-backP1", Number(backEdge.p1_m.x), Number(backEdge.p1_m.y), Number(backEdge.p1_m.z), 0.1, 0.3, 0.9);
-
-      if (worldFront) mkDbgSphere("roof-dbg-frontContact", worldFront.x, worldFront.y, worldFront.z, 0.0, 0.8, 0.0);
-      if (worldBack) mkDbgSphere("roof-dbg-backContact", worldBack.x, worldBack.y, worldBack.z, 0.8, 0.0, 0.0);
+      // Roof contact mids
+      if (worldFront) mkDbgSphere("roof-dbg-frontContact", worldFront.x, worldFront.y, worldFront.z, true);
+      if (worldBack) mkDbgSphere("roof-dbg-backContact", worldBack.x, worldBack.y, worldBack.z, false);
     }
   } catch (e) {}
 }
