@@ -18,37 +18,66 @@ export function build3D(state, ctx) {
   const { scene, materials } = ctx || {};
   if (!scene) return;
 
-  // Dispose previous roof meshes
-  scene.meshes
-    .filter(
-      (m) =>
-        m &&
-        m.metadata &&
-        m.metadata.dynamic === true &&
-        typeof m.name === "string" &&
-        m.name.startsWith("roof-")
-    )
-    .forEach((m) => {
+  // ---- HARD DISPOSAL: remove prior roof meshes + transform nodes (children before parents) ----
+  try {
+    // Dispose meshes that are roof-* OR parented under a roof root/tilt chain.
+    const isRoofNodeName = (nm) => typeof nm === "string" && nm.startsWith("roof-");
+
+    function hasRoofAncestor(m) {
       try {
-        if (!m.isDisposed()) m.dispose(false, true);
+        let p = m && m.parent ? m.parent : null;
+        while (p) {
+          const pn = String(p.name || "");
+          if (pn === "roof-root" || pn === "roof-tilt" || pn.startsWith("roof-")) return true;
+          p = p.parent || null;
+        }
       } catch (e) {}
+      return false;
+    }
+
+    const roofMeshes = (scene.meshes || []).filter((m) => {
+      if (!m) return false;
+      const nm = String(m.name || "");
+      if (isRoofNodeName(nm)) return true;
+      return hasRoofAncestor(m);
     });
 
-  // Dispose previous roof transform nodes
-  (scene.transformNodes || [])
-    .filter(
-      (n) =>
-        n &&
-        n.metadata &&
-        n.metadata.dynamic === true &&
-        typeof n.name === "string" &&
-        n.name.startsWith("roof-")
-    )
-    .forEach((n) => {
+    // Dispose meshes first
+    for (let i = 0; i < roofMeshes.length; i++) {
+      const m = roofMeshes[i];
       try {
-        n.dispose(false);
+        if (m && !m.isDisposed()) m.dispose(false, true);
       } catch (e) {}
+    }
+
+    // Dispose transform nodes (children before parents)
+    const tnodes = (scene.transformNodes || []).filter((n) => {
+      if (!n) return false;
+      const nm = String(n.name || "");
+      if (nm === "roof-root" || nm === "roof-tilt") return true;
+      return nm.startsWith("roof-");
     });
+
+    function depth(n) {
+      let d = 0;
+      try {
+        let p = n && n.parent ? n.parent : null;
+        while (p) {
+          d++;
+          p = p.parent || null;
+        }
+      } catch (e) {}
+      return d;
+    }
+
+    tnodes.sort((a, b) => depth(b) - depth(a));
+
+    for (let i = 0; i < tnodes.length; i++) {
+      try {
+        tnodes[i].dispose(false);
+      } catch (e) {}
+    }
+  } catch (e) {}
 
   if (!isPentEnabled(state)) return;
 
@@ -118,33 +147,13 @@ export function build3D(state, ctx) {
     return found && Number.isFinite(maxY) ? maxY : null;
   }
 
-  function minXForMeshes(meshes) {
-    let minX = Infinity;
-    let found = false;
-    for (let i = 0; i < meshes.length; i++) {
-      const m = meshes[i];
-      if (!m) continue;
-      try {
-        m.computeWorldMatrix(true);
-        const bi = m.getBoundingInfo && m.getBoundingInfo();
-        if (!bi || !bi.boundingBox) continue;
-        const x = bi.boundingBox.minimumWorld.x;
-        if (Number.isFinite(x)) {
-          found = true;
-          if (x < minX) minX = x;
-        }
-      } catch (e) {}
-    }
-    return found && Number.isFinite(minX) ? minX : null;
-  }
-
   function getLeftRightWallTopY_m(scene, state) {
     const leftAll = [];
     const rightAll = [];
     const leftTop = [];
     const rightTop = [];
 
-    for (let i = 0; i < scene.meshes.length; i++) {
+    for (let i = 0; i < (scene.meshes || []).length; i++) {
       const m = scene.meshes[i];
       if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
       const nm = String(m.name || "");
@@ -159,13 +168,9 @@ export function build3D(state, ctx) {
       }
     }
 
-    // Prefer plate-top ONLY if present (avoid studs influencing maxY).
-    const leftY =
-      (leftTop.length ? topYForMeshes(leftTop) : null) ??
-      (leftAll.length ? topYForMeshes(leftAll) : null);
-    const rightY =
-      (rightTop.length ? topYForMeshes(rightTop) : null) ??
-      (rightAll.length ? topYForMeshes(rightAll) : null);
+    // Prefer TOP PLATES ONLY when present (avoid studs influencing max)
+    const leftY = leftTop.length ? topYForMeshes(leftTop) : topYForMeshes(leftAll);
+    const rightY = rightTop.length ? topYForMeshes(rightTop) : topYForMeshes(rightAll);
 
     if (leftY != null && rightY != null) return { leftTopY_m: leftY, rightTopY_m: rightY };
 
@@ -202,35 +207,46 @@ export function build3D(state, ctx) {
     return { leftTopY_m: minH_mm / 1000, rightTopY_m: maxH_mm / 1000 };
   }
 
-  function findLeftWallOuterX_m(scene) {
-    const leftAll = [];
-    const leftTop = [];
+  function getWallMinXZ_m(scene) {
+    let minX = Infinity;
+    let minZ = Infinity;
+    let found = false;
 
-    for (let i = 0; i < scene.meshes.length; i++) {
+    for (let i = 0; i < (scene.meshes || []).length; i++) {
       const m = scene.meshes[i];
       if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
       const nm = String(m.name || "");
-      if (!nm.startsWith("wall-left-")) continue;
+      if (!nm.startsWith("wall-")) continue;
 
-      leftAll.push(m);
-      if (nm.indexOf("plate-top") !== -1) leftTop.push(m);
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const bb = bi.boundingBox;
+        const x = bb.minimumWorld.x;
+        const z = bb.minimumWorld.z;
+        if (Number.isFinite(x) && Number.isFinite(z)) {
+          found = true;
+          if (x < minX) minX = x;
+          if (z < minZ) minZ = z;
+        }
+      } catch (e) {}
     }
 
-    // Prefer left top plates if present; else any left wall meshes.
-    const x =
-      (leftTop.length ? minXForMeshes(leftTop) : null) ??
-      (leftAll.length ? minXForMeshes(leftAll) : null);
-
-    return x != null ? x : 0;
+    return {
+      wallMinX_m: found && Number.isFinite(minX) ? minX : 0,
+      wallMinZ_m: found && Number.isFinite(minZ) ? minZ : 0,
+      found,
+    };
   }
 
-  const { leftTopY_m, rightTopY_m } = getLeftRightWallTopY_m(scene, state);
+  const dims = resolveDims(state);
+  const ovh = dims?.overhang || { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
 
-  // Anchor to LOW side in world Y.
+  // ---- SEATING + PITCH (measured from wall top plates; no guessed offsets) ----
+  const { leftTopY_m, rightTopY_m } = getLeftRightWallTopY_m(scene, state);
   const roofRootY_m = Math.min(leftTopY_m, rightTopY_m);
 
-  // Pitch across FRAME width (X axis), derived from ACTUAL measured wall tops.
-  const dims = resolveDims(state);
   const run_m = Math.max(
     1e-6,
     Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? 1))) / 1000
@@ -243,89 +259,82 @@ export function build3D(state, ctx) {
   // Rotate about Z so +X is higher when right side is higher.
   let rotZ = 0;
   if (angle !== 0) {
-    if (rightTopY_m > leftTopY_m) rotZ = -angle;
-    else if (leftTopY_m > rightTopY_m) rotZ = +angle;
+    if (rise_m > 0) rotZ = -angle;
+    else if (rise_m < 0) rotZ = +angle;
     else rotZ = 0;
   }
 
-  // Pivot X derived from actual LEFT wall geometry (no guessed constants).
-  const leftWallOuterX_m = findLeftWallOuterX_m(scene);
-  const pivotX_mm = leftWallOuterX_m * 1000;
+  // ---- PLAN ALIGNMENT: align roof min corner to wall min corner minus overhang (world space) ----
+  const { wallMinX_m, wallMinZ_m } = getWallMinXZ_m(scene);
 
-  // Roof hierarchy: single rigid tilt (no per-piece Y stepping / no fragmentation)
+  const desiredRoofMinX_m = wallMinX_m - Math.max(0, Math.floor(Number(ovh.l_mm || 0))) / 1000;
+  const desiredRoofMinZ_m = wallMinZ_m - Math.max(0, Math.floor(Number(ovh.f_mm || 0))) / 1000;
+
+  // ---- SINGLE ROOF ROOT + TILT ----
   const roofRoot = new BABYLON.TransformNode("roof-root", scene);
   roofRoot.metadata = { dynamic: true };
-  roofRoot.position = new BABYLON.Vector3(leftWallOuterX_m, roofRootY_m, 0);
+  roofRoot.position = new BABYLON.Vector3(desiredRoofMinX_m, roofRootY_m, desiredRoofMinZ_m);
 
   const roofTilt = new BABYLON.TransformNode("roof-tilt", scene);
   roofTilt.metadata = { dynamic: true };
   roofTilt.parent = roofRoot;
+
+  // Pivot rotation about the LEFT WALL BEARING LINE:
+  // We keep roofRoot at roof min corner (includes left overhang),
+  // and shift roofTilt +X by left overhang so rotation pivots at x = wallMinX.
+  const leftOvh_mm = Math.max(0, Math.floor(Number(ovh.l_mm || 0)));
+  roofTilt.position = new BABYLON.Vector3(leftOvh_mm / 1000, 0, 0);
   roofTilt.rotation = new BABYLON.Vector3(0, 0, rotZ);
 
   try {
     if (typeof window !== "undefined" && window.__dbg) {
-      window.__dbg.lastRoofSeat = {
+      window.__dbg.lastRoof = {
         leftTopY_m,
         rightTopY_m,
-        roofRootY_m,
+        roofRootPos: {
+          x: roofRoot.position.x,
+          y: roofRoot.position.y,
+          z: roofRoot.position.z,
+        },
         rise_m,
         run_m,
         angle,
-        rotZ,
+        rotZ: roofTilt.rotation.z,
+        wallMinX_m,
+        wallMinZ_m,
+        desiredRoofMinX_m,
+        desiredRoofMinZ_m,
       };
     }
   } catch (e) {}
+
+  // ---- Local X/Z placement under roofTilt (roof-local origin at min corner) ----
+  // Because roofTilt is shifted by +leftOverhang for correct rotation pivot,
+  // we place all parts with x_mm offset by (-leftOverhang) to keep roof min at x=0 in world.
+  const xShift_mm = -leftOvh_mm;
+
+  function mapABtoLocalXZ(a0, b0, aLen, bLen, isWShort) {
+    // Roof-local X/Z with origin at min corner (0,0).
+    if (isWShort) return { x0: a0, z0: b0, lenX: aLen, lenZ: bLen };
+    return { x0: b0, z0: a0, lenX: bLen, lenZ: aLen };
+  }
 
   // ---- Rim Joists (front/back at ends of A; run along B) ----
   const rimThkA_mm = data.rafterW_mm;
   const rimRunB_mm = data.B_mm;
   const rimBackA0_mm = Math.max(0, data.A_mm - rimThkA_mm);
 
-  function mapABtoWorldXZ_ForRim(a0, b0, aLen, bLen, isWShort) {
-    if (isWShort)
-      return {
-        x0: data.originX_mm + a0,
-        z0: data.originZ_mm + b0,
-        lenX: aLen,
-        lenZ: bLen,
-      };
-    return {
-      x0: data.originX_mm + b0,
-      z0: data.originZ_mm + a0,
-      lenX: bLen,
-      lenZ: aLen,
-    };
-  }
-
-  function mapABtoWorldXZ_ForRafter(a0, b0, aLen, bLen, isWShort) {
-    if (isWShort)
-      return {
-        x0: data.originX_mm + a0,
-        z0: data.originZ_mm + b0,
-        lenX: aLen,
-        lenZ: bLen,
-      };
-    return {
-      x0: data.originX_mm + b0,
-      z0: data.originZ_mm + a0,
-      lenX: bLen,
-      lenZ: aLen,
-    };
-  }
-
   // Front rim (A = 0)
   {
-    const m = mapABtoWorldXZ_ForRim(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
-    const localX_mm = Math.floor(m.x0 - pivotX_mm);
-    const localZ_mm = Math.floor(m.z0);
+    const m = mapABtoLocalXZ(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
     mkBoxBottomLocal(
       "roof-rim-front",
       m.lenX,
       data.rafterD_mm,
       m.lenZ,
-      localX_mm,
+      Math.floor(m.x0 + xShift_mm),
       0,
-      localZ_mm,
+      Math.floor(m.z0),
       roofTilt,
       joistMat,
       { roof: "pent", part: "rim", edge: "front" }
@@ -334,17 +343,15 @@ export function build3D(state, ctx) {
 
   // Back rim (A = A - thickness)
   {
-    const m = mapABtoWorldXZ_ForRim(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
-    const localX_mm = Math.floor(m.x0 - pivotX_mm);
-    const localZ_mm = Math.floor(m.z0);
+    const m = mapABtoLocalXZ(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
     mkBoxBottomLocal(
       "roof-rim-back",
       m.lenX,
       data.rafterD_mm,
       m.lenZ,
-      localX_mm,
+      Math.floor(m.x0 + xShift_mm),
       0,
-      localZ_mm,
+      Math.floor(m.z0),
       roofTilt,
       joistMat,
       { roof: "pent", part: "rim", edge: "back" }
@@ -354,18 +361,16 @@ export function build3D(state, ctx) {
   // ---- Rafters (span along A, placed along B @600) ----
   for (let i = 0; i < data.rafters.length; i++) {
     const r = data.rafters[i];
-    const mapped = mapABtoWorldXZ_ForRafter(0, r.b0_mm, data.rafterLen_mm, data.rafterW_mm, data.isWShort);
-    const localX_mm = Math.floor(mapped.x0 - pivotX_mm);
-    const localZ_mm = Math.floor(mapped.z0);
+    const m = mapABtoLocalXZ(0, r.b0_mm, data.rafterLen_mm, data.rafterW_mm, data.isWShort);
 
     mkBoxBottomLocal(
       `roof-rafter-${i}`,
-      mapped.lenX,
+      m.lenX,
       data.rafterD_mm,
-      mapped.lenZ,
-      localX_mm,
+      m.lenZ,
+      Math.floor(m.x0 + xShift_mm),
       0,
-      localZ_mm,
+      Math.floor(m.z0),
       roofTilt,
       joistMat,
       { roof: "pent", part: "rafter" }
@@ -376,38 +381,21 @@ export function build3D(state, ctx) {
   const osbBottomY_m = data.rafterD_mm / 1000;
   for (let i = 0; i < data.osb.all.length; i++) {
     const p = data.osb.all[i];
-    const localX_mm = Math.floor(p.x0_mm - pivotX_mm);
-    const localZ_mm = Math.floor(p.z0_mm);
+    const m = mapABtoLocalXZ(p.a0_mm, p.b0_mm, p.W_mm, p.L_mm, data.isWShort);
 
     mkBoxBottomLocal(
       `roof-osb-${i}`,
-      p.xLen_mm,
+      m.lenX,
       data.osbThickness_mm,
-      p.zLen_mm,
-      localX_mm,
+      m.lenZ,
+      Math.floor(m.x0 + xShift_mm),
       osbBottomY_m,
-      localZ_mm,
+      Math.floor(m.z0),
       roofTilt,
       osbMat,
       { roof: "pent", part: "osb", kind: p.kind }
     );
   }
-
-  // Optional debug (kept lightweight)
-  try {
-    if (typeof window !== "undefined" && window.__dbg) {
-      window.__dbg.lastRoof = {
-        isWShort: data.isWShort,
-        roofW: data.roofW_mm,
-        roofD: data.roofD_mm,
-        originX: data.originX_mm,
-        originZ: data.originZ_mm,
-        minH: data.minH_mm,
-        maxH: data.maxH_mm,
-        slopeAxis: "X",
-      };
-    }
-  } catch (e) {}
 }
 
 export function updateBOM(state) {
@@ -541,13 +529,6 @@ function computeRoofData(state) {
   const frameW = Math.max(1, Math.floor(Number(dims?.frame?.w_mm)));
   const frameD = Math.max(1, Math.floor(Number(dims?.frame?.d_mm)));
 
-  const ovh = dims?.overhang || { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
-
-  // Keep existing plan origin logic (do not change); includes symmetric overhang handling.
-  const WALL_OVERHANG_MM = 25;
-  const originX_mm = -WALL_OVERHANG_MM - Math.max(0, Math.floor(Number(ovh.l_mm || 0)));
-  const originZ_mm = -WALL_OVERHANG_MM - Math.max(0, Math.floor(Number(ovh.f_mm || 0)));
-
   // A = shortest (rafter span), B = longest (placement axis)
   const A = Math.min(roofW, roofD);
   const B = Math.max(roofW, roofD);
@@ -589,35 +570,6 @@ function computeRoofData(state) {
   // OSB tiling in AB space: 1220 along A, 2440 along B (no stagger)
   const osbAB = computeOsbPiecesNoStagger(A, B);
 
-  // Map AB pieces to world X/Z consistent with rafter mapping and origin shift
-  const mappedAll = [];
-  for (let i = 0; i < osbAB.all.length; i++) {
-    const p2 = osbAB.all[i];
-    if (isWShort) {
-      // A->X, B->Z
-      mappedAll.push({
-        kind: p2.kind,
-        x0_mm: originX_mm + p2.a0_mm,
-        z0_mm: originZ_mm + p2.b0_mm,
-        xLen_mm: p2.W_mm,
-        zLen_mm: p2.L_mm,
-        L_mm: p2.L_mm,
-        W_mm: p2.W_mm,
-      });
-    } else {
-      // A->Z, B->X
-      mappedAll.push({
-        kind: p2.kind,
-        x0_mm: originX_mm + p2.b0_mm,
-        z0_mm: originZ_mm + p2.a0_mm,
-        xLen_mm: p2.L_mm,
-        zLen_mm: p2.W_mm,
-        L_mm: p2.L_mm,
-        W_mm: p2.W_mm,
-      });
-    }
-  }
-
   const baseH_mm = Math.max(
     100,
     Math.floor(
@@ -650,8 +602,6 @@ function computeRoofData(state) {
     roofD_mm: roofD,
     frameW_mm: frameW,
     frameD_mm: frameD,
-    originX_mm,
-    originZ_mm,
     A_mm: A,
     B_mm: B,
     isWShort: isWShort,
@@ -661,7 +611,7 @@ function computeRoofData(state) {
     rafters,
     osbThickness_mm: 18,
     osb: {
-      all: mappedAll,
+      all: osbAB.all, // AB space pieces; mapped to local X/Z in build3D (no change to tiling logic)
       totalArea_mm2: osbAB.totalArea_mm2,
     },
     minH_mm: minH,
