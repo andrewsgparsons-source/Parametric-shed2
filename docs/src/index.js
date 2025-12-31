@@ -483,8 +483,6 @@ function initApp() {
 
     function render(state) {
       try {
-        console.log("[rebuild] called; roof.style =", state && state.roof ? state.roof.style : undefined);
-
         window.__dbg.buildCalls += 1;
 
         var R = resolveDims(state);
@@ -503,7 +501,9 @@ function initApp() {
         }
 
         var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-        if (roofStyle === "pent") {
+
+        // Build roof for supported styles (pent + apex). (No behavior change for pent.)
+        if (roofStyle === "pent" || roofStyle === "apex") {
           var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(R.roof.w_mm)) : Math.max(1, Math.floor(R.base.w_mm));
           var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(R.roof.d_mm)) : Math.max(1, Math.floor(R.base.d_mm));
           var roofState = Object.assign({}, state, { w: roofW, d: roofD });
@@ -514,7 +514,7 @@ function initApp() {
           if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(roofState);
         } else {
           try {
-            if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(Object.assign({}, state, { roof: Object.assign({}, state.roof || {}, { style: "apex" }) }));
+            if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(Object.assign({}, state, { roof: Object.assign({}, state.roof || {}, { style: roofStyle }) }));
           } catch (e0) {}
         }
 
@@ -1233,15 +1233,9 @@ function initApp() {
 
     if (roofStyleEl) {
       roofStyleEl.addEventListener("change", function () {
-        console.log("[roofStyle change] raw value:", roofStyleEl ? roofStyleEl.value : undefined);
-
         var v = String(roofStyleEl.value || "apex");
         if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
         store.setState({ roof: { style: v } });
-
-        console.log("[roofStyle change] state.roof.style now:", (store.getState() && store.getState().roof) ? store.getState().roof.style : undefined);
-        try { console.log("[roofStyle change] state snapshot:", JSON.parse(JSON.stringify(store.getState()))); } catch (e) {}
-
         applyWallHeightUiLock(store.getState());
       });
     }
