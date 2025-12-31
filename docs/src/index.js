@@ -74,8 +74,101 @@ function shiftRoofMeshes(scene, dx_mm, dy_mm, dz_mm) {
   }
 }
 
+function ensureRequiredDomScaffolding() {
+  function ensureEl(tag, id, parent) {
+    var el = $(id);
+    if (el) return el;
+    el = document.createElement(tag);
+    el.id = id;
+    (parent || document.body).appendChild(el);
+    return el;
+  }
+
+  // Ensure core view containers exist so view switching + BOM rendering does not crash.
+  var bomPage = $("bomPage") || ensureEl("div", "bomPage", document.body);
+  var wallsPage = $("wallsBomPage") || ensureEl("div", "wallsBomPage", document.body);
+  var roofPage = $("roofBomPage") || ensureEl("div", "roofBomPage", document.body);
+
+  // Make sure they start hidden (view system will show/hide).
+  if (bomPage && bomPage.style && bomPage.style.display === "") bomPage.style.display = "none";
+  if (wallsPage && wallsPage.style && wallsPage.style.display === "") wallsPage.style.display = "none";
+  if (roofPage && roofPage.style && roofPage.style.display === "") roofPage.style.display = "none";
+
+  // Walls cutting list table (renderBOM targets #bomTable)
+  if (!$("bomTable")) {
+    var t = document.createElement("table");
+    t.id = "bomTable";
+    var tb = document.createElement("tbody");
+    t.appendChild(tb);
+    wallsPage.appendChild(t);
+  }
+
+  // Base cutting list common targets (Base module writes into these IDs)
+  if (!$("timberTableBody")) {
+    var timberTable = document.createElement("table");
+    timberTable.id = "timberTable";
+    var thead1 = document.createElement("thead");
+    var trh1 = document.createElement("tr");
+    trh1.innerHTML = "<th>Item</th><th>Qty</th><th>L</th><th>W</th><th>D</th><th>Notes</th>";
+    thead1.appendChild(trh1);
+    timberTable.appendChild(thead1);
+    var tbody1 = document.createElement("tbody");
+    tbody1.id = "timberTableBody";
+    timberTable.appendChild(tbody1);
+    bomPage.appendChild(timberTable);
+  }
+  if (!$("timberTotals")) {
+    var tt = document.createElement("div");
+    tt.id = "timberTotals";
+    bomPage.appendChild(tt);
+  }
+  if (!$("osbStdBody")) {
+    var osbStd = document.createElement("table");
+    osbStd.id = "osbStdTable";
+    var tbody2 = document.createElement("tbody");
+    tbody2.id = "osbStdBody";
+    osbStd.appendChild(tbody2);
+    bomPage.appendChild(osbStd);
+  }
+  if (!$("osbRipBody")) {
+    var osbRip = document.createElement("table");
+    osbRip.id = "osbRipTable";
+    var tbody3 = document.createElement("tbody");
+    tbody3.id = "osbRipBody";
+    osbRip.appendChild(tbody3);
+    bomPage.appendChild(osbRip);
+  }
+  if (!$("pirBody")) {
+    var pir = document.createElement("table");
+    pir.id = "pirTable";
+    var tbody4 = document.createElement("tbody");
+    tbody4.id = "pirBody";
+    pir.appendChild(tbody4);
+    bomPage.appendChild(pir);
+  }
+  if (!$("gridBody")) {
+    var grid = document.createElement("table");
+    grid.id = "gridTable";
+    var tbody5 = document.createElement("tbody");
+    tbody5.id = "gridBody";
+    grid.appendChild(tbody5);
+    bomPage.appendChild(grid);
+  }
+
+  // Roof cutting list target (roof module renders into #roofBomTable if present)
+  if (!$("roofBomTable")) {
+    var roofTable = document.createElement("table");
+    roofTable.id = "roofBomTable";
+    var roofTbody = document.createElement("tbody");
+    roofTable.appendChild(roofTbody);
+    roofPage.appendChild(roofTable);
+  }
+}
+
 function initApp() {
   try {
+    ensureRequiredDomScaffolding();
+
     var canvas = $("renderCanvas");
     var statusOverlayEl = $("statusOverlay");
 
@@ -240,6 +333,71 @@ function initApp() {
       try { if (camera && typeof camera.attachControl === "function") camera.attachControl(canvas, true); } catch (e) {}
     }
 
+    function showWallsBOM() {
+      var camera = window.__dbg.camera;
+
+      setDisplay(canvas, "none");
+      setAriaHidden(canvas, true);
+
+      var bomPage = $("bomPage");
+      var wallsPage = $("wallsBomPage");
+      var roofPage = $("roofBomPage");
+      setDisplay(bomPage, "none");
+      setDisplay(wallsPage, "block");
+      setDisplay(roofPage, "none");
+      setAriaHidden(bomPage, true);
+      setAriaHidden(wallsPage, false);
+      setAriaHidden(roofPage, true);
+
+      try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
+    }
+
+    function showBaseBOM() {
+      var camera = window.__dbg.camera;
+
+      setDisplay(canvas, "none");
+      setAriaHidden(canvas, true);
+
+      var bomPage = $("bomPage");
+      var wallsPage = $("wallsBomPage");
+      var roofPage = $("roofBomPage");
+      setDisplay(bomPage, "block");
+      setDisplay(wallsPage, "none");
+      setDisplay(roofPage, "none");
+      setAriaHidden(bomPage, false);
+      setAriaHidden(wallsPage, true);
+      setAriaHidden(roofPage, true);
+
+      try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
+    }
+
+    function showRoofBOM() {
+      var camera = window.__dbg.camera;
+
+      setDisplay(canvas, "none");
+      setAriaHidden(canvas, true);
+
+      var bomPage = $("bomPage");
+      var wallsPage = $("wallsBomPage");
+      var roofPage = $("roofBomPage");
+      setDisplay(bomPage, "none");
+      setDisplay(wallsPage, "none");
+      setDisplay(roofPage, "block");
+      setAriaHidden(bomPage, true);
+      setAriaHidden(wallsPage, true);
+      setAriaHidden(roofPage, false);
+
+      try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
+    }
+
+    // Expose hooks for views.js (no dependency/import changes).
+    window.__viewHooks = {
+      resume3D: resume3D,
+      showWallsBOM: showWallsBOM,
+      showBaseBOM: showBaseBOM,
+      showRoofBOM: showRoofBOM
+    };
+
     function getWallOuterDimsFromState(state) {
       var R = resolveDims(state);
       var w = Math.max(1, Math.floor(R.base.w_mm + (2 * WALL_OVERHANG_MM)));
@@ -301,7 +459,6 @@ function initApp() {
       return Number.isFinite(n) ? n : def;
     }
 
-    // --- NEW HELPERS: Pent display height calculation (UI only) ---
     function getPentMinMax(state) {
       var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
       var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
@@ -315,7 +472,6 @@ function initApp() {
       var mid = Math.round((mm.minH + mm.maxH) / 2);
       return Math.max(100, mid);
     }
-    // -------------------------------------------------------------
 
     function getPentHeightsFromState(state) {
       var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
@@ -344,7 +500,6 @@ function initApp() {
           shiftWallMeshes(ctx.scene, -WALL_OVERHANG_MM, WALL_RISE_MM, -WALL_OVERHANG_MM);
         }
 
-        // Roof (PENT only): 3D + additive cutting list rendering
         var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
         if (roofStyle === "pent") {
           var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(R.roof.w_mm)) : Math.max(1, Math.floor(R.base.w_mm));
@@ -352,13 +507,10 @@ function initApp() {
           var roofState = Object.assign({}, state, { w: roofW, d: roofD });
 
           if (Roof && typeof Roof.build3D === "function") Roof.build3D(roofState, ctx);
-
-          // Align roof to the same world shift as walls (roof only; does not touch existing wall/base behavior)
           shiftRoofMeshes(ctx.scene, -WALL_OVERHANG_MM, WALL_RISE_MM, -WALL_OVERHANG_MM);
 
           if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(roofState);
         } else {
-          // Clear roof tables when not pent (roof module handles DOM presence checks)
           try {
             if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(Object.assign({}, state, { roof: Object.assign({}, state.roof || {}, { style: "apex" }) }));
           } catch (e0) {}
@@ -1022,7 +1174,6 @@ function initApp() {
 
         if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
 
-        // --- UPDATED: wall height display logic (UI only) ---
         if (wallHeightEl) {
           if (isPent) {
             wallHeightEl.value = String(computePentDisplayHeight(state));
@@ -1030,7 +1181,6 @@ function initApp() {
             wallHeightEl.value = String(state.walls.height_mm);
           }
         }
-        // ----------------------------------------------------
 
         if (wallSectionEl && state && state.walls) {
           var h = null;
@@ -1100,12 +1250,10 @@ function initApp() {
     if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
-      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
     if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
-      // store.onChange will trigger syncUiFromState; no extra timers needed.
     });
 
     if (vWallsEl) {
@@ -1288,11 +1436,9 @@ function initApp() {
       dbg: window.__dbg
     });
 
-    // Ensure pent defaults mirror current wallHeight on first load (no drift if user never touches them)
     try {
       var s0 = store.getState();
       if (s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null) {
-        // already present
       } else {
         var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
         store.setState({ roof: { pent: { minHeight_mm: baseH, maxHeight_mm: baseH } } });
@@ -1316,4 +1462,3 @@ if (document.readyState === "loading") {
 } else {
   initApp();
 }
-```0
