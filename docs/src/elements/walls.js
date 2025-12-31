@@ -155,7 +155,25 @@ export function build3D(state, ctx) {
     const mesh = new BABYLON.Mesh(name, scene);
     vd.applyToMesh(mesh, true);
 
-    mesh.material = mat;
+    // Ensure the custom sloped prism renders solid from all view angles (avoid back-face culling artifacts)
+    let useMat = mat;
+    try {
+      if (mat) {
+        if (!scene._slopedPlateMat) {
+          const c = mat.clone ? mat.clone("slopedPlateMat") : null;
+          if (c) {
+            c.backFaceCulling = false;
+            scene._slopedPlateMat = c;
+          } else {
+            // Fallback: do not mutate shared plate material if clone isn't available
+            scene._slopedPlateMat = null;
+          }
+        }
+        if (scene._slopedPlateMat) useMat = scene._slopedPlateMat;
+      }
+    } catch (e) {}
+
+    mesh.material = useMat;
     mesh.metadata = Object.assign({ dynamic: true }, meta || {});
     return mesh;
   }
@@ -1162,4 +1180,3 @@ export function updateBOM(state) {
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
 }
-```0
