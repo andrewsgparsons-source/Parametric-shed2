@@ -1162,4 +1162,3 @@ export function updateBOM(state) {
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
 }
-```0
