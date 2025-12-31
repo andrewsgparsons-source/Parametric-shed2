@@ -11,10 +11,9 @@
  *
  * IMPORTANT (NO-DRIFT):
  * - When roofW <= roofD (depth >= width), current behavior is known-good and must remain unchanged.
- * - Only when roofW > roofD (width exceeds depth), the roof assembly must reorient by 90° so that:
- *   - Pent pitch remains along WORLD +X (walls.js definition).
- *   - Rafters must span WORLD X (width), and be placed along WORLD Z (depth) @600.
- *   - This fixes the “wrong orientation” case without touching the good case.
+ * - When roofW > roofD (width exceeds depth), rafters must span the SHORTEST distance (depth),
+ *   i.e. they run along WORLD Z and are placed along WORLD X @600.
+ * - Pent pitch remains along WORLD +X (walls.js definition).
  *
  * CHANGE (radical idea #1 still applies):
  * - Stop deriving bearing constraints from wall meshes/top-plate meshes.
@@ -219,15 +218,15 @@ export function build3D(state, ctx) {
 
   // Rotation:
   // - Pent slope is along WORLD +X (walls.js definition)
-  // - So the roof's "span axis" (A axis) must align to WORLD +X.
+  // - Therefore the roof WIDTH axis (local +X) must align to WORLD +X.
   const slopeAxisWorld = new BABYLON.Vector3(1, 0, 0);
   const pitchAxisWorld = new BABYLON.Vector3(0, 0, 1); // rotate about Z to raise +X end
 
-  // Source axis in roof local that represents A (rafter span axis):
-  // data.isWShort => A maps to local X, else A maps to local Z
-  const slopeAxisLocal = data.isWShort ? new BABYLON.Vector3(1, 0, 0) : new BABYLON.Vector3(0, 0, 1);
+  // Source slope axis in roof local is ALWAYS local +X (roof width direction),
+  // regardless of whether rafters span A along X or Z.
+  const slopeAxisLocal = new BABYLON.Vector3(1, 0, 0);
 
-  // Yaw around Y to align slopeAxisLocal -> +X
+  // Yaw around Y to align slopeAxisLocal -> +X (normally 0; kept robust)
   const dotYaw = clamp((slopeAxisLocal.x * slopeAxisWorld.x + slopeAxisLocal.z * slopeAxisWorld.z), -1, 1);
   const crossYawY = (slopeAxisLocal.x * slopeAxisWorld.z - slopeAxisLocal.z * slopeAxisWorld.x);
   let yaw = (Math.acos(dotYaw)) * (crossYawY >= 0 ? 1 : -1);
@@ -333,7 +332,6 @@ export function build3D(state, ctx) {
         run_m: run_m,
         angle: angle,
         rightError_mm: rightError_m == null ? null : (rightError_m * 1000),
-        rule: (data.rule || "shortest-span"),
       };
 
       // Visualize analytic bearing samples
@@ -483,23 +481,13 @@ function computeRoofData(state) {
   const originX_mm = 0;
   const originZ_mm = 0;
 
-  // NO-DRIFT RULE:
-  // - If roofW <= roofD: keep existing “shortest-span” rule (known-good).
-  // - If roofW > roofD: override to lock span axis to WIDTH (WORLD X) for pent roof.
-  //   That means: A = roofW (span), B = roofD (placement axis).
-  let A = Math.min(roofW, roofD);
-  let B = Math.max(roofW, roofD);
-  let isWShort = (roofW <= roofD);
-  let rule = "shortest-span";
-
-  if (roofW > roofD) {
-    // ONLY this case changes:
-    // lock A->X and B->Z so rafters span width and are placed along depth.
-    A = roofW;
-    B = roofD;
-    isWShort = true;
-    rule = "pent-span-locked-to-width";
-  }
+  // Shortest-span rule (NO-DRIFT intent):
+  // - Rafters span A = min(roofW, roofD)
+  // - They are placed along B = max(roofW, roofD)
+  // - Mapping: if width is the short side => A->X, B->Z; else A->Z, B->X.
+  const A = Math.min(roofW, roofD);
+  const B = Math.max(roofW, roofD);
+  const isWShort = roofW <= roofD;
 
   const spacing = 600;
 
@@ -585,7 +573,6 @@ function computeRoofData(state) {
   );
 
   return {
-    rule: rule,
     roofW_mm: roofW,
     roofD_mm: roofD,
     frameW_mm: frameW,
