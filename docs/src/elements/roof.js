@@ -6,13 +6,6 @@
  * - Rafters span the shortest roof dimension (A = min(w,d)); placed along the long axis (B = max(w,d)).
  * - Timber cross-section orientation kept as-is: uses CONFIG.timber.w / CONFIG.timber.d with swapped axes.
  *
- * GOAL (alignment fix):
- * Constrain the roof to the ACTUAL front/back top plates in WORLD SPACE.
- * - Pitch is derived from the sloped front/back top plate geometry (world-space vertex sampling),
- *   not from "front vs back" max-Y (which can be equal for sloped plates).
- * - Roof translation is solved against roof footprint extents (wall bounds + overhang),
- *   and Y is solved using a reference contact point on the front top plate.
- *
  * All roof meshes:
  * - name prefix "roof-"
  * - metadata.dynamic === true
@@ -233,61 +226,6 @@ export function build3D(state, ctx) {
     }
   }
 
-  // Sample the *top surface* Y at the X-min and X-max ends of a (possibly sloped) top-plate mesh.
-  // This uses world-space vertex sampling so it works for the custom sloped prism.
-  function samplePlateTopYAtXEnds(mesh) {
-    if (!mesh || !mesh.getVerticesData) return null;
-
-    let positions = null;
-    try {
-      positions = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-    } catch (e) {
-      positions = null;
-    }
-    if (!positions || positions.length < 3) return null;
-
-    let bb = null;
-    try {
-      mesh.computeWorldMatrix(true);
-      const bi = mesh.getBoundingInfo && mesh.getBoundingInfo();
-      if (bi && bi.boundingBox) bb = bi.boundingBox;
-    } catch (e) {}
-    if (!bb) return null;
-
-    const minX = bb.minimumWorld.x;
-    const maxX = bb.maximumWorld.x;
-    const eps = Math.max(1e-6, (maxX - minX) * 0.01); // 1% of span (world meters), safe for mm-scale meshes
-
-    let yAtMin = -Infinity;
-    let yAtMax = -Infinity;
-    let foundMin = false;
-    let foundMax = false;
-
-    const wm = mesh.getWorldMatrix();
-
-    for (let i = 0; i < positions.length; i += 3) {
-      const v = BABYLON.Vector3.TransformCoordinates(
-        new BABYLON.Vector3(positions[i], positions[i + 1], positions[i + 2]),
-        wm
-      );
-      if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
-
-      if (Math.abs(v.x - minX) <= eps) {
-        foundMin = true;
-        if (v.y > yAtMin) yAtMin = v.y; // top surface at that end = max Y among end vertices
-      }
-      if (Math.abs(v.x - maxX) <= eps) {
-        foundMax = true;
-        if (v.y > yAtMax) yAtMax = v.y;
-      }
-    }
-
-    if (!foundMin || !foundMax) return null;
-    if (!Number.isFinite(yAtMin) || !Number.isFinite(yAtMax)) return null;
-
-    return { yMinX_m: yAtMin, yMaxX_m: yAtMax, minX_m: minX, maxX_m: maxX };
-  }
-
   let frontPlateMesh = findTopPlateMesh("front");
   let backPlateMesh = findTopPlateMesh("back");
 
@@ -323,16 +261,9 @@ export function build3D(state, ctx) {
     const tmp = frontPlate;
     frontPlate = backPlate;
     backPlate = tmp;
-    const tmpM = frontPlateMesh;
-    frontPlateMesh = backPlateMesh;
-    backPlateMesh = tmpM;
   }
 
-  // ---- Determine the roof yaw target:
-  // We keep the rafter placement policy (span shortest A), but we align the rigid assembly in world
-  // so that the roof's *B axis* runs parallel to the front/back top plates (their long axis).
-  //
-  // For typical sheds, front/back top plates are along X.
+  // ---- Determine long axis from plates (axis-aligned) ----
   let longAxisWorld = "x";
   if (frontPlate.axis === backPlate.axis) {
     longAxisWorld = frontPlate.axis;
@@ -347,6 +278,11 @@ export function build3D(state, ctx) {
   }
 
   const longAxisVec = (longAxisWorld === "x")
+    ? new BABYLON.Vector3(1, 0, 0)
+    : new BABYLON.Vector3(0, 0, 1);
+
+  const pitchAxisWorld = (longAxisWorld === "x") ? "z" : "x";
+  const pitchAxisVec = (pitchAxisWorld === "x")
     ? new BABYLON.Vector3(1, 0, 0)
     : new BABYLON.Vector3(0, 0, 1);
 
@@ -467,137 +403,94 @@ export function build3D(state, ctx) {
   const midX = (localMinX + localMaxX) * 0.5;
   const midZ = (localMinZ + localMaxZ) * 0.5;
 
-  const roofCenterLocal = new BABYLON.Vector3(midX, 0, midZ);
+  const frontContactLocal = (pitchAxisWorld === "z")
+    ? new BABYLON.Vector3(midX, 0, localMinZ)
+    : new BABYLON.Vector3(localMinX, 0, midZ);
 
-  // We’ll use a reference contact point on the roof underside:
-  // - We want to match the roof underside height to the front plate at a known X.
-  // Use: front edge in world Z, and the roof’s local front edge (minZ) at localMinZ and midX.
-  const frontUndersideContactLocal = new BABYLON.Vector3(midX, 0, localMinZ);
+  const backContactLocal = (pitchAxisWorld === "z")
+    ? new BABYLON.Vector3(midX, 0, localMaxZ)
+    : new BABYLON.Vector3(localMaxX, 0, midZ);
+
+  const roofCenterLocal = new BABYLON.Vector3(midX, 0, midZ);
 
   // ---- Step A: reset transforms (already identity) ----
   roofRoot.position = new BABYLON.Vector3(0, 0, 0);
   roofRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
+  try { roofRoot.computeWorldMatrix(true); } catch (e) {}
 
-  // ---- Step B: yaw so roof long axis (B axis) aligns parallel to longAxisWorld ----
-  // Local B axis depends on isWShort mapping:
-  // - If isWShort: B->Z
-  // - else:       B->X
-  const roofBLocalAxis = data.isWShort ? "z" : "x";
-  const roofBLocalVec = (roofBLocalAxis === "x")
+  // ---- Step B: yaw so rafters (local axis) align parallel to longAxisWorld ----
+  const rafterAxisLocal = data.isWShort ? "x" : "z";
+  const rafterAxisLocalVec = (rafterAxisLocal === "x")
     ? new BABYLON.Vector3(1, 0, 0)
     : new BABYLON.Vector3(0, 0, 1);
 
-  const dotYaw = clamp(roofBLocalVec.x * longAxisVec.x + roofBLocalVec.z * longAxisVec.z, -1, 1);
-  const crossYawY = (roofBLocalVec.x * longAxisVec.z - roofBLocalVec.z * longAxisVec.x);
+  const dotYaw = clamp(rafterAxisLocalVec.x * longAxisVec.x + rafterAxisLocalVec.z * longAxisVec.z, -1, 1);
+  const crossYawY = (rafterAxisLocalVec.x * longAxisVec.z - rafterAxisLocalVec.z * longAxisVec.x);
   const yaw = (Math.acos(dotYaw)) * (crossYawY >= 0 ? 1 : -1);
+
   const qYaw = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), yaw);
 
-  // ---- Step C: pitch about WORLD Z (pent pitch runs along WORLD X; roof plane is extruded along Z) ----
-  // Derive rise/run from the actual sloped front/back top-plate mesh geometry in world space.
-  let pitchInfo = null;
+  // ---- Step C: pitch around long axis by angle derived from plate heights/run ----
+  const rise_m = (Number(backPlate.topY_m) - Number(frontPlate.topY_m));
 
-  const fSample = samplePlateTopYAtXEnds(frontPlateMesh);
-  const bSample = samplePlateTopYAtXEnds(backPlateMesh);
-
-  if (fSample && bSample) {
-    // Average the two plates’ end heights to reduce noise.
-    pitchInfo = {
-      x0_m: (fSample.minX_m + bSample.minX_m) * 0.5,
-      x1_m: (fSample.maxX_m + bSample.maxX_m) * 0.5,
-      y0_m: (fSample.yMinX_m + bSample.yMinX_m) * 0.5,
-      y1_m: (fSample.yMaxX_m + bSample.yMaxX_m) * 0.5,
-    };
-  } else if (fSample) {
-    pitchInfo = {
-      x0_m: fSample.minX_m,
-      x1_m: fSample.maxX_m,
-      y0_m: fSample.yMinX_m,
-      y1_m: fSample.yMaxX_m,
-    };
-  } else if (bSample) {
-    pitchInfo = {
-      x0_m: bSample.minX_m,
-      x1_m: bSample.maxX_m,
-      y0_m: bSample.yMinX_m,
-      y1_m: bSample.yMaxX_m,
-    };
-  } else {
-    // Fallback: use configured min/max heights across frame width.
-    pitchInfo = {
-      x0_m: wallMinX_m,
-      x1_m: wallMaxX_m,
-      y0_m: Math.max(0.1, Math.floor(Number(data.minH_mm || 2400)) / 1000),
-      y1_m: Math.max(0.1, Math.floor(Number(data.maxH_mm || 2400)) / 1000),
-    };
-  }
-
-  let rise_m = Number(pitchInfo.y1_m) - Number(pitchInfo.y0_m);
-  let run_m = Math.abs(Number(pitchInfo.x1_m) - Number(pitchInfo.x0_m));
+  let run_m = 0;
+  if (pitchAxisWorld === "z") run_m = Math.abs(Number(backPlate.cz_m) - Number(frontPlate.cz_m));
+  else run_m = Math.abs(Number(backPlate.cx_m) - Number(frontPlate.cx_m));
   run_m = Math.max(1e-6, run_m);
 
   const angle = Math.atan2(rise_m, run_m);
 
-  // Rotate around WORLD Z to create slope along WORLD X.
-  const qPitch = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 0, 1), angle);
+  const qPitch = BABYLON.Quaternion.RotationAxis(longAxisVec, angle);
 
   roofRoot.rotationQuaternion = qPitch.multiply(qYaw);
+  try { roofRoot.computeWorldMatrix(true); } catch (e) {}
 
-  // ---- Step D: translate X/Z so roof footprint centers over (wall bounds + overhang) footprint ----
+  // ---- Step D: translate Y so front underside contact hits frontPlateTopY ----
+  let worldFront = null;
+  try {
+    roofRoot.computeWorldMatrix(true);
+    const wm = roofRoot.getWorldMatrix();
+    worldFront = BABYLON.Vector3.TransformCoordinates(frontContactLocal, wm);
+  } catch (e) {}
+
+  if (worldFront) {
+    const dy = Number(frontPlate.topY_m) - worldFront.y;
+    roofRoot.position.y += dy;
+    try { roofRoot.computeWorldMatrix(true); } catch (e) {}
+  } else {
+    roofRoot.position.y = Number(frontPlate.topY_m);
+    try { roofRoot.computeWorldMatrix(true); } catch (e) {}
+  }
+
+  // ---- Step F: translate X/Z so roof plan centers over plate centers (average) ----
   let worldRoofCenter = null;
   try {
+    roofRoot.computeWorldMatrix(true);
     const wm2 = roofRoot.getWorldMatrix();
     worldRoofCenter = BABYLON.Vector3.TransformCoordinates(roofCenterLocal, wm2);
   } catch (e) {}
 
-  const targetCenterX = (roofMinX_m + roofMaxX_m) * 0.5;
-  const targetCenterZ = (roofMinZ_m + roofMaxZ_m) * 0.5;
+  const targetCenterX = (Number(frontPlate.cx_m) + Number(backPlate.cx_m)) * 0.5;
+  const targetCenterZ = (Number(frontPlate.cz_m) + Number(backPlate.cz_m)) * 0.5;
 
   if (worldRoofCenter) {
     roofRoot.position.x += (targetCenterX - worldRoofCenter.x);
     roofRoot.position.z += (targetCenterZ - worldRoofCenter.z);
+    try { roofRoot.computeWorldMatrix(true); } catch (e) {}
   } else {
     roofRoot.position.x = targetCenterX;
     roofRoot.position.z = targetCenterZ;
+    try { roofRoot.computeWorldMatrix(true); } catch (e) {}
   }
 
-  // ---- Step E: translate Y so roof underside at a front reference X matches the front top plate ----
-  // Choose the reference X to be the "low end" X (x0_m) within the roof footprint.
-  // Evaluate target Y on the front plate at x0 using pitchInfo.
-  const refX_m = Number.isFinite(pitchInfo.x0_m) ? pitchInfo.x0_m : Number(frontPlate.cx_m);
-  const targetY_m = Number.isFinite(pitchInfo.y0_m) ? pitchInfo.y0_m : Number(frontPlate.topY_m);
-
-  // For the roof underside reference point, use local front edge at midZ.
-  let worldFrontContact = null;
-  try {
-    const wm3 = roofRoot.getWorldMatrix();
-    worldFrontContact = BABYLON.Vector3.TransformCoordinates(frontUndersideContactLocal, wm3);
-  } catch (e) {}
-
-  if (worldFrontContact && Number.isFinite(targetY_m)) {
-    const dy = targetY_m - worldFrontContact.y;
-    roofRoot.position.y += dy;
-  } else if (Number.isFinite(targetY_m)) {
-    roofRoot.position.y = targetY_m;
-  }
-
-  // ---- Debug: compute back/front errors (should be small if pitch + Y are correct) ----
-  let worldFrontDbg = null;
-  let worldBackDbg = null;
-  let frontError_m = null;
+  // ---- Validate back contact (debug only; no iterative fitting) ----
+  let worldBack = null;
   let backError_m = null;
-
   try {
-    const wm4 = roofRoot.getWorldMatrix();
-    worldFrontDbg = BABYLON.Vector3.TransformCoordinates(frontUndersideContactLocal, wm4);
-
-    const backUndersideContactLocal = new BABYLON.Vector3(midX, 0, localMaxZ);
-    worldBackDbg = BABYLON.Vector3.TransformCoordinates(backUndersideContactLocal, wm4);
-
-    // Expected Y at refX is pitchInfo y0/y1 but those are across X; for debug we just report the front-ref match.
-    frontError_m = Number.isFinite(targetY_m) ? (Number(targetY_m) - Number(worldFrontDbg.y)) : null;
-
-    // Back expected is the same roof plane (extruded along Z), so should match too at same refX.
-    backError_m = Number.isFinite(targetY_m) ? (Number(targetY_m) - Number(worldBackDbg.y)) : null;
+    roofRoot.computeWorldMatrix(true);
+    const wm3 = roofRoot.getWorldMatrix();
+    worldBack = BABYLON.Vector3.TransformCoordinates(backContactLocal, wm3);
+    backError_m = Number(backPlate.topY_m) - worldBack.y;
   } catch (e) {}
 
   // ---- Debug visuals + dbg object (roof.js only) ----
@@ -633,25 +526,19 @@ export function build3D(state, ctx) {
           cz: Number(backPlate.cz_m),
           planLen: Number(backPlate.planLen_m)
         },
-        pitchFromPlate: {
-          x0: Number(pitchInfo.x0_m),
-          x1: Number(pitchInfo.x1_m),
-          y0: Number(pitchInfo.y0_m),
-          y1: Number(pitchInfo.y1_m),
-        },
-        longAxisWorld: longAxisWorld,
+        longAxis: { x: longAxisWorld === "x" ? 1 : 0, z: longAxisWorld === "z" ? 1 : 0 },
+        pitchAxis: { x: pitchAxisWorld === "x" ? 1 : 0, z: pitchAxisWorld === "z" ? 1 : 0 },
         rise: rise_m,
         run: run_m,
         angle: angle,
-        frontError_mm: frontError_m == null ? null : (frontError_m * 1000),
-        backError_mm: backError_m == null ? null : (backError_m * 1000),
+        backError_mm: backError_m == null ? null : (backError_m * 1000)
       };
 
       mkDbgSphere("roof-dbg-frontPlate", Number(frontPlate.cx_m), Number(frontPlate.topY_m), Number(frontPlate.cz_m), true);
       mkDbgSphere("roof-dbg-backPlate", Number(backPlate.cx_m), Number(backPlate.topY_m), Number(backPlate.cz_m), false);
 
-      if (worldFrontDbg) mkDbgSphere("roof-dbg-frontContact", worldFrontDbg.x, worldFrontDbg.y, worldFrontDbg.z, true);
-      if (worldBackDbg) mkDbgSphere("roof-dbg-backContact", worldBackDbg.x, worldBackDbg.y, worldBackDbg.z, false);
+      if (worldFront) mkDbgSphere("roof-dbg-frontContact", worldFront.x, worldFront.y, worldFront.z, true);
+      if (worldBack) mkDbgSphere("roof-dbg-backContact", worldBack.x, worldBack.y, worldBack.z, false);
     }
   } catch (e) {}
 }
