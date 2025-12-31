@@ -118,6 +118,26 @@ export function build3D(state, ctx) {
     return found && Number.isFinite(maxY) ? maxY : null;
   }
 
+  function minXForMeshes(meshes) {
+    let minX = Infinity;
+    let found = false;
+    for (let i = 0; i < meshes.length; i++) {
+      const m = meshes[i];
+      if (!m) continue;
+      try {
+        m.computeWorldMatrix(true);
+        const bi = m.getBoundingInfo && m.getBoundingInfo();
+        if (!bi || !bi.boundingBox) continue;
+        const x = bi.boundingBox.minimumWorld.x;
+        if (Number.isFinite(x)) {
+          found = true;
+          if (x < minX) minX = x;
+        }
+      } catch (e) {}
+    }
+    return found && Number.isFinite(minX) ? minX : null;
+  }
+
   function getLeftRightWallTopY_m(scene, state) {
     const leftAll = [];
     const rightAll = [];
@@ -139,8 +159,13 @@ export function build3D(state, ctx) {
       }
     }
 
-    const leftY = (leftTop.length ? topYForMeshes(leftTop) : null) ?? topYForMeshes(leftAll);
-    const rightY = (rightTop.length ? topYForMeshes(rightTop) : null) ?? topYForMeshes(rightAll);
+    // Prefer plate-top ONLY if present (avoid studs influencing maxY).
+    const leftY =
+      (leftTop.length ? topYForMeshes(leftTop) : null) ??
+      (leftAll.length ? topYForMeshes(leftAll) : null);
+    const rightY =
+      (rightTop.length ? topYForMeshes(rightTop) : null) ??
+      (rightAll.length ? topYForMeshes(rightAll) : null);
 
     if (leftY != null && rightY != null) return { leftTopY_m: leftY, rightTopY_m: rightY };
 
@@ -177,34 +202,40 @@ export function build3D(state, ctx) {
     return { leftTopY_m: minH_mm / 1000, rightTopY_m: maxH_mm / 1000 };
   }
 
-  function findWallMinX_m(scene) {
-    let minX = Infinity;
-    let found = false;
+  function findLeftWallOuterX_m(scene) {
+    const leftAll = [];
+    const leftTop = [];
+
     for (let i = 0; i < scene.meshes.length; i++) {
       const m = scene.meshes[i];
       if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
       const nm = String(m.name || "");
-      if (!nm.startsWith("wall-")) continue;
-      try {
-        m.computeWorldMatrix(true);
-        const bi = m.getBoundingInfo && m.getBoundingInfo();
-        if (!bi || !bi.boundingBox) continue;
-        const x = bi.boundingBox.minimumWorld.x;
-        if (Number.isFinite(x)) {
-          found = true;
-          if (x < minX) minX = x;
-        }
-      } catch (e) {}
+      if (!nm.startsWith("wall-left-")) continue;
+
+      leftAll.push(m);
+      if (nm.indexOf("plate-top") !== -1) leftTop.push(m);
     }
-    return found && Number.isFinite(minX) ? minX : 0;
+
+    // Prefer left top plates if present; else any left wall meshes.
+    const x =
+      (leftTop.length ? minXForMeshes(leftTop) : null) ??
+      (leftAll.length ? minXForMeshes(leftAll) : null);
+
+    return x != null ? x : 0;
   }
 
   const { leftTopY_m, rightTopY_m } = getLeftRightWallTopY_m(scene, state);
+
+  // Anchor to LOW side in world Y.
   const roofRootY_m = Math.min(leftTopY_m, rightTopY_m);
 
+  // Pitch across FRAME width (X axis), derived from ACTUAL measured wall tops.
   const dims = resolveDims(state);
-  const run_m = Math.max(1e-6, (Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? 1))) / 1000));
-  const rise_m = (rightTopY_m - leftTopY_m);
+  const run_m = Math.max(
+    1e-6,
+    Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? 1))) / 1000
+  );
+  const rise_m = rightTopY_m - leftTopY_m;
 
   const absRise_m = Math.abs(rise_m);
   const angle = absRise_m <= 1e-9 ? 0 : Math.atan2(absRise_m, run_m);
@@ -217,14 +248,14 @@ export function build3D(state, ctx) {
     else rotZ = 0;
   }
 
-  // Root pivot X derived from actual wall geometry (no guessed constants)
-  const wallMinX_m = findWallMinX_m(scene);
-  const pivotX_mm = wallMinX_m * 1000;
+  // Pivot X derived from actual LEFT wall geometry (no guessed constants).
+  const leftWallOuterX_m = findLeftWallOuterX_m(scene);
+  const pivotX_mm = leftWallOuterX_m * 1000;
 
   // Roof hierarchy: single rigid tilt (no per-piece Y stepping / no fragmentation)
   const roofRoot = new BABYLON.TransformNode("roof-root", scene);
   roofRoot.metadata = { dynamic: true };
-  roofRoot.position = new BABYLON.Vector3(wallMinX_m, roofRootY_m, 0);
+  roofRoot.position = new BABYLON.Vector3(leftWallOuterX_m, roofRootY_m, 0);
 
   const roofTilt = new BABYLON.TransformNode("roof-tilt", scene);
   roofTilt.metadata = { dynamic: true };
@@ -251,13 +282,35 @@ export function build3D(state, ctx) {
   const rimBackA0_mm = Math.max(0, data.A_mm - rimThkA_mm);
 
   function mapABtoWorldXZ_ForRim(a0, b0, aLen, bLen, isWShort) {
-    if (isWShort) return { x0: data.originX_mm + a0, z0: data.originZ_mm + b0, lenX: aLen, lenZ: bLen };
-    return { x0: data.originX_mm + b0, z0: data.originZ_mm + a0, lenX: bLen, lenZ: aLen };
+    if (isWShort)
+      return {
+        x0: data.originX_mm + a0,
+        z0: data.originZ_mm + b0,
+        lenX: aLen,
+        lenZ: bLen,
+      };
+    return {
+      x0: data.originX_mm + b0,
+      z0: data.originZ_mm + a0,
+      lenX: bLen,
+      lenZ: aLen,
+    };
   }
 
   function mapABtoWorldXZ_ForRafter(a0, b0, aLen, bLen, isWShort) {
-    if (isWShort) return { x0: data.originX_mm + a0, z0: data.originZ_mm + b0, lenX: aLen, lenZ: bLen };
-    return { x0: data.originX_mm + b0, z0: data.originZ_mm + a0, lenX: bLen, lenZ: aLen };
+    if (isWShort)
+      return {
+        x0: data.originX_mm + a0,
+        z0: data.originZ_mm + b0,
+        lenX: aLen,
+        lenZ: bLen,
+      };
+    return {
+      x0: data.originX_mm + b0,
+      z0: data.originZ_mm + a0,
+      lenX: bLen,
+      lenZ: aLen,
+    };
   }
 
   // Front rim (A = 0)
