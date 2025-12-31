@@ -1,176 +1,221 @@
 // FILE: docs/src/views.js
-/**
- * View/page switching for the Pages dropdown.
- *
- * Goals:
- * - Restore cutting-list pages showing/hiding correctly when selected.
- * - Be robust to minor HTML differences (supports multiple conventions).
- * - Avoid drifting any geometry/BOM logic: this file ONLY manages visibility.
- *
- * Expected (any of these patterns are supported):
- * - A <select> with id="pageSelect" (preferred) or id="pagesSelect" or id="viewSelect"
- * - Page containers identified by:
- *    - [data-page] attribute, OR
- *    - class ".page", OR
- *    - ids ending with "Page" (e.g., "bomPage", "roofPage", "roofBomPage")
- * - 3D canvas container can be:
- *    - #viewport, OR
- *    - #scenePage, OR
- *    - #renderWrap, OR
- *    - the canvas itself (#renderCanvas)
- */
-
 export function initViews() {
-  // prevent double-wiring
-  if (window.__views && window.__views._wired) return window.__views;
+  var canvas = document.getElementById("renderCanvas");
+  var basePage = document.getElementById("bomPage");
+  var wallsPage = document.getElementById("wallsBomPage");
+  var roofPage = document.getElementById("roofBomPage");
+  var viewSelect = document.getElementById("viewSelect");
+  var topbar = document.getElementById("topbar");
+  var controls = document.getElementById("controls");
+  var controlPanel = document.getElementById("controlPanel");
+  var uiLayer = document.getElementById("ui-layer");
 
-  const api = (window.__views = window.__views || {});
-  api._wired = true;
+  // Roof page is optional at init; required only when selecting roof view.
+  if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
-  const select =
-    document.getElementById("pageSelect") ||
-    document.getElementById("pagesSelect") ||
-    document.getElementById("viewSelect");
-
-  function allPageEls() {
-    const out = new Set();
-
-    // Most explicit
-    document.querySelectorAll("[data-page]").forEach((el) => out.add(el));
-
-    // Common convention
-    document.querySelectorAll(".page").forEach((el) => out.add(el));
-
-    // Fallback: any element whose id ends with "Page"
-    const all = document.querySelectorAll("[id]");
-    for (let i = 0; i < all.length; i++) {
-      const el = all[i];
-      const id = String(el.id || "");
-      if (id && /Page$/.test(id)) out.add(el);
-    }
-
-    return Array.from(out);
-  }
-
-  function resolveTargetId(val) {
-    const v = String(val || "").trim();
-    if (!v) return null;
-
-    // If option value already is an element id, use it.
-    if (document.getElementById(v)) return v;
-
-    // If option value is like "roof" try "roofPage"
-    const candidate = v.endsWith("Page") ? v : v + "Page";
-    if (document.getElementById(candidate)) return candidate;
-
-    // If option value is like "Roof Cutting List" etc, try matching data-page
-    const pages = allPageEls();
-    for (let i = 0; i < pages.length; i++) {
-      const el = pages[i];
-      const dp = el.getAttribute("data-page");
-      if (dp && String(dp).trim() === v) return el.id || null;
-    }
-
-    return null;
-  }
-
-  function hideAllPages() {
-    const pages = allPageEls();
-    for (let i = 0; i < pages.length; i++) {
-      const el = pages[i];
-      if (!el) continue;
-      el.style.display = "none";
-    }
-  }
-
-  function showEl(el) {
-    if (!el) return;
-    el.style.display = "";
-  }
-
-  function is3DPageId(id) {
-    // Heuristic: anything named scene/viewport/3d
-    const s = String(id || "").toLowerCase();
-    return (
-      s === "viewport" ||
-      s === "scenepage" ||
-      s === "renderwrap" ||
-      s.includes("scene") ||
-      s.includes("viewport") ||
-      s.includes("3d")
-    );
-  }
-
-  function show3DIfPossible() {
-    // Prefer explicit containers if they exist
-    const el =
-      document.getElementById("viewport") ||
-      document.getElementById("scenePage") ||
-      document.getElementById("renderWrap");
-
-    if (el) showEl(el);
-    else {
-      // absolute fallback: ensure canvas is visible
-      const c = document.getElementById("renderCanvas");
-      if (c) c.style.display = "";
-    }
-
-    // Kick engine resize / layout
+  function readHashView() {
     try {
-      window.dispatchEvent(new Event("resize"));
+      var m = (window.location.hash || "").match(/(?:^|[&#])view=(3d|base|walls|roof)\b/i);
+      return m ? String(m[1] || "").toLowerCase() : null;
+    } catch (e) { return null; }
+  }
+
+  function writeHashView(v) {
+    try {
+      var u = new URL(window.location.href);
+      u.hash = "view=" + v;
+      history.replaceState(null, "", u.toString());
     } catch (e) {}
   }
 
-  function setPageById(id) {
-    hideAllPages();
-
-    if (!id) {
-      // default to 3D view if nothing selected
-      show3DIfPossible();
-      api.current = null;
-      return;
-    }
-
-    const el = document.getElementById(id);
-    if (el) {
-      showEl(el);
-      api.current = id;
-
-      // If switching to 3D-like page, ensure canvas container is visible and resized
-      if (is3DPageId(id)) show3DIfPossible();
-      return;
-    }
-
-    // If element doesn't exist, show 3D as safe default
-    show3DIfPossible();
-    api.current = null;
+  function readStoredView() {
+    try {
+      var v = localStorage.getItem("viewMode");
+      return (v === "3d" || v === "base" || v === "walls" || v === "roof") ? v : null;
+    } catch (e) { return null; }
   }
 
-  function setPageFromSelect() {
-    if (!select) {
-      // No dropdown found; ensure 3D is visible.
-      show3DIfPossible();
-      api.current = null;
+  function writeStoredView(v) {
+    try { localStorage.setItem("viewMode", v); } catch (e) {}
+  }
+
+  function isTypingTarget(el) {
+    if (!el) return false;
+    var tag = (el.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable === true;
+  }
+
+  function safeAttach3D() {
+    try {
+      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      if (cam && typeof cam.attachControl === "function") cam.attachControl(canvas, true);
+    } catch (e) {}
+    try {
+      var eng = window.__dbg && window.__dbg.engine ? window.__dbg.engine : null;
+      if (eng && typeof eng.resize === "function") eng.resize();
+    } catch (e) {}
+  }
+
+  function safeDetach3D() {
+    try {
+      var cam = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      if (cam && typeof cam.detachControl === "function") cam.detachControl();
+    } catch (e) {}
+  }
+
+  function focusActive(view) {
+    if (view === "3d") {
+      try { viewSelect.focus({ preventScroll: true }); } catch (e) {}
       return;
     }
-    const targetId = resolveTargetId(select.value);
-    setPageById(targetId);
+    var page = view === "base" ? basePage : (view === "walls" ? wallsPage : roofPage);
+    if (!page) return;
+    var h = page.querySelector("h1,h2");
+    var target = h || page;
+    if (target && typeof target.focus === "function") {
+      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      try { target.focus({ preventScroll: false }); } catch (e) {}
+    }
   }
 
-  // Public API
-  api.setPage = function (valOrId) {
-    const id = resolveTargetId(valOrId) || String(valOrId || "").trim() || null;
-    setPageById(id);
-  };
-
-  // Wire dropdown
-  if (select && !select._viewsWired) {
-    select._viewsWired = true;
-    select.addEventListener("change", setPageFromSelect);
+  function isProtected(el) {
+    if (!el) return false;
+    if (el === canvas || canvas.contains(el) || el.contains(canvas)) return true;
+    if (el === topbar || topbar.contains(el) || el.contains(topbar)) return true;
+    if (controls && (el === controls || controls.contains(el) || el.contains(controls))) return true;
+    if (controlPanel && (el === controlPanel || controlPanel.contains(el) || el.contains(controlPanel))) return true;
+    if (uiLayer && (el === uiLayer || uiLayer.contains(el) || el.contains(uiLayer))) return true;
+    if (el === basePage || basePage.contains(el) || el.contains(basePage)) return true;
+    if (el === wallsPage || wallsPage.contains(el) || el.contains(wallsPage)) return true;
+    if (roofPage && (el === roofPage || roofPage.contains(el) || el.contains(roofPage))) return true;
+    return false;
   }
 
-  // Initial selection
-  setPageFromSelect();
+  function purgeSidebars(root) {
+    var selectors = [
+      "[id*='sidebar' i]", "[class*='sidebar' i]",
+      "[id*='panel' i]", "[class*='panel' i]",
+      "[id*='inspector' i]", "[class*='inspector' i]",
+      "[id*='gui' i]", "[class*='gui' i]",
+      ".dg.ac"
+    ];
 
-  return api;
+    try {
+      root.querySelectorAll(selectors.join(",")).forEach(function (el) {
+        if (!el || isProtected(el)) return;
+        try { el.remove(); } catch (e) {}
+      });
+    } catch (e) {}
+
+    try {
+      var all = Array.from(root.querySelectorAll("body *"));
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (!el || isProtected(el)) continue;
+
+        var st = getComputedStyle(el);
+        if (!st || st.display === "none") continue;
+
+        var pos = st.position;
+        if (pos !== "fixed" && pos !== "absolute") continue;
+
+        var rect = el.getBoundingClientRect();
+        if (!rect || rect.width === 0 || rect.height === 0) continue;
+
+        var nearRight = (window.innerWidth - rect.right) <= 2;
+        var bigEnough = rect.width >= 200 && rect.height >= 100;
+
+        var z = 0;
+        var zRaw = st.zIndex;
+        if (zRaw && zRaw !== "auto") {
+          var zi = parseInt(zRaw, 10);
+          z = isFinite(zi) ? zi : 0;
+        }
+
+        if (nearRight && bigEnough && z >= 1000) {
+          try { el.remove(); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+
+  function applyView(view, reason) {
+    var requested = (view === "3d" || view === "base" || view === "walls" || view === "roof") ? view : "3d";
+    var v = requested;
+
+    // Roof view requires the page to exist; otherwise fall back to 3d (and only then).
+    if (v === "roof" && !roofPage) v = "3d";
+
+    document.body.dataset.view = v;
+
+    var is3d = v === "3d";
+    var isBase = v === "base";
+    var isWalls = v === "walls";
+    var isRoof = v === "roof";
+
+    canvas.style.display = is3d ? "block" : "none";
+    canvas.setAttribute("aria-hidden", String(!is3d));
+
+    basePage.style.display = isBase ? "block" : "none";
+    basePage.setAttribute("aria-hidden", String(!isBase));
+
+    wallsPage.style.display = isWalls ? "block" : "none";
+    wallsPage.setAttribute("aria-hidden", String(!isWalls));
+
+    if (roofPage) {
+      roofPage.style.display = isRoof ? "block" : "none";
+      roofPage.setAttribute("aria-hidden", String(!isRoof));
+    }
+
+    if (viewSelect.value !== v) viewSelect.value = v;
+
+    writeStoredView(v);
+    if (reason !== "hash") writeHashView(v);
+
+    if (is3d) safeAttach3D();
+    else safeDetach3D();
+
+    purgeSidebars(document);
+    focusActive(v);
+  }
+
+  viewSelect.addEventListener("change", function (e) {
+    var v = e && e.target ? e.target.value : "3d";
+    applyView(v, "select");
+  });
+
+  window.addEventListener("hashchange", function () {
+    var hv = readHashView();
+    if (hv) applyView(hv, "hash");
+  });
+
+  window.addEventListener("keydown", function (e) {
+    if (!e || e.defaultPrevented) return;
+    if (isTypingTarget(document.activeElement)) return;
+
+    if (e.key === "1") applyView("3d", "key");
+    else if (e.key === "2") applyView("walls", "key");
+    else if (e.key === "3") applyView("base", "key");
+  });
+
+  window.addEventListener("resize", function () {
+    if (document.body.dataset.view === "3d") safeAttach3D();
+    purgeSidebars(document);
+  });
+
+  try {
+    var mo = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var m = muts[i];
+        if (m.addedNodes && m.addedNodes.length) {
+          purgeSidebars(document);
+          break;
+        }
+      }
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
+
+  var initial = readHashView() || readStoredView() || "3d";
+  applyView(initial, "init");
 }
