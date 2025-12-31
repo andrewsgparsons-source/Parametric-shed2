@@ -30,18 +30,6 @@
         <div class="inner">
           <form aria-label="Shed controls">
             <fieldset>
-              <legend>Visibility</legend>
-              <div class="checks" role="group" aria-label="Visibility toggles">
-                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
-                <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
-                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
-                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
-                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
-              </div>
-              <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
-            </fieldset>
-
-            <fieldset>
               <legend>Walls</legend>
 
               <div class="row">
@@ -205,6 +193,41 @@
               </div>
 
               <p id="instancesHint" class="hint"></p>
+            </fieldset>
+
+            <fieldset>
+              <legend>Visibility</legend>
+
+              <div class="checks" role="group" aria-label="Visibility: Whole assemblies">
+                <div class="hint" style="margin:0 0 6px 0;">Whole Assemblies</div>
+                <label class="check"><input id="vBaseAll" type="checkbox" checked /> Base</label>
+                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
+                <label class="check"><input id="vRoof" type="checkbox" checked /> Roof</label>
+              </div>
+
+              <div class="checks" role="group" aria-label="Visibility: Base components" style="margin-top:10px;">
+                <div class="hint" style="margin:0 0 6px 0;">Base Components</div>
+                <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
+                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
+                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
+                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
+              </div>
+
+              <div class="checks" role="group" aria-label="Visibility: Wall components" style="margin-top:10px;">
+                <div class="hint" style="margin:0 0 6px 0;">Wall Components</div>
+                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
+                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
+                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
+                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
+              </div>
+
+              <div class="checks" role="group" aria-label="Visibility: Roof components" style="margin-top:10px;">
+                <div class="hint" style="margin:0 0 6px 0;">Roof Components</div>
+                <label class="check"><input id="vRoofStructure" type="checkbox" checked /> Structure (future-safe)</label>
+                <label class="check"><input id="vRoofOsb" type="checkbox" checked /> OSB / Sheathing (future-safe)</label>
+              </div>
+
+              <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
             </fieldset>
           </form>
         </div>
