@@ -1,4 +1,3 @@
-<!-- FILE: docs/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -29,25 +28,14 @@
         <summary>Controls <span style="font-weight:700;font-size:12px;color:#666;">(toggle)</span></summary>
         <div class="inner">
           <form aria-label="Shed controls">
-            <fieldset>
-              <legend>Visibility</legend>
-              <div class="checks" role="group" aria-label="Visibility toggles">
-                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
-                <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
-                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
-                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
-                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
-              </div>
-              <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
-            </fieldset>
 
+            <!-- WALLS -->
             <fieldset>
               <legend>Walls</legend>
-
               <div class="row">
                 <label>
                   Stud/Plate Size
-                  <select id="wallSection" aria-label="Stud and plate size">
+                  <select id="wallSection">
                     <option value="50x75">50×75</option>
                     <option value="50x100" selected>50×100</option>
                   </select>
@@ -60,15 +48,9 @@
                   </select>
                 </label>
               </div>
-
-              <div class="checks" role="group" aria-label="Wall parts">
-                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
-                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
-                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
-                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
-              </div>
             </fieldset>
 
+            <!-- DOORS -->
             <fieldset>
               <legend>Doors</legend>
               <div class="row">
@@ -76,9 +58,9 @@
                 <button id="removeAllDoorsBtn" type="button">Remove All Doors</button>
               </div>
               <div id="doorsList"></div>
-              <p class="hint">Commit edits on Enter or click-away. Invalid doors highlight red; use the snap button to resolve.</p>
             </fieldset>
 
+            <!-- WINDOWS -->
             <fieldset>
               <legend>Windows</legend>
               <div class="row">
@@ -86,9 +68,9 @@
                 <button id="removeAllWindowsBtn" type="button">Remove All Windows</button>
               </div>
               <div id="windowsList"></div>
-              <p class="hint">Window Y is measured from the bottom plate top (inside the frame). Invalid windows highlight red; snap resolves X-only.</p>
             </fieldset>
 
+            <!-- DIMENSIONS -->
             <fieldset>
               <legend>Dimensions</legend>
               <div class="row">
@@ -100,216 +82,66 @@
                     <option value="roof">roof</option>
                   </select>
                 </label>
-                <div></div>
               </div>
 
               <div class="row">
-                <label>
-                  Width (mm) — X direction
-                  <input id="wInput" type="number" min="1" step="10" value="3000" />
-                </label>
-                <label>
-                  Depth (mm) — Z direction
-                  <input id="dInput" type="number" min="1" step="10" value="4000" />
-                </label>
+                <label>Width (mm)<input id="wInput" type="number" value="3000" /></label>
+                <label>Depth (mm)<input id="dInput" type="number" value="4000" /></label>
               </div>
-              <p class="hint">
-                Tip: swapping Width/Depth changes the decking layout (by design). Orientation still auto-flips based on the dimensions.
-              </p>
             </fieldset>
 
+            <!-- ROOF -->
             <fieldset>
-              <legend>Roof Overhang (mm)</legend>
+              <legend>Roof</legend>
               <div class="row">
                 <label>
                   Roof Style
                   <select id="roofStyle">
                     <option value="apex" selected>Apex (gabled)</option>
-                    <option value="pent">Pent (single pitch)</option>
+                    <option value="pent">Pent</option>
                     <option value="hipped">Hipped</option>
                   </select>
                 </label>
-                <div></div>
-              </div>
-
-              <div class="row">
-                <label>
-                  Min Height (mm)
-                  <input id="roofMinHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-                <label>
-                  Max Height (mm)
-                  <input id="roofMaxHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-              </div>
-
-              <div class="row">
-                <label>
-                  Apex Eave Height (mm)
-                  <input id="roofApexEaveHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-                <label>
-                  Apex Crest Height (mm)
-                  <input id="roofApexCrestHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-              </div>
-
-              <div class="row">
-                <label>
-                  Hipped Eave Height (mm)
-                  <input id="roofHippedEaveHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-                <label>
-                  Hipped Crest Height (mm)
-                  <input id="roofHippedCrestHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-              </div>
-
-              <div class="row">
-                <label>Uniform<input id="roofOverUniform" type="number" min="0" step="1" value="0" /></label>
-                <div></div>
-              </div>
-              <div class="row">
-                <label>Front<input id="roofOverFront" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-                <label>Back<input id="roofOverBack" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-              </div>
-              <div class="row">
-                <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-                <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
               </div>
             </fieldset>
 
+            <!-- VISIBILITY (ALL MOVED HERE) -->
             <fieldset>
-              <legend>Instances</legend>
+              <legend>Visibility</legend>
 
-              <div class="row">
-                <label>
-                  Instance
-                  <select id="instanceSelect"></select>
-                </label>
-                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
-                  <button id="saveInstanceBtn" type="button">Save</button>
-                  <button id="loadInstanceBtn" type="button">Load</button>
-                </div>
+              <strong>Assemblies</strong>
+              <div class="checks">
+                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
+                <label class="check"><input id="vBase" type="checkbox" checked /> Base</label>
+                <label class="check"><input id="vRoof" type="checkbox" checked /> Roof</label>
               </div>
 
-              <div class="row">
-                <label>
-                  New name
-                  <input id="instanceNameInput" type="text" placeholder="e.g. Client A" />
-                </label>
-                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
-                  <button id="saveAsInstanceBtn" type="button">Save As</button>
-                  <button id="deleteInstanceBtn" type="button">Delete</button>
-                </div>
+              <strong>Base Components</strong>
+              <div class="checks">
+                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
+                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
+                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
               </div>
 
-              <p id="instancesHint" class="hint"></p>
+              <strong>Wall Components</strong>
+              <div class="checks">
+                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
+                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
+                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
+                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
+              </div>
+
+              <strong>Roof Components</strong>
+              <div class="checks">
+                <label class="check"><input id="vRoofStructure" type="checkbox" checked /> Structure</label>
+                <label class="check"><input id="vRoofOSB" type="checkbox" checked /> OSB / Sheathing</label>
+              </div>
             </fieldset>
+
           </form>
         </div>
       </details>
     </aside>
-  </div>
-
-  <!-- View: Base Cutting List -->
-  <div id="bomPage" class="page" aria-hidden="true">
-    <h2 tabindex="-1">Master Cutting &amp; Assembly Schedule</h2>
-
-    <div id="bomToolbar">
-      <label for="unitsSelect" style="font-size:12px;color:#555;">Units:</label>
-      <select id="unitsSelect">
-        <option value="mm">mm</option>
-        <option value="both">mm + in</option>
-      </select>
-      <button id="exportCsvBtn">Export CSV</button>
-      <button id="printBtn">Print</button>
-    </div>
-
-    <div class="schedule-section">
-      <h4>1. Timber Frame</h4>
-      <table class="sticky-table">
-        <thead><tr><th>Item</th><th>Qty</th><th>Cut Size</th><th>Notes</th></tr></thead>
-        <tbody id="timberTableBody"></tbody>
-        <tfoot><tr class="totals-row"><td colspan="4" id="timberTotals"></td></tr></tfoot>
-      </table>
-    </div>
-
-    <div class="schedule-section">
-      <h4>3. OSB Decking Cutting List (8x4 Sheets)</h4>
-      <p class="subtle">Standard Sheets are full 1220×2440 (oriented per joists). Remainders are staggered as in the 3D layout.</p>
-
-      <table class="sticky-table">
-        <thead><tr><th colspan="4">Standard Sheets</th></tr></thead>
-        <thead><tr><th>Piece</th><th>Qty</th><th>Size (L × W)</th><th>Notes</th></tr></thead>
-        <tbody id="osbStdBody"></tbody>
-        <tfoot><tr class="totals-row"><td colspan="4" id="osbStdTotals"></td></tr></tfoot>
-      </table>
-
-      <table class="sticky-table">
-        <thead><tr><th colspan="4">Rip / Trim Cuts</th></tr></thead>
-        <thead><tr><th>Piece</th><th>Qty</th><th>Size (L × W)</th><th>Notes</th></tr></thead>
-        <tbody id="osbRipBody"></tbody>
-        <tfoot><tr class="totals-row"><td colspan="4" id="osbRipTotals"></td></tr></tfoot>
-      </table>
-
-      <p id="osbSummary" class="subtle"></p>
-    </div>
-
-    <div class="schedule-section">
-      <h4>PIR Insulation — Rip Cuts Only</h4>
-      <table id="pirRipTable">
-        <thead><tr><th>Piece Ref</th><th>Qty</th><th>Cut Size (L x W)</th><th>Type</th></tr></thead>
-        <tbody id="pirRipBody"></tbody>
-      </table>
-      <p id="pirSummary" class="subtle"></p>
-    </div>
-
-    <div class="schedule-section">
-      <h4>3. Plastic Grid Tiles (Modules)</h4>
-      <table id="gridTable">
-        <thead><tr><th>Piece Ref</th><th>Qty</th><th>Cut Size (L x W)</th><th>Type</th></tr></thead>
-        <tbody id="gridBody"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- View: Walls Cutting List -->
-  <div id="wallsBomPage" class="page" aria-hidden="true">
-    <h2 tabindex="-1">Walls Cutting List</h2>
-    <div class="schedule-section">
-      <h4>Walls — Items</h4>
-      <table class="sticky-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>L (mm)</th>
-            <th>W (mm)</th>
-            <th>D (mm)</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="bomTable"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <div id="roofBomPage" class="page" aria-hidden="true">
-    <h2 tabindex="-1">Roof Cutting List</h2>
-    <div class="schedule-section">
-      <h4>Roof — Items</h4>
-      <table class="sticky-table">
-        <thead>
-          <tr>
-            <th>Item</th><th>Qty</th><th>L (mm)</th><th>W (mm)</th><th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="roofBomTable">
-          <tr><td colspan="5">Roof cutting list not yet generated.</td></tr>
-        </tbody>
-      </table>
-    </div>
   </div>
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
