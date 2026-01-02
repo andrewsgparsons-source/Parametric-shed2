@@ -15,6 +15,11 @@ export const DEFAULTS = {
   w: 3000,
   d: 4000,
 
+  // UI-only (no geometry impact yet): unit mode selection
+  ui: {
+    unitMode: "metric" // "metric" | "imperial"
+  },
+
   // Visibility
   vis: {
     // Base toggles
@@ -49,6 +54,19 @@ export const DEFAULTS = {
 
   roof: {
     style: "apex",
+
+    // UI-only (no geometry impact yet): apex height inputs
+    apex: {
+      eaveHeight_mm: 1850,
+      crestHeight_mm: 2200
+    },
+
+    // UI-only (no geometry impact yet): hipped height inputs
+    hipped: {
+      eaveHeight_mm: 2000,
+      crestHeight_mm: 2400
+    },
+
     pent: {
       minHeight_mm: 2400,
       maxHeight_mm: 2400
