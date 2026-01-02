@@ -213,7 +213,8 @@ export function build3D(state, ctx) {
     // Anchor cladding to TOP of the wall panel's own bottom plate (world-space), not assumed y=0.
     let wallBottomPlateBottomY_mm = 0;
     let wallBottomPlateTopY_mm = plateY;
-    let chosenAnchorY_mm = plateY;
+    let claddingAnchorY_mm = plateY;
+    let plateParent = null;
 
     try {
       const plateName =
@@ -222,13 +223,16 @@ export function build3D(state, ctx) {
           : `wall-${wallId}-plate-bottom`;
 
       const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+      if (plateMesh) {
+        plateParent = plateMesh.parent || null;
+      }
       if (plateMesh && plateMesh.getBoundingInfo) {
         const bi = plateMesh.getBoundingInfo();
         const bb = bi && bi.boundingBox ? bi.boundingBox : null;
         if (bb && bb.minimumWorld && bb.maximumWorld) {
           wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
           wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
-          chosenAnchorY_mm = wallBottomPlateTopY_mm;
+          claddingAnchorY_mm = wallBottomPlateTopY_mm;
         }
       }
     } catch (e) {}
@@ -239,16 +243,15 @@ export function build3D(state, ctx) {
       if (!window.__dbg.cladding) window.__dbg.cladding = {};
       if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
 
-      const firstCourseBottomY_mm = chosenAnchorY_mm - CLAD_DRIP;
-      const expectedFirstCourseBottomY_mm = chosenAnchorY_mm - 30;
+      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
+      const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
 
       if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
       window.__dbg.cladding.walls[wallId].push({
         wallId,
-        panelIndex,
-        wallBottomPlateBottomY_mm,
         wallBottomPlateTopY_mm,
-        chosenAnchorY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm,
         firstCourseBottomY_mm,
         expectedFirstCourseBottomY_mm,
         delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
@@ -256,10 +259,10 @@ export function build3D(state, ctx) {
     } catch (e) {}
 
     for (let i = 0; i < courses; i++) {
-      const yBase = chosenAnchorY_mm + i * CLAD_H;
+      const yBase = claddingAnchorY_mm + i * CLAD_H;
       const isFirst = i === 0;
 
-      // Drip: first course only; bottom edge at (chosenAnchorY_mm - 30mm)
+      // Drip: first course only; bottom edge at (claddingAnchorY_mm - 30mm)
       // Implemented as bottom-only extension (no change to X/Z extents)
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
@@ -361,8 +364,14 @@ export function build3D(state, ctx) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
+      if (plateParent) merged.parent = plateParent;
     } else {
-      // If merge failed for any reason, keep parts as-is.
+      // If merge failed for any reason, keep parts as-is; still bind them to the wall's parent if present.
+      if (plateParent) {
+        for (let i = 0; i < parts.length; i++) {
+          try { parts[i].parent = plateParent; } catch (e) {}
+        }
+      }
     }
   }
 
