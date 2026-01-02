@@ -6,7 +6,20 @@ export const CONFIG = {
   timber: { w: 50, d: 100 },
   insulation: { w: 1200, d: 2400, h: 50 },
   decking: { w: 1220, d: 2440, h: 18 },
-  spacing: 400
+  spacing: 400,
+
+  // External cladding (Phase 1: simple shiplap) — geometry only (no BOM yet)
+  cladding: {
+    type: "shiplap",
+    shiplap: {
+      thickness_mm: 19,        // board thickness (wall normal)
+      fullHeight_mm: 150,      // overall board height (incl overlap feature)
+      coverHeight_mm: 135,     // visible vertical coverage per board once overlapped
+      overlap_mm: 15,          // vertical overlap amount (fullHeight - coverHeight)
+      starterOverhang_mm: 30,  // first board extends below frame by 30mm
+      gap_mm: 0                // butt-gap (Phase 1: raw butt = 0)
+    }
+  }
 };
 
 /** Walls + Dimension Mode defaults + Base visibility */
@@ -56,6 +69,20 @@ export const DEFAULTS = {
     frameD_mm: 4050,
     roofW_mm: 3050,
     roofD_mm: 4050,
+  },
+
+  // External cladding (Phase 1: enabled by default; geometry only)
+  cladding: {
+    enabled: true,
+    type: "shiplap",
+    shiplap: {
+      thickness_mm: 19,
+      fullHeight_mm: 150,
+      coverHeight_mm: 135,
+      overlap_mm: 15,
+      starterOverhang_mm: 30,
+      gap_mm: 0
+    }
   },
 
   roof: {
