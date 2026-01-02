@@ -47,6 +47,14 @@ export function build3D(state, ctx) {
       if (!m.isDisposed()) m.dispose(false, true);
     });
 
+  // DEBUG: cladding diagnostics
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    if (!window.__dbg.cladding) window.__dbg.cladding = {};
+    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+    if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
+  } catch (e) {}
+
   const dims = {
     w: Math.max(1, Math.floor(state.w)),
     d: Math.max(1, Math.floor(state.d)),
@@ -66,13 +74,6 @@ export function build3D(state, ctx) {
   const CLAD_Ht = 45;
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
-
-  // DEBUG: cladding anchor diagnostics (requested; per wall)
-  try {
-    if (!window.__dbg) window.__dbg = {};
-    if (!window.__dbg.cladding) window.__dbg.cladding = {};
-    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
-  } catch (e) {}
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
 
@@ -208,62 +209,54 @@ export function build3D(state, ctx) {
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
     if (courses < 1) return;
 
+    // Identify bottom plate mesh by current naming scheme.
+    const plateMeshName =
+      (variant === "basic")
+        ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
+        : `wall-${wallId}-plate-bottom`;
+
+    const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateMeshName) : null;
+
+    // Fail-safe: if missing bottom plate mesh, do not build cladding and report it.
+    if (!plateMesh || !plateMesh.getBoundingInfo) {
+      try {
+        if (!window.__dbg) window.__dbg = {};
+        if (!window.__dbg.cladding) window.__dbg.cladding = {};
+        if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
+        window.__dbg.cladding.missingPlates.push({ wallId, panelIndex, plateMeshName });
+      } catch (e) {}
+      return;
+    }
+
+    // Anchor in WORLD SPACE to top face of the bottom plate bounds.
+    let anchorY_mm = null;
+    try {
+      const bi = plateMesh.getBoundingInfo();
+      const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+      if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) {
+        anchorY_mm = Number(bb.maximumWorld.y) * 1000;
+      }
+    } catch (e) {}
+
+    // Fail-safe if bounds not available.
+    if (!(Number.isFinite(anchorY_mm))) {
+      try {
+        if (!window.__dbg) window.__dbg = {};
+        if (!window.__dbg.cladding) window.__dbg.cladding = {};
+        if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
+        window.__dbg.cladding.missingPlates.push({ wallId, panelIndex, plateMeshName, reason: "noBounds" });
+      } catch (e) {}
+      return;
+    }
+
     const parts = [];
 
-    // Anchor cladding to TOP of the wall panel's own bottom plate (world-space), not assumed y=0.
-    let wallBottomPlateBottomY_mm = 0;
-    let wallBottomPlateTopY_mm = plateY;
-    let claddingAnchorY_mm = plateY;
-    let plateParent = null;
-
-    try {
-      const plateName =
-        (variant === "basic")
-          ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
-          : `wall-${wallId}-plate-bottom`;
-
-      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
-      if (plateMesh) {
-        plateParent = plateMesh.parent || null;
-      }
-      if (plateMesh && plateMesh.getBoundingInfo) {
-        const bi = plateMesh.getBoundingInfo();
-        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-        if (bb && bb.minimumWorld && bb.maximumWorld) {
-          wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
-          wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
-          claddingAnchorY_mm = wallBottomPlateTopY_mm;
-        }
-      }
-    } catch (e) {}
-
-    // DEBUG per wall (and per panel for basic)
-    try {
-      if (!window.__dbg) window.__dbg = {};
-      if (!window.__dbg.cladding) window.__dbg.cladding = {};
-      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
-
-      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
-      const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
-
-      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
-      window.__dbg.cladding.walls[wallId].push({
-        wallId,
-        wallBottomPlateTopY_mm,
-        wallBottomPlateBottomY_mm,
-        claddingAnchorY_mm,
-        firstCourseBottomY_mm,
-        expectedFirstCourseBottomY_mm,
-        delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
-      });
-    } catch (e) {}
-
     for (let i = 0; i < courses; i++) {
-      const yBase = claddingAnchorY_mm + i * CLAD_H;
+      const yBase = anchorY_mm + i * CLAD_H;
       const isFirst = i === 0;
 
-      // Drip: first course only; bottom edge at (claddingAnchorY_mm - 30mm)
-      // Implemented as bottom-only extension (no change to X/Z extents)
+      // Starter drip: first course only; bottom edge at (anchorY_mm - 30mm).
+      // Implemented as bottom-only extension (no X/Z extent changes).
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
 
@@ -360,16 +353,40 @@ export function build3D(state, ctx) {
       merged = null;
     }
 
+    const firstCourseBottomY_mm = anchorY_mm - CLAD_DRIP;
+    const expectedBottomY_mm = anchorY_mm - 30;
+    const delta_mm = firstCourseBottomY_mm - expectedBottomY_mm;
+
+    try {
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.cladding) window.__dbg.cladding = {};
+      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
+      window.__dbg.cladding.walls[wallId].push({
+        wallId,
+        panelIndex,
+        plateMeshName,
+        anchorY_mm,
+        firstCourseBottomY_mm,
+        expectedBottomY_mm,
+        delta_mm,
+      });
+    } catch (e) {}
+
     if (merged) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
-      if (plateParent) merged.parent = plateParent;
+      try {
+        // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
+        merged.parent = plateMesh.parent || null;
+      } catch (e) {}
     } else {
-      // If merge failed for any reason, keep parts as-is; still bind them to the wall's parent if present.
-      if (plateParent) {
+      // If merge failed for any reason, keep parts as-is; still bind them to the wall's transform chain.
+      const p = plateMesh.parent || null;
+      if (p) {
         for (let i = 0; i < parts.length; i++) {
-          try { parts[i].parent = plateParent; } catch (e) {}
+          try { parts[i].parent = p; } catch (e) {}
         }
       }
     }
