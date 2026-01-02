@@ -67,11 +67,12 @@ export function build3D(state, ctx) {
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
 
-  // DEBUG: cladding anchor diagnostics (per wall/panel)
+  // DEBUG containers
   try {
     if (!window.__dbg) window.__dbg = {};
-    if (!window.__dbg.claddingAnchorFromStuds) window.__dbg.claddingAnchorFromStuds = {};
-    if (!window.__dbg.claddingAnchorFromStuds.walls) window.__dbg.claddingAnchorFromStuds.walls = {};
+    if (!window.__dbg.cladding) window.__dbg.cladding = {};
+    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+    window.__dbg.cladding.walls = {};
   } catch (e) {}
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
@@ -201,97 +202,108 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight) {
+  // ---- Deferred cladding build (one frame later) ----
+  const claddingJobs = [];
+
+  // Unique per build3D invocation
+  const buildId = (() => {
+    try {
+      const n = Number(scene._claddingBuildSeq || 0) + 1;
+      scene._claddingBuildSeq = n;
+      return `${Date.now()}-${n}`;
+    } catch (e) {
+      return `${Date.now()}-0`;
+    }
+  })();
+
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    window.__dbg.claddingPass = {
+      buildId,
+      timestamp: Date.now(),
+      deferredScheduled: false,
+      deferredRan: false,
+      staleSkip: false,
+      claddingMeshesCreated: 0,
+      anchorsUsed: []
+    };
+  } catch (e) {}
+
+  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
     const mat = materials && materials.cladding ? materials.cladding : materials.timber;
 
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
-    if (courses < 1) return;
-
-    // Anchor from STUDS (world-space), not plates, not world y=0
-    let studCountFound = 0;
-    let minStudBottomY_mm = null;
-
-    try {
-      const studPrefix =
-        (variant === "basic")
-          ? `wall-${wallId}-panel-${panelIndex}-stud-`
-          : `wall-${wallId}-stud-`;
-
-      const meshes = scene.meshes || [];
-      for (let i = 0; i < meshes.length; i++) {
-        const m = meshes[i];
-        if (!m || m.isDisposed && m.isDisposed()) continue;
-        const nm = String(m.name || "");
-        if (!nm.startsWith(studPrefix)) continue;
-
-        try { m.computeWorldMatrix(true); } catch (e) {}
-
-        if (!m.getBoundingInfo) continue;
-        const bi = m.getBoundingInfo();
-        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-        if (!bb || !bb.minimumWorld) continue;
-
-        const yb = Number(bb.minimumWorld.y) * 1000;
-        if (!Number.isFinite(yb)) continue;
-
-        studCountFound += 1;
-        if (minStudBottomY_mm === null || yb < minStudBottomY_mm) minStudBottomY_mm = yb;
-      }
-    } catch (e) {}
-
-    if (!(studCountFound > 0) || minStudBottomY_mm === null) {
-      // Fail-safe: no studs found => no cladding for this wall/panel, but record debug
-      try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.claddingAnchorFromStuds) window.__dbg.claddingAnchorFromStuds = {};
-        if (!window.__dbg.claddingAnchorFromStuds.walls) window.__dbg.claddingAnchorFromStuds.walls = {};
-        if (!window.__dbg.claddingAnchorFromStuds.walls[wallId]) window.__dbg.claddingAnchorFromStuds.walls[wallId] = [];
-        window.__dbg.claddingAnchorFromStuds.walls[wallId].push({
-          wallId,
-          panelIndex: variant === "basic" ? panelIndex : null,
-          studCountFound,
-          minStudBottomY_mm: null,
-          derivedBottomPlateTopY_mm: null,
-          firstCourseBottomY_mm: null,
-          expected_mm: null,
-          delta_mm: null,
-        });
-      } catch (e) {}
-      return;
-    }
-
-    const derivedBottomPlateTopY_mm = minStudBottomY_mm;
-
-    // DEBUG per wall/panel
-    try {
-      if (!window.__dbg) window.__dbg = {};
-      if (!window.__dbg.claddingAnchorFromStuds) window.__dbg.claddingAnchorFromStuds = {};
-      if (!window.__dbg.claddingAnchorFromStuds.walls) window.__dbg.claddingAnchorFromStuds.walls = {};
-      if (!window.__dbg.claddingAnchorFromStuds.walls[wallId]) window.__dbg.claddingAnchorFromStuds.walls[wallId] = [];
-
-      const firstCourseBottomY_mm = derivedBottomPlateTopY_mm - CLAD_DRIP;
-      const expected_mm = derivedBottomPlateTopY_mm - 30;
-
-      window.__dbg.claddingAnchorFromStuds.walls[wallId].push({
-        wallId,
-        panelIndex: variant === "basic" ? panelIndex : null,
-        studCountFound,
-        minStudBottomY_mm,
-        derivedBottomPlateTopY_mm,
-        firstCourseBottomY_mm,
-        expected_mm,
-        delta_mm: (firstCourseBottomY_mm - expected_mm),
-      });
-    } catch (e) {}
+    if (courses < 1) return { created: 0, anchor: null };
 
     const parts = [];
 
+    // Anchor cladding to TOP of the wall panel's own bottom plate (world-space), not assumed y=0.
+    let wallBottomPlateBottomY_mm = 0;
+    let wallBottomPlateTopY_mm = plateY;
+    let claddingAnchorY_mm = plateY;
+    let plateParent = null;
+
+    try {
+      const plateName =
+        (variant === "basic")
+          ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
+          : `wall-${wallId}-plate-bottom`;
+
+      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+      if (plateMesh) {
+        plateParent = plateMesh.parent || null;
+      }
+      if (plateMesh && plateMesh.getBoundingInfo) {
+        const bi = plateMesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (bb && bb.minimumWorld && bb.maximumWorld) {
+          wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
+          wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
+          claddingAnchorY_mm = wallBottomPlateTopY_mm;
+        }
+      }
+    } catch (e) {}
+
+    // DEBUG per wall/panel anchor (and per wall requested earlier)
+    try {
+      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
+      const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
+
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.cladding) window.__dbg.cladding = {};
+      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+
+      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
+      window.__dbg.cladding.walls[wallId].push({
+        wallId,
+        wallBottomPlateTopY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm,
+        firstCourseBottomY_mm,
+        expectedFirstCourseBottomY_mm,
+        delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+      });
+
+      if (buildPass && buildPass.anchorsUsed) {
+        buildPass.anchorsUsed.push({
+          wallId,
+          panelIndex,
+          wallBottomPlateTopY_mm,
+          wallBottomPlateBottomY_mm,
+          claddingAnchorY_mm,
+          firstCourseBottomY_mm,
+          expectedFirstCourseBottomY_mm,
+          delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+        });
+      }
+    } catch (e) {}
+
     for (let i = 0; i < courses; i++) {
-      const yBase = derivedBottomPlateTopY_mm + i * CLAD_H;
+      const yBase = claddingAnchorY_mm + i * CLAD_H;
       const isFirst = i === 0;
 
-      // Drip: first course only; bottom edge at (derivedBottomPlateTopY_mm - 30mm)
+      // Drip: first course only; bottom edge at (claddingAnchorY_mm - 30mm)
       // Implemented as bottom-only extension (no change to X/Z extents)
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
@@ -389,11 +401,102 @@ export function build3D(state, ctx) {
       merged = null;
     }
 
+    let created = 0;
+
     if (merged) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
+      if (plateParent) merged.parent = plateParent;
+      created = 1;
+    } else {
+      // If merge failed for any reason, keep parts as-is; still bind them to the wall's parent if present.
+      if (plateParent) {
+        for (let i = 0; i < parts.length; i++) {
+          try { parts[i].parent = plateParent; } catch (e) {}
+        }
+      }
+      created = parts.length;
     }
+
+    return {
+      created,
+      anchor: {
+        wallId,
+        panelIndex,
+        wallBottomPlateTopY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm
+      }
+    };
+  }
+
+  function scheduleDeferredCladdingPass() {
+    try {
+      scene._pendingCladding = { buildId, jobs: claddingJobs };
+    } catch (e) {}
+
+    try {
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+      window.__dbg.claddingPass.deferredScheduled = true;
+    } catch (e) {}
+
+    try {
+      if (scene && scene.onBeforeRenderObservable && scene.onBeforeRenderObservable.addOnce) {
+        scene.onBeforeRenderObservable.addOnce(() => {
+          let pending = null;
+          try { pending = scene._pendingCladding || null; } catch (e) {}
+
+          let stale = false;
+          try {
+            stale = !(pending && String(pending.buildId || "") === String(buildId));
+          } catch (e) {
+            stale = true;
+          }
+
+          if (stale) {
+            try {
+              if (!window.__dbg) window.__dbg = {};
+              if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+              window.__dbg.claddingPass.deferredRan = false;
+              window.__dbg.claddingPass.staleSkip = true;
+            } catch (e) {}
+            return;
+          }
+
+          let createdCount = 0;
+
+          try {
+            if (!window.__dbg) window.__dbg = {};
+            if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+            if (!window.__dbg.claddingPass.anchorsUsed) window.__dbg.claddingPass.anchorsUsed = [];
+          } catch (e) {}
+
+          const passDbg = (() => {
+            try {
+              return window.__dbg && window.__dbg.claddingPass ? window.__dbg.claddingPass : null;
+            } catch (e) {
+              return null;
+            }
+          })();
+
+          for (let i = 0; i < claddingJobs.length; i++) {
+            const j = claddingJobs[i];
+            const res = addCladdingForPanel(j.wallId, j.axis, j.panelIndex, j.panelStart, j.panelLen, j.origin, j.panelHeight, passDbg);
+            if (res && Number.isFinite(res.created)) createdCount += res.created;
+          }
+
+          try {
+            if (!window.__dbg) window.__dbg = {};
+            if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+            window.__dbg.claddingPass.deferredRan = true;
+            window.__dbg.claddingPass.staleSkip = false;
+            window.__dbg.claddingPass.claddingMeshesCreated = createdCount;
+          } catch (e) {}
+        });
+      }
+    } catch (e) {}
   }
 
   function doorIntervalsForWall(wallId) {
@@ -850,7 +953,15 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        addCladdingForPanel(wallId, axis, (p + 1), pan.start, pan.len, origin, panelH);
+        claddingJobs.push({
+          wallId,
+          axis,
+          panelIndex: (p + 1),
+          panelStart: pan.start,
+          panelLen: pan.len,
+          origin,
+          panelHeight: panelH
+        });
       }
 
       return;
@@ -908,7 +1019,16 @@ export function build3D(state, ctx) {
       const h1 = heightAtX(origin.x + length);
       panelH = Math.min(h0, h1);
     }
-    addCladdingForPanel(wallId, axis, 1, 0, length, origin, panelH);
+
+    claddingJobs.push({
+      wallId,
+      axis,
+      panelIndex: 1,
+      panelStart: 0,
+      panelLen: length,
+      origin,
+      panelHeight: panelH
+    });
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
@@ -918,6 +1038,9 @@ export function build3D(state, ctx) {
 
   if (flags.left) buildWall("left", "z", sideLenZ, { x: 0, z: wallThk });
   if (flags.right) buildWall("right", "z", sideLenZ, { x: dims.w - wallThk, z: wallThk });
+
+  // Schedule one-shot deferred cladding build (one frame later)
+  scheduleDeferredCladdingPass();
 }
 
 function resolveProfile(state, variant) {
