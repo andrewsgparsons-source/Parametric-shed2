@@ -434,8 +434,30 @@ export function build3D(state, ctx) {
     }
 
     if (merged) {
-      merged.name = `clad-${wallId}-panel-${panelIndex}`;
-      merged.material = mat;
+      // Cladding debug v0.1 (PHASE 1 proof)
+      const __cladStamp = Date.now();
+
+      // 3) CONSOLE LOG (once per wall/panel)
+      console.log("CLADDING_ACTIVE", wallId, panelIndex, __cladStamp);
+
+      // 1) STAMP NAME (prove this exact merge path is running in deployed build)
+      merged.name = `clad-${wallId}-panel-${panelIndex}-STAMP-${__cladStamp}`;
+
+      // 2) OBVIOUS MATERIAL (cladding-only; do not mutate shared timber/plate/cladding material)
+      let __cladDbgMat = null;
+      try {
+        if (mat && typeof mat.clone === "function") {
+          __cladDbgMat = mat.clone(`cladDbgMat-${wallId}-${panelIndex}-${__cladStamp}`);
+        } else {
+          __cladDbgMat = new BABYLON.StandardMaterial(`cladDbgMat-${wallId}-${panelIndex}-${__cladStamp}`, scene);
+        }
+        __cladDbgMat.diffuseColor = new BABYLON.Color3(1, 0, 0); // bright red
+        __cladDbgMat.alpha = 0.20;
+      } catch (e) {
+        __cladDbgMat = mat;
+      }
+
+      merged.material = __cladDbgMat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
       try {
         // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
