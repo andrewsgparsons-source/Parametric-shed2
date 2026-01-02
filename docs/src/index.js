@@ -213,10 +213,22 @@ function initApp() {
     var wInputEl = $("wInput");
     var dInputEl = $("dInput");
 
+    var unitMetricEl = $("unitModeMetric");
+    var unitImperialEl = $("unitModeImperial");
+
     var roofStyleEl = $("roofStyle");
 
     var roofMinHeightEl = $("roofMinHeight");
     var roofMaxHeightEl = $("roofMaxHeight");
+
+    var roofApexEaveHeightEl = $("roofApexEaveHeight");
+    var roofApexCrestHeightEl = $("roofApexCrestHeight");
+    var roofHippedEaveHeightEl = $("roofHippedEaveHeight");
+    var roofHippedCrestHeightEl = $("roofHippedCrestHeight");
+
+    var roofHeightsApexEl = $("roofHeightsApex");
+    var roofHeightsPentEl = $("roofHeightsPent");
+    var roofHeightsHippedEl = $("roofHeightsHipped");
 
     var overUniformEl = $("roofOverUniform");
     var overFrontEl = $("roofOverFront");
@@ -243,6 +255,73 @@ function initApp() {
     var saveAsInstanceBtnEl = $("saveAsInstanceBtn");
     var deleteInstanceBtnEl = $("deleteInstanceBtn");
     var instancesHintEl = $("instancesHint");
+
+    function getUnitMode(state) {
+      try {
+        var m = state && state.ui && state.ui.unitMode ? String(state.ui.unitMode) : "metric";
+        return (m === "imperial") ? "imperial" : "metric";
+      } catch (e) { return "metric"; }
+    }
+
+    function mmToIn(mm) {
+      var n = Number(mm);
+      return Number.isFinite(n) ? (n / 25.4) : NaN;
+    }
+
+    function inToMm(inches) {
+      var n = Number(inches);
+      return Number.isFinite(n) ? (n * 25.4) : NaN;
+    }
+
+    function fmtIn(n) {
+      if (!Number.isFinite(n)) return "";
+      var v = Math.round(n * 1000) / 1000;
+      return String(v);
+    }
+
+    function readLenFromInput(el, unitMode, defMm) {
+      var raw = el ? el.value : null;
+      if (raw == null || raw === "") return defMm;
+      if (unitMode === "imperial") {
+        var inches = Number(raw);
+        var mm = inToMm(inches);
+        var out = Math.floor(mm);
+        return Number.isFinite(out) && out > 0 ? out : defMm;
+      }
+      var mm2 = Math.floor(Number(raw));
+      return Number.isFinite(mm2) && mm2 > 0 ? mm2 : defMm;
+    }
+
+    function writeLenToInput(el, unitMode, mmVal) {
+      if (!el) return;
+      var mm = Math.floor(Number(mmVal));
+      if (!Number.isFinite(mm)) mm = 0;
+      if (unitMode === "imperial") el.value = fmtIn(mmToIn(mm));
+      else el.value = String(mm);
+    }
+
+    function applyRoofHeightUiVisibility(state) {
+      var style = "";
+      try {
+        style = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "";
+      } catch (e0) { style = ""; }
+      if (!style && roofStyleEl) style = String(roofStyleEl.value || "");
+
+      if (style !== "apex" && style !== "pent" && style !== "hipped") style = "apex";
+
+      if (roofHeightsApexEl) {
+        roofHeightsApexEl.style.display = (style === "apex") ? "block" : "none";
+        roofHeightsApexEl.setAttribute("aria-hidden", String(style !== "apex"));
+      }
+      if (roofHeightsPentEl) {
+        roofHeightsPentEl.style.display = (style === "pent") ? "block" : "none";
+        roofHeightsPentEl.setAttribute("aria-hidden", String(style !== "pent"));
+      }
+      if (roofHeightsHippedEl) {
+        roofHeightsHippedEl.style.display = (style === "hipped") ? "block" : "none";
+        roofHeightsHippedEl.setAttribute("aria-hidden", String(style !== "hipped"));
+      }
+    }
 
     function applyWallHeightUiLock(state) {
       if (!wallHeightEl) return;
@@ -1122,22 +1201,26 @@ function initApp() {
 
     function syncUiFromState(state, validations) {
       try {
+        var unitMode = getUnitMode(state);
+        if (unitMetricEl) unitMetricEl.checked = (unitMode !== "imperial");
+        if (unitImperialEl) unitImperialEl.checked = (unitMode === "imperial");
+
         if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
 
         if (wInputEl && dInputEl && state && state.dimInputs && state.dimMode) {
           if (state.dimMode === "base") {
-            wInputEl.value = String(state.dimInputs.baseW_mm);
-            dInputEl.value = String(state.dimInputs.baseD_mm);
+            writeLenToInput(wInputEl, unitMode, state.dimInputs.baseW_mm);
+            writeLenToInput(dInputEl, unitMode, state.dimInputs.baseD_mm);
           } else if (state.dimMode === "frame") {
-            wInputEl.value = String(state.dimInputs.frameW_mm);
-            dInputEl.value = String(state.dimInputs.frameD_mm);
+            writeLenToInput(wInputEl, unitMode, state.dimInputs.frameW_mm);
+            writeLenToInput(dInputEl, unitMode, state.dimInputs.frameD_mm);
           } else {
-            wInputEl.value = String(state.dimInputs.roofW_mm);
-            dInputEl.value = String(state.dimInputs.roofD_mm);
+            writeLenToInput(wInputEl, unitMode, state.dimInputs.roofW_mm);
+            writeLenToInput(dInputEl, unitMode, state.dimInputs.roofD_mm);
           }
         } else {
-          if (wInputEl && state && state.w != null) wInputEl.value = String(state.w);
-          if (dInputEl && state && state.d != null) dInputEl.value = String(state.d);
+          if (wInputEl && state && state.w != null) writeLenToInput(wInputEl, unitMode, state.w);
+          if (dInputEl && state && state.d != null) writeLenToInput(dInputEl, unitMode, state.d);
         }
 
         if (roofStyleEl) {
@@ -1147,18 +1230,46 @@ function initApp() {
         var isPent = isPentRoofStyle(state);
         if (roofMinHeightEl && roofMaxHeightEl) {
           var ph = getPentHeightsFromState(state);
-          roofMinHeightEl.value = String(ph.minH);
-          roofMaxHeightEl.value = String(ph.maxH);
+          writeLenToInput(roofMinHeightEl, unitMode, ph.minH);
+          writeLenToInput(roofMaxHeightEl, unitMode, ph.maxH);
           roofMinHeightEl.disabled = !isPent;
           roofMaxHeightEl.disabled = !isPent;
         }
 
+        if (roofApexEaveHeightEl && roofApexCrestHeightEl) {
+          var ae = 1850, ac = 2200;
+          try {
+            if (state && state.roof && state.roof.apex) {
+              if (state.roof.apex.eaveHeight_mm != null) ae = Math.floor(Number(state.roof.apex.eaveHeight_mm));
+              if (state.roof.apex.crestHeight_mm != null) ac = Math.floor(Number(state.roof.apex.crestHeight_mm));
+            }
+          } catch (e0) {}
+          if (!Number.isFinite(ae) || ae <= 0) ae = 1850;
+          if (!Number.isFinite(ac) || ac <= 0) ac = 2200;
+          writeLenToInput(roofApexEaveHeightEl, unitMode, ae);
+          writeLenToInput(roofApexCrestHeightEl, unitMode, ac);
+        }
+
+        if (roofHippedEaveHeightEl && roofHippedCrestHeightEl) {
+          var he = 2000, hc = 2400;
+          try {
+            if (state && state.roof && state.roof.hipped) {
+              if (state.roof.hipped.eaveHeight_mm != null) he = Math.floor(Number(state.roof.hipped.eaveHeight_mm));
+              if (state.roof.hipped.crestHeight_mm != null) hc = Math.floor(Number(state.roof.hipped.crestHeight_mm));
+            }
+          } catch (e1) {}
+          if (!Number.isFinite(he) || he <= 0) he = 2000;
+          if (!Number.isFinite(hc) || hc <= 0) hc = 2400;
+          writeLenToInput(roofHippedEaveHeightEl, unitMode, he);
+          writeLenToInput(roofHippedCrestHeightEl, unitMode, hc);
+        }
+
         if (state && state.overhang) {
-          if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
-          if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
-          if (overRightEl) overRightEl.value = state.overhang.right_mm == null ? "" : String(state.overhang.right_mm);
-          if (overFrontEl) overFrontEl.value = state.overhang.front_mm == null ? "" : String(state.overhang.front_mm);
-          if (overBackEl) overBackEl.value = state.overhang.back_mm == null ? "" : String(state.overhang.back_mm);
+          writeLenToInput(overUniformEl, unitMode, (state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0));
+          if (overLeftEl)  overLeftEl.value = state.overhang.left_mm == null ? "" : (unitMode === "imperial" ? fmtIn(mmToIn(state.overhang.left_mm)) : String(state.overhang.left_mm));
+          if (overRightEl) overRightEl.value = state.overhang.right_mm == null ? "" : (unitMode === "imperial" ? fmtIn(mmToIn(state.overhang.right_mm)) : String(state.overhang.right_mm));
+          if (overFrontEl) overFrontEl.value = state.overhang.front_mm == null ? "" : (unitMode === "imperial" ? fmtIn(mmToIn(state.overhang.front_mm)) : String(state.overhang.front_mm));
+          if (overBackEl)  overBackEl.value = state.overhang.back_mm == null ? "" : (unitMode === "imperial" ? fmtIn(mmToIn(state.overhang.back_mm)) : String(state.overhang.back_mm));
         }
 
         if (vBaseEl) vBaseEl.checked = !!(state && state.vis && state.vis.base);
@@ -1178,9 +1289,9 @@ function initApp() {
 
         if (wallHeightEl) {
           if (isPent) {
-            wallHeightEl.value = String(computePentDisplayHeight(state));
+            writeLenToInput(wallHeightEl, unitMode, computePentDisplayHeight(state));
           } else if (state && state.walls && state.walls.height_mm != null) {
-            wallHeightEl.value = String(state.walls.height_mm);
+            writeLenToInput(wallHeightEl, unitMode, state.walls.height_mm);
           }
         }
 
@@ -1194,6 +1305,7 @@ function initApp() {
         }
 
         applyWallHeightUiLock(state);
+        applyRoofHeightUiVisibility(state);
 
         var dv = validations && validations.doors ? validations.doors : null;
         var wv = validations && validations.windows ? validations.windows : null;
@@ -1231,21 +1343,58 @@ function initApp() {
         "LastError: " + err;
     }
 
+    function ensureHippedDefaultsInState() {
+      var s = store.getState();
+      var he = null, hc = null;
+      try {
+        if (s && s.roof && s.roof.hipped) {
+          he = s.roof.hipped.eaveHeight_mm;
+          hc = s.roof.hipped.crestHeight_mm;
+        }
+      } catch (e) {}
+      var needHe = (he == null || !Number.isFinite(Number(he)) || Math.floor(Number(he)) <= 0);
+      var needHc = (hc == null || !Number.isFinite(Number(hc)) || Math.floor(Number(hc)) <= 0);
+      if (needHe || needHc) {
+        store.setState({ roof: { hipped: { eaveHeight_mm: 2000, crestHeight_mm: 2400 } } });
+      }
+    }
+
+    if (unitMetricEl) {
+      unitMetricEl.addEventListener("change", function () {
+        if (!unitMetricEl.checked) return;
+        store.setState({ ui: { unitMode: "metric" } });
+      });
+    }
+    if (unitImperialEl) {
+      unitImperialEl.addEventListener("change", function () {
+        if (!unitImperialEl.checked) return;
+        store.setState({ ui: { unitMode: "imperial" } });
+      });
+    }
+
     if (roofStyleEl) {
       roofStyleEl.addEventListener("change", function () {
         var v = String(roofStyleEl.value || "apex");
         if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
         store.setState({ roof: { style: v } });
         applyWallHeightUiLock(store.getState());
+        applyRoofHeightUiVisibility(store.getState());
+        if (v === "hipped") ensureHippedDefaultsInState();
       });
     }
 
     function commitPentHeightsFromInputs() {
       if (!roofMinHeightEl || !roofMaxHeightEl) return;
       var s = store.getState();
+      var unitMode = getUnitMode(s);
       var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
-      var minH = clampHeightMm(roofMinHeightEl.value, base);
-      var maxH = clampHeightMm(roofMaxHeightEl.value, base);
+
+      var minH = readLenFromInput(roofMinHeightEl, unitMode, base);
+      var maxH = readLenFromInput(roofMaxHeightEl, unitMode, base);
+
+      minH = clampHeightMm(minH, base);
+      maxH = clampHeightMm(maxH, base);
+
       store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
     }
 
@@ -1257,6 +1406,39 @@ function initApp() {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
     });
+
+    if (roofApexEaveHeightEl) {
+      roofApexEaveHeightEl.addEventListener("input", function () {
+        var s = store.getState();
+        var unitMode = getUnitMode(s);
+        var mm = readLenFromInput(roofApexEaveHeightEl, unitMode, 1850);
+        store.setState({ roof: { apex: { eaveHeight_mm: mm } } });
+      });
+    }
+    if (roofApexCrestHeightEl) {
+      roofApexCrestHeightEl.addEventListener("input", function () {
+        var s = store.getState();
+        var unitMode = getUnitMode(s);
+        var mm = readLenFromInput(roofApexCrestHeightEl, unitMode, 2200);
+        store.setState({ roof: { apex: { crestHeight_mm: mm } } });
+      });
+    }
+    if (roofHippedEaveHeightEl) {
+      roofHippedEaveHeightEl.addEventListener("input", function () {
+        var s = store.getState();
+        var unitMode = getUnitMode(s);
+        var mm = readLenFromInput(roofHippedEaveHeightEl, unitMode, 2000);
+        store.setState({ roof: { hipped: { eaveHeight_mm: mm } } });
+      });
+    }
+    if (roofHippedCrestHeightEl) {
+      roofHippedCrestHeightEl.addEventListener("input", function () {
+        var s = store.getState();
+        var unitMode = getUnitMode(s);
+        var mm = readLenFromInput(roofHippedCrestHeightEl, unitMode, 2400);
+        store.setState({ roof: { hipped: { crestHeight_mm: mm } } });
+      });
+    }
 
     if (vWallsEl) {
       vWallsEl.addEventListener("change", function (e) {
@@ -1301,8 +1483,10 @@ function initApp() {
 
     function writeActiveDims() {
       var s = store.getState();
-      var w = asPosInt(wInputEl ? wInputEl.value : null, 1000);
-      var d = asPosInt(dInputEl ? dInputEl.value : null, 1000);
+      var unitMode = getUnitMode(s);
+
+      var w = readLenFromInput(wInputEl, unitMode, 1000);
+      var d = readLenFromInput(dInputEl, unitMode, 1000);
 
       if (s && s.dimInputs && s.dimMode) {
         if (s.dimMode === "base") store.setState({ dimInputs: { baseW_mm: w, baseD_mm: d } });
@@ -1317,14 +1501,41 @@ function initApp() {
 
     if (overUniformEl) {
       overUniformEl.addEventListener("input", function () {
-        var n = Math.max(0, Math.floor(Number(overUniformEl.value || 0)));
-        store.setState({ overhang: { uniform_mm: Number.isFinite(n) ? n : 0 } });
+        var s = store.getState();
+        var unitMode = getUnitMode(s);
+        var mm = readLenFromInput(overUniformEl, unitMode, 0);
+        mm = Math.max(0, Math.floor(mm));
+        store.setState({ overhang: { uniform_mm: Number.isFinite(mm) ? mm : 0 } });
       });
     }
-    if (overLeftEl)  overLeftEl.addEventListener("input",  function () { store.setState({ overhang: { left_mm:  asNullableInt(overLeftEl.value) } }); });
-    if (overRightEl) overRightEl.addEventListener("input", function () { store.setState({ overhang: { right_mm: asNullableInt(overRightEl.value) } }); });
-    if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
-    if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
+    if (overLeftEl)  overLeftEl.addEventListener("input",  function () {
+      var s = store.getState();
+      var unitMode = getUnitMode(s);
+      var v = asNullableInt(overLeftEl.value);
+      if (unitMode === "imperial") v = (v == null ? null : Math.max(0, Math.floor(inToMm(v))));
+      store.setState({ overhang: { left_mm: v } });
+    });
+    if (overRightEl) overRightEl.addEventListener("input", function () {
+      var s = store.getState();
+      var unitMode = getUnitMode(s);
+      var v = asNullableInt(overRightEl.value);
+      if (unitMode === "imperial") v = (v == null ? null : Math.max(0, Math.floor(inToMm(v))));
+      store.setState({ overhang: { right_mm: v } });
+    });
+    if (overFrontEl) overFrontEl.addEventListener("input", function () {
+      var s = store.getState();
+      var unitMode = getUnitMode(s);
+      var v = asNullableInt(overFrontEl.value);
+      if (unitMode === "imperial") v = (v == null ? null : Math.max(0, Math.floor(inToMm(v))));
+      store.setState({ overhang: { front_mm: v } });
+    });
+    if (overBackEl)  overBackEl.addEventListener("input",  function () {
+      var s = store.getState();
+      var unitMode = getUnitMode(s);
+      var v = asNullableInt(overBackEl.value);
+      if (unitMode === "imperial") v = (v == null ? null : Math.max(0, Math.floor(inToMm(v))));
+      store.setState({ overhang: { back_mm: v } });
+    });
 
     function sectionHFromSelectValue(v) {
       return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
@@ -1344,7 +1555,10 @@ function initApp() {
     if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
     if (wallHeightEl) wallHeightEl.addEventListener("input", function () {
       if (wallHeightEl && wallHeightEl.disabled === true) return;
-      store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
+      var s = store.getState();
+      var unitMode = getUnitMode(s);
+      var mm = readLenFromInput(wallHeightEl, unitMode, 2400);
+      store.setState({ walls: { height_mm: mm } });
     });
 
     if (addDoorBtnEl) {
@@ -1418,6 +1632,7 @@ function initApp() {
       var v = syncInvalidOpeningsIntoState();
       syncUiFromState(s, v);
       applyWallHeightUiLock(s);
+      applyRoofHeightUiVisibility(s);
       render(s);
     });
 
@@ -1447,8 +1662,12 @@ function initApp() {
       }
     } catch (e0) {}
 
+    try { if (getUnitMode(store.getState()) !== "imperial") store.setState({ ui: { unitMode: "metric" } }); } catch (e1) {}
+    try { ensureHippedDefaultsInState(); } catch (e2) {}
+
     syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
     applyWallHeightUiLock(store.getState());
+    applyRoofHeightUiVisibility(store.getState());
     render(store.getState());
     resume3D();
 
