@@ -53,6 +53,7 @@ export function build3D(state, ctx) {
     if (!window.__dbg.cladding) window.__dbg.cladding = {};
     if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
     if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
+    if (!window.__dbg.claddingCourses) window.__dbg.claddingCourses = null;
   } catch (e) {}
 
   const dims = {
@@ -255,10 +256,30 @@ export function build3D(state, ctx) {
       return;
     }
 
+    const minAllowedBottomY_mm = (P_bottom_mm - CLAD_DRIP);
+
+    const doCourseDebug = (() => {
+      try {
+        if (window.__dbg && window.__dbg.claddingCourses === null) {
+          if (wallId === "front" && panelIndex === 1) return true;
+        }
+      } catch (e) {}
+      return false;
+    })();
+
+    const courseDebug = doCourseDebug ? { wallId, panelIndex, minAllowedBottomY_mm, courses: [] } : null;
+
     const parts = [];
 
     for (let i = 0; i < courses; i++) {
       const courseBottomEdgeY = (i === 0) ? (P_bottom_mm - CLAD_DRIP) : (P_bottom_mm + i * CLAD_H);
+
+      // Strategy A: hard rule — no course may exist below minAllowedBottomY_mm.
+      if (courseBottomEdgeY < minAllowedBottomY_mm) continue;
+
+      const courseTopEdgeY = courseBottomEdgeY + CLAD_H;
+
+      if (courseDebug) courseDebug.courses.push({ i, bottomY_mm: courseBottomEdgeY, topY_mm: courseTopEdgeY });
 
       const yBottomStrip = courseBottomEdgeY;
       const hBottomStrip = CLAD_Hb;
@@ -346,6 +367,12 @@ export function build3D(state, ctx) {
           )
         );
       }
+    }
+
+    if (courseDebug) {
+      try {
+        window.__dbg.claddingCourses = courseDebug;
+      } catch (e) {}
     }
 
     // Merge into one mesh per panel (existing behavior retained)
