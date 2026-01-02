@@ -246,26 +246,28 @@ function buildPent(state, ctx) {
   const targetMinZ_m = (-f_mm) / 1000;
 
   // Rotation:
-  // - Pent slope is along WORLD +X (walls.js definition)
-  // - So the roof's "span axis" (A axis) must align to WORLD +X.
-  const slopeAxisWorld = new BABYLON.Vector3(1, 0, 0);
-  const pitchAxisWorld = new BABYLON.Vector3(0, 0, 1); // rotate about Z to raise +X end
+  // - Pent slope follows the shortest plan dimension:
+  //   - If roofW <= roofD: slope along WORLD +X (span width)
+  //   - If roofW >  roofD: slope along WORLD +Z (span depth)
+  const slopeAlongWorldX = !!data.isWShort;
+  const slopeAxisWorld = slopeAlongWorldX ? new BABYLON.Vector3(1, 0, 0) : new BABYLON.Vector3(0, 0, 1);
+  const pitchAxisWorld = slopeAlongWorldX ? new BABYLON.Vector3(0, 0, 1) : new BABYLON.Vector3(1, 0, 0);
 
   // Source axis in roof local that represents A (rafter span axis):
   // data.isWShort => A maps to local X, else A maps to local Z
   const slopeAxisLocal = data.isWShort ? new BABYLON.Vector3(1, 0, 0) : new BABYLON.Vector3(0, 0, 1);
 
-  // Yaw around Y to align slopeAxisLocal -> +X
+  // Yaw around Y to align slopeAxisLocal -> slopeAxisWorld
   const dotYaw = clamp((slopeAxisLocal.x * slopeAxisWorld.x + slopeAxisLocal.z * slopeAxisWorld.z), -1, 1);
   const crossYawY = (slopeAxisLocal.x * slopeAxisWorld.z - slopeAxisLocal.z * slopeAxisWorld.x);
   let yaw = (Math.acos(dotYaw)) * (crossYawY >= 0 ? 1 : -1);
   const qYaw = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), yaw);
 
-  // Pitch angle derived from analytic rise/run (frameW)
+  // Pitch angle derived from analytic rise/run over the SHORT frame span
   const rise_m = (maxH_mm - minH_mm) / 1000;
-  const run_m = Math.max(1e-6, frameW_mm / 1000);
+  const run_m = Math.max(1e-6, (slopeAlongWorldX ? frameW_mm : frameD_mm) / 1000);
   const angle = Math.atan2(rise_m, run_m);
-  const qPitch = BABYLON.Quaternion.RotationAxis(pitchAxisWorld, angle);
+  const qPitch = BABYLON.Quaternion.RotationAxis(pitchAxisWorld, slopeAlongWorldX ? angle : -angle);
 
   roofRoot.rotationQuaternion = qPitch.multiply(qYaw);
 
@@ -305,29 +307,38 @@ function buildPent(state, ctx) {
   roofRoot.position.x += (targetMinX_m - minCornerX);
   roofRoot.position.z += (targetMinZ_m - minCornerZ);
 
-  // Step 2: translate Y so the underside at frame's LEFT edge (x=0) hits minH,
-  // and (by construction) frame RIGHT edge (x=frameW) hits maxH.
-  // Choose two analytic bearing sample points at mid-depth of the frame.
-  const midFrameZ_mm = Math.floor(frameD_mm / 2);
-  const pLeftLocal = new BABYLON.Vector3((l_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
-  const pRightLocal = new BABYLON.Vector3((l_mm + frameW_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
+  // Step 2: translate Y so the underside at the LOW edge hits minH,
+  // and (by construction) the HIGH edge hits maxH.
+  // Choose two analytic bearing sample points at mid of the other frame axis.
+  let pLowLocal = null;
+  let pHighLocal = null;
 
-  const worldLeft = worldOfLocal(pLeftLocal);
-  if (worldLeft) {
-    const targetYLeft_m = (minH_mm / 1000);
-    roofRoot.position.y += (targetYLeft_m - worldLeft.y);
+  if (slopeAlongWorldX) {
+    const midFrameZ_mm = Math.floor(frameD_mm / 2);
+    pLowLocal = new BABYLON.Vector3((l_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
+    pHighLocal = new BABYLON.Vector3((l_mm + frameW_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
+  } else {
+    const midFrameX_mm = Math.floor(frameW_mm / 2);
+    pLowLocal = new BABYLON.Vector3((l_mm + midFrameX_mm) / 1000, 0, (f_mm) / 1000);
+    pHighLocal = new BABYLON.Vector3((l_mm + midFrameX_mm) / 1000, 0, (f_mm + frameD_mm) / 1000);
+  }
+
+  const worldLow = worldOfLocal(pLowLocal);
+  if (worldLow) {
+    const targetYLow_m = (minH_mm / 1000);
+    roofRoot.position.y += (targetYLow_m - worldLow.y);
   } else {
     roofRoot.position.y = (minH_mm / 1000);
   }
 
-  // Debug-only: report right-edge error after final placement
-  let worldRight = null;
-  let rightError_m = null;
+  // Debug-only: report high-edge error after final placement
+  let worldHigh = null;
+  let highError_m = null;
   try {
-    worldRight = worldOfLocal(pRightLocal);
-    if (worldRight) {
-      const targetYRight_m = (maxH_mm / 1000);
-      rightError_m = targetYRight_m - worldRight.y;
+    worldHigh = worldOfLocal(pHighLocal);
+    if (worldHigh) {
+      const targetYHigh_m = (maxH_mm / 1000);
+      highError_m = targetYHigh_m - worldHigh.y;
     }
   } catch (e) {}
 
@@ -349,8 +360,8 @@ function buildPent(state, ctx) {
 
   try {
     if (typeof window !== "undefined" && window.__dbg) {
-      const leftW = worldOfLocal(pLeftLocal);
-      const rightW = worldOfLocal(pRightLocal);
+      const lowW = worldOfLocal(pLowLocal);
+      const highW = worldOfLocal(pHighLocal);
 
       window.__dbg.roofFit = {
         mode: "analytic-bearing-lines",
@@ -360,12 +371,12 @@ function buildPent(state, ctx) {
         rise_m: rise_m,
         run_m: run_m,
         angle: angle,
-        rightError_mm: rightError_m == null ? null : (rightError_m * 1000),
+        highError_mm: highError_m == null ? null : (highError_m * 1000),
       };
 
       // Visualize analytic bearing samples
-      if (leftW) mkDbgSphere("roof-dbg-bearing-left", leftW.x, leftW.y, leftW.z, true);
-      if (rightW) mkDbgSphere("roof-dbg-bearing-right", rightW.x, rightW.y, rightW.z, false);
+      if (lowW) mkDbgSphere("roof-dbg-bearing-low", lowW.x, lowW.y, lowW.z, true);
+      if (highW) mkDbgSphere("roof-dbg-bearing-high", highW.x, highW.y, highW.z, false);
     }
   } catch (e) {}
 }
