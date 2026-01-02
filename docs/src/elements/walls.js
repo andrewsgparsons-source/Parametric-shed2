@@ -41,11 +41,32 @@ export function build3D(state, ctx) {
       if (!m.isDisposed()) m.dispose(false, true);
     });
 
+  // Cladding debug v0.2: mesh counts + broader disposal to ensure no stray intermediates remain
+  let __cladBefore = 0;
+  let __cladAfter = 0;
+  try {
+    __cladBefore = (scene.meshes || []).filter((m) => m && String(m.name || "").startsWith("clad-")).length;
+  } catch (e) {}
+
+  // Primary disposal: dynamic cladding meshes (merged + intermediates)
   scene.meshes
     .filter((m) => m.metadata && m.metadata.dynamic === true && m.name.startsWith("clad-"))
     .forEach((m) => {
       if (!m.isDisposed()) m.dispose(false, true);
     });
+
+  // Secondary disposal: ANY remaining "clad-" meshes (safety net)
+  scene.meshes
+    .filter((m) => m && String(m.name || "").startsWith("clad-"))
+    .forEach((m) => {
+      if (!m.isDisposed()) m.dispose(false, true);
+    });
+
+  try {
+    __cladAfter = (scene.meshes || []).filter((m) => m && String(m.name || "").startsWith("clad-")).length;
+    if (!window.__dbg) window.__dbg = {};
+    window.__dbg.claddingMeshCounts = { before: __cladBefore, after: __cladAfter };
+  } catch (e) {}
 
   // DEBUG: cladding diagnostics
   try {
@@ -356,6 +377,17 @@ export function build3D(state, ctx) {
       merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
     } catch (e) {
       merged = null;
+    }
+
+    // Cladding debug v0.3: ensure NO remaining per-course meshes after a successful merge
+    if (merged) {
+      for (let i = 0; i < parts.length; i++) {
+        const pm = parts[i];
+        if (!pm) continue;
+        try {
+          if (!pm.isDisposed()) pm.dispose(false, true);
+        } catch (e) {}
+      }
     }
 
     const computed_C0_bottom_mm = (P_bottom_mm - CLAD_DRIP);
