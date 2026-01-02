@@ -67,18 +67,11 @@ export function build3D(state, ctx) {
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
 
-  // DEBUG: cladding anchor diagnostics (requested)
+  // DEBUG: cladding anchor diagnostics (requested; per wall)
   try {
     if (!window.__dbg) window.__dbg = {};
-    const anchorY = plateY;
-    const firstCourseBottom = anchorY - CLAD_DRIP;
-    const expectedFirstCourseBottom = anchorY - 30;
-    window.__dbg.cladding = {
-      anchorY_mm: anchorY,
-      firstCourseBottom_mm: firstCourseBottom,
-      expectedFirstCourseBottom_mm: expectedFirstCourseBottom,
-      delta_mm: (firstCourseBottom - expectedFirstCourseBottom),
-    };
+    if (!window.__dbg.cladding) window.__dbg.cladding = {};
+    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
   } catch (e) {}
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
@@ -217,14 +210,56 @@ export function build3D(state, ctx) {
 
     const parts = [];
 
-    // Anchor cladding to TOP of bottom plate (stud start line)
-    const anchorY = plateY;
+    // Anchor cladding to TOP of the wall panel's own bottom plate (world-space), not assumed y=0.
+    let wallBottomPlateBottomY_mm = 0;
+    let wallBottomPlateTopY_mm = plateY;
+    let chosenAnchorY_mm = plateY;
+
+    try {
+      const plateName =
+        (variant === "basic")
+          ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
+          : `wall-${wallId}-plate-bottom`;
+
+      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+      if (plateMesh && plateMesh.getBoundingInfo) {
+        const bi = plateMesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (bb && bb.minimumWorld && bb.maximumWorld) {
+          wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
+          wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
+          chosenAnchorY_mm = wallBottomPlateTopY_mm;
+        }
+      }
+    } catch (e) {}
+
+    // DEBUG per wall (and per panel for basic)
+    try {
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.cladding) window.__dbg.cladding = {};
+      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+
+      const firstCourseBottomY_mm = chosenAnchorY_mm - CLAD_DRIP;
+      const expectedFirstCourseBottomY_mm = chosenAnchorY_mm - 30;
+
+      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
+      window.__dbg.cladding.walls[wallId].push({
+        wallId,
+        panelIndex,
+        wallBottomPlateBottomY_mm,
+        wallBottomPlateTopY_mm,
+        chosenAnchorY_mm,
+        firstCourseBottomY_mm,
+        expectedFirstCourseBottomY_mm,
+        delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+      });
+    } catch (e) {}
 
     for (let i = 0; i < courses; i++) {
-      const yBase = anchorY + i * CLAD_H;
+      const yBase = chosenAnchorY_mm + i * CLAD_H;
       const isFirst = i === 0;
 
-      // Drip: first course only; bottom edge at (plateY - 30mm)
+      // Drip: first course only; bottom edge at (chosenAnchorY_mm - 30mm)
       // Implemented as bottom-only extension (no change to X/Z extents)
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
