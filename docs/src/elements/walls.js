@@ -48,16 +48,14 @@ export function build3D(state, ctx) {
     __cladBefore = (scene.meshes || []).filter((m) => m && String(m.name || "").startsWith("clad-")).length;
   } catch (e) {}
 
-  // Primary disposal: dynamic cladding meshes (merged + intermediates)
+  // Cladding disposal v0.3: catch merged + any stray course parts (ONLY cladding-like names)
   scene.meshes
-    .filter((m) => m.metadata && m.metadata.dynamic === true && m.name.startsWith("clad-"))
-    .forEach((m) => {
-      if (!m.isDisposed()) m.dispose(false, true);
-    });
-
-  // Secondary disposal: ANY remaining "clad-" meshes (safety net)
-  scene.meshes
-    .filter((m) => m && String(m.name || "").startsWith("clad-"))
+    .filter((m) => {
+      if (!m) return false;
+      const nm = String(m.name || "");
+      const isCladLike = nm.startsWith("clad-") || (nm.includes("clad-") && nm.includes("-c"));
+      return isCladLike;
+    })
     .forEach((m) => {
       if (!m.isDisposed()) m.dispose(false, true);
     });
@@ -374,17 +372,19 @@ export function build3D(state, ctx) {
     // Merge into one mesh per panel (existing behavior retained)
     let merged = null;
     try {
-      merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+      // Cladding merge v0.4: allow multiMultiMaterials=true (per task), still disposing strays explicitly below
+      merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, true);
     } catch (e) {
       merged = null;
     }
 
-    // Cladding debug v0.3: ensure NO remaining per-course meshes after a successful merge
+    // Cladding debug v0.4: guarantee NO stray course pieces remain after merge
     if (merged) {
       for (let i = 0; i < parts.length; i++) {
         const pm = parts[i];
         if (!pm) continue;
         try {
+          if (pm === merged) continue;
           if (!pm.isDisposed()) pm.dispose(false, true);
         } catch (e) {}
       }
@@ -1102,6 +1102,38 @@ export function build3D(state, ctx) {
 
   if (flags.left) buildWall("left", "z", sideLenZ, { x: 0, z: wallThk });
   if (flags.right) buildWall("right", "z", sideLenZ, { x: dims.w - wallThk, z: wallThk });
+
+  // Cladding audit v0.1: dump any cladding-like meshes AFTER build (debug only)
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    window.__dbg.cladMeshNames = (scene.meshes || [])
+      .filter((m) => m && !m.isDisposed && m.isDisposed ? false : (!!m && !m.isDisposed()))
+      .filter((m) => m && typeof m.name === "string" && (
+        m.name.startsWith("clad-") || m.name.includes("clad") || m.name.includes("ship")
+      ))
+      .map((m) => {
+        let minY = null;
+        let maxY = null;
+        try {
+          if (m.getBoundingInfo) {
+            const bi = m.getBoundingInfo();
+            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
+            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
+          }
+        } catch (e) {}
+        return {
+          name: m.name,
+          parent: m.parent ? m.parent.name : null,
+          minY: minY,
+          maxY: maxY,
+          meta: m.metadata || null
+        };
+      });
+
+    console.log("CLAD_MESH_COUNT", window.__dbg.cladMeshNames.length,
+      (window.__dbg.cladMeshNames || []).slice(0, 10).map((x) => x && x.name ? x.name : ""));
+  } catch (e) {}
 }
 
 function resolveProfile(state, variant) {
