@@ -390,6 +390,9 @@ export function build3D(state, ctx) {
 
         const minAllowed_m = minAllowed_mm / 1000;
 
+        // Cladding clip v0.1: force world matrix up-to-date before world-space clamping
+        if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
+
         const wm = mesh.getWorldMatrix ? mesh.getWorldMatrix() : null;
         if (!wm) return;
 
@@ -416,12 +419,16 @@ export function build3D(state, ctx) {
 
         mesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind, pos, true);
         if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
+        if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
       } catch (e) {}
     }
 
     function getMeshMinYmm(mesh) {
       try {
         if (!mesh || !mesh.getBoundingInfo) return null;
+        // Cladding clip v0.1: ensure boundingBox.minimumWorld is current
+        if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
+        if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
         const bi = mesh.getBoundingInfo();
         const bb = bi && bi.boundingBox ? bi.boundingBox : null;
         if (!bb || !bb.minimumWorld) return null;
@@ -464,14 +471,37 @@ export function build3D(state, ctx) {
         merged.parent = plateMesh.parent || null;
       } catch (e) {}
 
-      // HARD CLIP: ensure no geometry exists below minAllowed (P_bottom - 30mm)
+      // ---- PHASE 2 REAL FIX (least invasive): C) post-process merged mesh vertex positions ----
+      // LOCKED RULE: no cladding vertices may exist below minAllowed (P_bottom - 30mm), tolerance 1mm.
+      const tol_mm = 1;
+
       let preMinY = getMeshMinYmm(merged);
-      if (Number.isFinite(preMinY) && preMinY < minAllowed_mm) {
+      if (Number.isFinite(preMinY) && preMinY < (minAllowed_mm - tol_mm)) {
         hardClipMeshToMinAllowed(merged);
+
+        // If the parent/world matrix changes after the first clip, re-evaluate once.
+        let checkMinY = getMeshMinYmm(merged);
+        if (Number.isFinite(checkMinY) && checkMinY < (minAllowed_mm - tol_mm)) {
+          hardClipMeshToMinAllowed(merged);
+        }
       }
 
       let postMinY = getMeshMinYmm(merged);
-      if (Number.isFinite(postMinY) && postMinY < minAllowed_mm) {
+
+      // Required report structure
+      try {
+        if (!window.__dbg) window.__dbg = {};
+        if (!window.__dbg.claddingClipReport) window.__dbg.claddingClipReport = {};
+        if (!window.__dbg.claddingClipReport[wallId]) window.__dbg.claddingClipReport[wallId] = {};
+        window.__dbg.claddingClipReport[wallId][panelIndex] = {
+          minWorldY_mm: postMinY,
+          minAllowed_mm: minAllowed_mm,
+          delta_mm: (Number.isFinite(postMinY) ? (postMinY - minAllowed_mm) : null),
+        };
+      } catch (e) {}
+
+      // Existing debug stream retained
+      if (Number.isFinite(postMinY) && postMinY < (minAllowed_mm - tol_mm)) {
         try {
           if (!window.__dbg) window.__dbg = {};
           if (!window.__dbg.claddingClip) window.__dbg.claddingClip = [];
