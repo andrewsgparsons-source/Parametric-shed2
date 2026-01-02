@@ -57,6 +57,30 @@ export function build3D(state, ctx) {
   const plateY = prof.studW;
   const wallThk = prof.studH;
 
+  // ---- Cladding (Phase 1): external shiplap, geometry only ----
+  const CLAD_H = 140;
+  const CLAD_T = 20;
+  const CLAD_DRIP = 30;
+
+  const CLAD_Rt = 5;
+  const CLAD_Ht = 45;
+  const CLAD_Rb = 5;
+  const CLAD_Hb = 20;
+
+  // DEBUG: cladding anchor diagnostics (requested)
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    const anchorY = plateY;
+    const firstCourseBottom = anchorY - CLAD_DRIP;
+    const expectedFirstCourseBottom = anchorY - 30;
+    window.__dbg.cladding = {
+      anchorY_mm: anchorY,
+      firstCourseBottom_mm: firstCourseBottom,
+      expectedFirstCourseBottom_mm: expectedFirstCourseBottom,
+      delta_mm: (firstCourseBottom - expectedFirstCourseBottom),
+    };
+  } catch (e) {}
+
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
 
   const minH = isPent
@@ -184,16 +208,6 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  // ---- Cladding (Phase 1): external shiplap, geometry only ----
-  const CLAD_H = 140;
-  const CLAD_T = 20;
-  const CLAD_DRIP = 30;
-
-  const CLAD_Rt = 5;
-  const CLAD_Ht = 45;
-  const CLAD_Rb = 5;
-  const CLAD_Hb = 20;
-
   function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight) {
     const isAlongX = axis === "x";
     const mat = materials && materials.cladding ? materials.cladding : materials.timber;
@@ -203,11 +217,15 @@ export function build3D(state, ctx) {
 
     const parts = [];
 
+    // Anchor cladding to TOP of bottom plate (stud start line)
+    const anchorY = plateY;
+
     for (let i = 0; i < courses; i++) {
-      const yBase = i * CLAD_H;
+      const yBase = anchorY + i * CLAD_H;
       const isFirst = i === 0;
 
-      // Drip: extend bottom by 30mm WITHOUT shifting the course grid (top stays aligned)
+      // Drip: first course only; bottom edge at (plateY - 30mm)
+      // Implemented as bottom-only extension (no change to X/Z extents)
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
 
@@ -238,8 +256,6 @@ export function build3D(state, ctx) {
         // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
         const zUpper = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
-        const zUpperShift = (wallId === "front") ? CLAD_Rb : 0;
-        const zUpperShiftBack = (wallId === "back") ? 0 : 0;
 
         // For front: shift inward +5 (toward +Z) by moving min z forward by +5.
         // For back : keep min at outer plane; reduced thickness naturally recesses outer face by 5.
@@ -298,7 +314,7 @@ export function build3D(state, ctx) {
       }
     }
 
-    // Merge into one mesh per panel to reduce draw calls and avoid freezing the tab.
+    // Merge into one mesh per panel (existing behavior retained)
     let merged = null;
     try {
       merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
@@ -311,7 +327,7 @@ export function build3D(state, ctx) {
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
     } else {
-      // If merge failed for any reason, keep parts as-is (already dynamic and correctly materialed).
+      // If merge failed for any reason, keep parts as-is.
     }
   }
 
