@@ -53,7 +53,6 @@ export function build3D(state, ctx) {
     if (!window.__dbg.cladding) window.__dbg.cladding = {};
     if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
     if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
-    if (!window.__dbg.claddingCourses) window.__dbg.claddingCourses = null;
   } catch (e) {}
 
   const dims = {
@@ -256,30 +255,12 @@ export function build3D(state, ctx) {
       return;
     }
 
-    const minAllowedBottomY_mm = (P_bottom_mm - CLAD_DRIP);
-
-    const doCourseDebug = (() => {
-      try {
-        if (window.__dbg && window.__dbg.claddingCourses === null) {
-          if (wallId === "front" && panelIndex === 1) return true;
-        }
-      } catch (e) {}
-      return false;
-    })();
-
-    const courseDebug = doCourseDebug ? { wallId, panelIndex, minAllowedBottomY_mm, courses: [] } : null;
+    const minAllowed_mm = (P_bottom_mm - CLAD_DRIP);
 
     const parts = [];
 
     for (let i = 0; i < courses; i++) {
       const courseBottomEdgeY = (i === 0) ? (P_bottom_mm - CLAD_DRIP) : (P_bottom_mm + i * CLAD_H);
-
-      // Strategy A: hard rule — no course may exist below minAllowedBottomY_mm.
-      if (courseBottomEdgeY < minAllowedBottomY_mm) continue;
-
-      const courseTopEdgeY = courseBottomEdgeY + CLAD_H;
-
-      if (courseDebug) courseDebug.courses.push({ i, bottomY_mm: courseBottomEdgeY, topY_mm: courseTopEdgeY });
 
       const yBottomStrip = courseBottomEdgeY;
       const hBottomStrip = CLAD_Hb;
@@ -369,12 +350,6 @@ export function build3D(state, ctx) {
       }
     }
 
-    if (courseDebug) {
-      try {
-        window.__dbg.claddingCourses = courseDebug;
-      } catch (e) {}
-    }
-
     // Merge into one mesh per panel (existing behavior retained)
     let merged = null;
     try {
@@ -406,6 +381,58 @@ export function build3D(state, ctx) {
       });
     } catch (e) {}
 
+    function hardClipMeshToMinAllowed(mesh) {
+      if (!mesh) return;
+      try {
+        if (!mesh.getVerticesData || !mesh.updateVerticesData) return;
+        const pos = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+        if (!pos || !pos.length) return;
+
+        const minAllowed_m = minAllowed_mm / 1000;
+
+        const wm = mesh.getWorldMatrix ? mesh.getWorldMatrix() : null;
+        if (!wm) return;
+
+        const inv = new BABYLON.Matrix();
+        wm.invertToRef(inv);
+
+        const vLocal = new BABYLON.Vector3(0, 0, 0);
+        const vWorld = new BABYLON.Vector3(0, 0, 0);
+        const vBack = new BABYLON.Vector3(0, 0, 0);
+
+        for (let i = 0; i < pos.length; i += 3) {
+          vLocal.x = pos[i + 0];
+          vLocal.y = pos[i + 1];
+          vLocal.z = pos[i + 2];
+
+          BABYLON.Vector3.TransformCoordinatesToRef(vLocal, wm, vWorld);
+
+          if (vWorld.y < minAllowed_m) {
+            vWorld.y = minAllowed_m;
+            BABYLON.Vector3.TransformCoordinatesToRef(vWorld, inv, vBack);
+            pos[i + 1] = vBack.y;
+          }
+        }
+
+        mesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind, pos, true);
+        if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
+      } catch (e) {}
+    }
+
+    function getMeshMinYmm(mesh) {
+      try {
+        if (!mesh || !mesh.getBoundingInfo) return null;
+        const bi = mesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (!bb || !bb.minimumWorld) return null;
+        const y = Number(bb.minimumWorld.y);
+        if (!Number.isFinite(y)) return null;
+        return y * 1000;
+      } catch (e) {
+        return null;
+      }
+    }
+
     if (merged) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
@@ -414,12 +441,56 @@ export function build3D(state, ctx) {
         // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
         merged.parent = plateMesh.parent || null;
       } catch (e) {}
+
+      // HARD CLIP: ensure no geometry exists below minAllowed (P_bottom - 30mm)
+      let preMinY = getMeshMinYmm(merged);
+      if (Number.isFinite(preMinY) && preMinY < minAllowed_mm) {
+        hardClipMeshToMinAllowed(merged);
+      }
+
+      let postMinY = getMeshMinYmm(merged);
+      if (Number.isFinite(postMinY) && postMinY < minAllowed_mm) {
+        try {
+          if (!window.__dbg) window.__dbg = {};
+          if (!window.__dbg.claddingClip) window.__dbg.claddingClip = [];
+          window.__dbg.claddingClip.push({
+            wallId,
+            panelIndex,
+            cladMinY_mm: postMinY,
+            minAllowed_mm: minAllowed_mm,
+            delta_mm: (postMinY - minAllowed_mm),
+          });
+        } catch (e) {}
+      }
     } else {
       // If merge failed for any reason, keep parts as-is; still bind them to the wall's transform chain.
       const p = plateMesh.parent || null;
       if (p) {
         for (let i = 0; i < parts.length; i++) {
           try { parts[i].parent = p; } catch (e) {}
+        }
+      }
+
+      // HARD CLIP fallback: apply to each part if merge failed
+      for (let i = 0; i < parts.length; i++) {
+        let preMinY = getMeshMinYmm(parts[i]);
+        if (Number.isFinite(preMinY) && preMinY < minAllowed_mm) {
+          hardClipMeshToMinAllowed(parts[i]);
+        }
+        let postMinY = getMeshMinYmm(parts[i]);
+        if (Number.isFinite(postMinY) && postMinY < minAllowed_mm) {
+          try {
+            if (!window.__dbg) window.__dbg = {};
+            if (!window.__dbg.claddingClip) window.__dbg.claddingClip = [];
+            window.__dbg.claddingClip.push({
+              wallId,
+              panelIndex,
+              cladMinY_mm: postMinY,
+              minAllowed_mm: minAllowed_mm,
+              delta_mm: (postMinY - minAllowed_mm),
+              part: (parts[i] && parts[i].name) ? parts[i].name : "",
+            });
+          } catch (e) {}
         }
       }
     }
@@ -1208,6 +1279,7 @@ export function updateBOM(state) {
         // Panel contents (all include L/W/D)
         sections.push([`  Bottom Plate`, 1, pan.len, plateY, wallThk, ""]);
         sections.push([`  Top Plate`, 1, pan.len, plateY, wallThk, ""]);
+
 
         if (variant === "basic") {
           // Mirrors current basic wall panel stud policy (3 studs per panel in buildBasicPanel; suppression is geometric-only)
