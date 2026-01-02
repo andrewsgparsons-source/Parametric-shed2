@@ -28,207 +28,268 @@
       <details open>
         <summary>Controls <span style="font-weight:700;font-size:12px;color:#666;">(toggle)</span></summary>
         <div class="inner">
-          <form aria-label="Shed controls">
-            <fieldset>
-              <legend>Walls</legend>
+          <div class="boHeader">
+            <div class="boTitle1">Design your shed</div>
+            <div class="boTitle2">Build Options — v1.8</div>
+          </div>
 
-              <div class="row">
-                <label>
-                  Stud/Plate Size
-                  <select id="wallSection" aria-label="Stud and plate size">
-                    <option value="50x75">50×75</option>
-                    <option value="50x100" selected>50×100</option>
-                  </select>
-                </label>
-                <label>
-                  Variant
-                  <select id="wallsVariant">
-                    <option value="insulated" selected>insulated</option>
-                    <option value="basic">basic</option>
-                  </select>
-                </label>
-              </div>
+          <form aria-label="Build options">
+            <details open class="boSection">
+              <summary>Size &amp; Shape</summary>
+              <div class="boBox">
+                <div class="row">
+                  <label>
+                    Unit Mode
+                    <div class="unitModeRow" role="group" aria-label="Unit Mode (Metric / Imperial)">
+                      <label class="check"><input id="unitModeMetric" type="radio" name="unitMode" value="metric" checked /> Metric</label>
+                      <label class="check"><input id="unitModeImperial" type="radio" name="unitMode" value="imperial" /> Imperial</label>
+                    </div>
+                  </label>
+                  <div></div>
+                </div>
 
-              <div class="checks" role="group" aria-label="Wall parts">
-                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
-                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
-                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
-                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
-              </div>
-            </fieldset>
+                <div class="row">
+                  <label>
+                    Dimension Mode
+                    <select id="dimMode" aria-label="Dimension Mode (Base / Frame / Roof)">
+                      <option value="base" selected>base</option>
+                      <option value="frame">frame</option>
+                      <option value="roof">roof</option>
+                    </select>
+                  </label>
+                  <div></div>
+                </div>
 
-            <fieldset>
-              <legend>Doors</legend>
-              <div class="row">
-                <button id="addDoorBtn" type="button">Add Door</button>
-                <button id="removeAllDoorsBtn" type="button">Remove All Doors</button>
-              </div>
-              <div id="doorsList"></div>
-              <p class="hint">Commit edits on Enter or click-away. Invalid doors highlight red; use the snap button to resolve.</p>
-            </fieldset>
+                <div class="row">
+                  <label>
+                    Width (mm)
+                    <input id="wInput" type="number" min="1" step="10" value="3000" />
+                  </label>
+                  <label>
+                    Depth (mm)
+                    <input id="dInput" type="number" min="1" step="10" value="4000" />
+                  </label>
+                </div>
 
-            <fieldset>
-              <legend>Windows</legend>
-              <div class="row">
-                <button id="addWindowBtn" type="button">Add Window</button>
-                <button id="removeAllWindowsBtn" type="button">Remove All Windows</button>
-              </div>
-              <div id="windowsList"></div>
-              <p class="hint">Window Y is measured from the bottom plate top (inside the frame). Invalid windows highlight red; snap resolves X-only.</p>
-            </fieldset>
-
-            <fieldset>
-              <legend>Dimensions</legend>
-              <div class="row">
-                <label>
-                  Mode
-                  <select id="dimMode">
-                    <option value="base" selected>base</option>
-                    <option value="frame">frame</option>
-                    <option value="roof">roof</option>
-                  </select>
-                </label>
-                <div></div>
-              </div>
-
-              <div class="row">
-                <label>
-                  Width (mm) — X direction
-                  <input id="wInput" type="number" min="1" step="10" value="3000" />
-                </label>
-                <label>
-                  Depth (mm) — Z direction
-                  <input id="dInput" type="number" min="1" step="10" value="4000" />
-                </label>
-              </div>
-              <p class="hint">
-                Tip: swapping Width/Depth changes the decking layout (by design). Orientation still auto-flips based on the dimensions.
-              </p>
-            </fieldset>
-
-            <fieldset>
-              <legend>Roof Overhang (mm)</legend>
-              <div class="row">
-                <label>
-                  Roof Style
-                  <select id="roofStyle">
-                    <option value="apex" selected>Apex (gabled)</option>
-                    <option value="pent">Pent (single pitch)</option>
-                    <option value="hipped">Hipped</option>
-                  </select>
-                </label>
-                <div></div>
-              </div>
-
-              <div class="row">
-                <label>
-                  Min Height (mm)
-                  <input id="roofMinHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-                <label>
-                  Max Height (mm)
-                  <input id="roofMaxHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-              </div>
-
-              <div class="row">
-                <label>
-                  Apex Eave Height (mm)
-                  <input id="roofApexEaveHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-                <label>
-                  Apex Crest Height (mm)
-                  <input id="roofApexCrestHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-              </div>
-
-              <div class="row">
-                <label>
-                  Hipped Eave Height (mm)
-                  <input id="roofHippedEaveHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-                <label>
-                  Hipped Crest Height (mm)
-                  <input id="roofHippedCrestHeight" type="number" min="100" step="10" value="2400" />
-                </label>
-              </div>
-
-              <div class="row">
-                <label>Uniform<input id="roofOverUniform" type="number" min="0" step="1" value="0" /></label>
-                <div></div>
-              </div>
-              <div class="row">
-                <label>Front<input id="roofOverFront" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-                <label>Back<input id="roofOverBack" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-              </div>
-              <div class="row">
-                <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-                <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
-              </div>
-            </fieldset>
-
-            <fieldset>
-              <legend>Instances</legend>
-
-              <div class="row">
-                <label>
-                  Instance
-                  <select id="instanceSelect"></select>
-                </label>
-                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
-                  <button id="saveInstanceBtn" type="button">Save</button>
-                  <button id="loadInstanceBtn" type="button">Load</button>
+                <div class="row">
+                  <label>
+                    Roof Type
+                    <select id="roofStyle" aria-label="Roof Type">
+                      <option value="apex" selected>Apex (gabled)</option>
+                      <option value="pent">Pent (single pitch)</option>
+                      <option value="hipped">Hipped</option>
+                    </select>
+                  </label>
+                  <label>
+                    Variant
+                    <select id="wallsVariant" aria-label="Variant">
+                      <option value="insulated" selected>Insulated</option>
+                      <option value="basic">Basic</option>
+                    </select>
+                  </label>
                 </div>
               </div>
+            </details>
 
-              <div class="row">
-                <label>
-                  New name
-                  <input id="instanceNameInput" type="text" placeholder="e.g. Client A" />
-                </label>
-                <div style="display:flex;gap:8px;justify-content:flex-end;align-items:end;">
+            <details open class="boSection">
+              <summary>Walls &amp; Openings</summary>
+              <div class="boBox">
+                <div class="boSubhead">Wall Construction</div>
+                <div class="row">
+                  <label>
+                    Stud / Plate Size
+                    <select id="wallSection" aria-label="Stud and plate size">
+                      <option value="50x75">50×75</option>
+                      <option value="50x100" selected>50×100</option>
+                    </select>
+                  </label>
+                  <div></div>
+                </div>
+
+                <div class="boSubhead" style="margin-top:10px;">Doors</div>
+                <div class="row">
+                  <button id="addDoorBtn" type="button">+ Add Door</button>
+                  <button id="removeAllDoorsBtn" type="button">Remove All</button>
+                </div>
+                <div id="doorsList"></div>
+
+                <div class="boSubhead" style="margin-top:10px;">Windows</div>
+                <div class="row">
+                  <button id="addWindowBtn" type="button">+ Add Window</button>
+                  <button id="removeAllWindowsBtn" type="button">Remove All</button>
+                </div>
+                <div id="windowsList"></div>
+              </div>
+            </details>
+
+            <details open class="boSection">
+              <summary>Roof</summary>
+              <div class="boBox">
+                <div class="boSubhead">Building Height Options</div>
+                <div class="hint" style="margin:0 0 10px 0;">(Shown after roof type selection)</div>
+
+                <div id="roofHeightOptions">
+                  <div id="roofHeightsApex" class="roofHeightsBlock" aria-hidden="false">
+                    <div class="boRuleTitle">── Apex Roof ──────────────────────────────────────────────</div>
+                    <div class="row">
+                      <label>
+                        Height to Eaves (mm)
+                        <input id="roofApexEaveHeight" type="number" min="100" step="10" value="1850" />
+                      </label>
+                      <label>
+                        Height to Crest (mm)
+                        <input id="roofApexCrestHeight" type="number" min="100" step="10" value="2200" />
+                      </label>
+                    </div>
+                    <div class="row">
+                      <label>
+                        Roof Pitch
+                        <input id="roofPitchApex" type="text" value="30°" readonly aria-readonly="true" />
+                      </label>
+                      <div class="hint" style="align-self:end;">(calculated, read-only)</div>
+                    </div>
+                  </div>
+
+                  <div id="roofHeightsPent" class="roofHeightsBlock" aria-hidden="true">
+                    <div class="boRuleTitle">── Pent Roof ──────────────────────────────────────────────</div>
+                    <div class="row">
+                      <label>
+                        Minimum Height (mm)
+                        <input id="roofMinHeight" type="number" min="100" step="10" value="2100" />
+                      </label>
+                      <label>
+                        Maximum Height (mm)
+                        <input id="roofMaxHeight" type="number" min="100" step="10" value="2300" />
+                      </label>
+                    </div>
+                    <div class="row">
+                      <label>
+                        Roof Pitch
+                        <input id="roofPitchPent" type="text" value="7°" readonly aria-readonly="true" />
+                      </label>
+                      <div class="hint" style="align-self:end;">(calculated, read-only)</div>
+                    </div>
+                  </div>
+
+                  <div id="roofHeightsHipped" class="roofHeightsBlock" aria-hidden="true">
+                    <div class="boRuleTitle">── Hipped Roof ────────────────────────────────────────────</div>
+                    <div class="row">
+                      <label>
+                        Height to Eaves (mm)
+                        <input id="roofHippedEaveHeight" type="number" min="100" step="10" value="2000" />
+                      </label>
+                      <label>
+                        Height to Crest (mm)
+                        <input id="roofHippedCrestHeight" type="number" min="100" step="10" value="2400" />
+                      </label>
+                    </div>
+                    <div class="row">
+                      <label>
+                        Roof Pitch
+                        <input id="roofPitchHipped" type="text" value="25°" readonly aria-readonly="true" />
+                      </label>
+                      <div class="hint" style="align-self:end;">(calculated, read-only)</div>
+                    </div>
+                    <div class="row">
+                      <button id="hippedDesignOptionsBtn" type="button" disabled aria-disabled="true">Hipped Roof Design Options</button>
+                      <div class="hint" style="align-self:end;">(disabled / coming soon)</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="boRuleTitle">───────────────────────────────────────────────────────────</div>
+                <div class="boSubhead" style="margin-top:8px;">Overhangs</div>
+                <div class="row">
+                  <label>
+                    Uniform
+                    <input id="roofOverUniform" type="number" min="0" step="1" value="0" />
+                  </label>
+                  <div></div>
+                </div>
+                <div class="row">
+                  <label>Front<input id="roofOverFront" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                  <label>Back<input id="roofOverBack" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                </div>
+                <div class="row">
+                  <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                  <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                </div>
+              </div>
+            </details>
+
+            <details open class="boSection">
+              <summary>Appearance</summary>
+              <div class="boBox">
+                <div class="hint">(Cladding, finishes, colours — future)</div>
+              </div>
+            </details>
+
+            <details open class="boSection">
+              <summary>Visibility (Advanced)</summary>
+              <div class="boBox">
+                <div class="checks" role="group" aria-label="Visibility: Whole assemblies">
+                  <div class="hint" style="margin:0 0 6px 0;">Whole Assemblies</div>
+                  <label class="check"><input id="vBaseAll" type="checkbox" checked /> Base</label>
+                  <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
+                  <label class="check"><input id="vRoof" type="checkbox" checked /> Roof</label>
+                  <label class="check"><input id="vCladding" type="checkbox" /> Cladding</label>
+                </div>
+
+                <div class="checks" role="group" aria-label="Visibility: Base components" style="margin-top:10px;">
+                  <div class="hint" style="margin:0 0 6px 0;">Base Components</div>
+                  <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
+                  <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
+                  <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
+                  <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
+                </div>
+
+                <div class="checks" role="group" aria-label="Visibility: Wall components" style="margin-top:10px;">
+                  <div class="hint" style="margin:0 0 6px 0;">Wall Components</div>
+                  <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
+                  <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
+                  <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
+                  <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
+                </div>
+
+                <div class="checks" role="group" aria-label="Visibility: Roof components" style="margin-top:10px;">
+                  <div class="hint" style="margin:0 0 6px 0;">Roof Components</div>
+                  <label class="check"><input id="vRoofStructure" type="checkbox" checked /> Structure (future-safe)</label>
+                  <label class="check"><input id="vRoofOsb" type="checkbox" checked /> OSB / Sheathing (future-safe)</label>
+                  <label class="check"><input id="vRoofCovering" type="checkbox" /> Roof Covering</label>
+                </div>
+              </div>
+            </details>
+
+            <details open class="boSection">
+              <summary>Save / Load Design</summary>
+              <div class="boBox">
+                <div class="boSubhead">Saved Designs</div>
+                <div class="row">
+                  <label>
+                    <span class="srOnly">Select design</span>
+                    <select id="instanceSelect" aria-label="Select design"></select>
+                  </label>
+                  <div></div>
+                </div>
+
+                <div class="row">
+                  <button id="saveInstanceBtn" type="button">Save</button>
                   <button id="saveAsInstanceBtn" type="button">Save As</button>
+                  <button id="loadInstanceBtn" type="button">Load</button>
                   <button id="deleteInstanceBtn" type="button">Delete</button>
                 </div>
+
+                <div class="row">
+                  <label>
+                    <span class="hint" style="display:block;margin:0 0 4px 0;">New name</span>
+                    <input id="instanceNameInput" type="text" placeholder="e.g. Client A" />
+                  </label>
+                  <div></div>
+                </div>
+
+                <p id="instancesHint" class="hint"></p>
               </div>
-
-              <p id="instancesHint" class="hint"></p>
-            </fieldset>
-
-            <fieldset>
-              <legend>Visibility</legend>
-
-              <div class="checks" role="group" aria-label="Visibility: Whole assemblies">
-                <div class="hint" style="margin:0 0 6px 0;">Whole Assemblies</div>
-                <label class="check"><input id="vBaseAll" type="checkbox" checked /> Base</label>
-                <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
-                <label class="check"><input id="vRoof" type="checkbox" checked /> Roof</label>
-              </div>
-
-              <div class="checks" role="group" aria-label="Visibility: Base components" style="margin-top:10px;">
-                <div class="hint" style="margin:0 0 6px 0;">Base Components</div>
-                <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
-                <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
-                <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
-                <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
-              </div>
-
-              <div class="checks" role="group" aria-label="Visibility: Wall components" style="margin-top:10px;">
-                <div class="hint" style="margin:0 0 6px 0;">Wall Components</div>
-                <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
-                <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
-                <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
-                <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
-              </div>
-
-              <div class="checks" role="group" aria-label="Visibility: Roof components" style="margin-top:10px;">
-                <div class="hint" style="margin:0 0 6px 0;">Roof Components</div>
-                <label class="check"><input id="vRoofStructure" type="checkbox" checked /> Structure (future-safe)</label>
-                <label class="check"><input id="vRoofOsb" type="checkbox" checked /> OSB / Sheathing (future-safe)</label>
-              </div>
-
-              <p class="hint">Shortcuts: 1=3D, 2=Walls, 3=Base (when not typing).</p>
-            </fieldset>
+            </details>
           </form>
         </div>
       </details>
