@@ -44,13 +44,11 @@ export function boot(canvas) {
   new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
 
   const materials = {
-    timber:   mkMat(scene, 'timber',   new BABYLON.Color3(0.55, 0.43, 0.33)),
-    plate:    mkMat(scene, 'plate',    new BABYLON.Color3(0.45, 0.35, 0.27)),
-    base:     mkMat(scene, 'base',     new BABYLON.Color3(0.2, 0.2, 0.2)),
-    guide:    mkMat(scene, 'guide',    new BABYLON.Color3(0.7, 0.7, 0.7), 0.5),
-
-    // New: dedicated cladding material (distinct from timber frame)
-    cladding: mkMat(scene, 'cladding', new BABYLON.Color3(0.28, 0.20, 0.14)),
+    timber: mkMat(scene, 'timber', new BABYLON.Color3(0.55, 0.43, 0.33)),
+    plate:  mkMat(scene, 'plate',  new BABYLON.Color3(0.45, 0.35, 0.27)),
+    cladding: mkMat(scene, 'cladding', new BABYLON.Color3(0.28, 0.28, 0.30)),
+    base:   mkMat(scene, 'base',   new BABYLON.Color3(0.2, 0.2, 0.2)),
+    guide:  mkMat(scene, 'guide',  new BABYLON.Color3(0.7, 0.7, 0.7), 0.5),
   };
 
   engine.runRenderLoop(() => scene.render());
