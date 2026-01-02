@@ -15,11 +15,6 @@ export const DEFAULTS = {
   w: 3000,
   d: 4000,
 
-  // UI-only (no geometry impact yet): unit mode selection
-  ui: {
-    unitMode: "metric" // "metric" | "imperial"
-  },
-
   // Visibility
   vis: {
     // Base toggles
@@ -33,9 +28,18 @@ export const DEFAULTS = {
     walls: { front: true, back: true, left: true, right: true }
   },
 
-  // Dimension Mode system
+  // Dimension Mode system (mode is UI lens; canonical dims are in dim.frameW_mm / dim.frameD_mm)
   dimMode: "base",   // "base" | "frame" | "roof"
-  dimGap_mm: 40,
+
+  // BASE <-> FRAME fixed delta (mm)
+  dimGap_mm: 50,
+
+  // Canonical dimensions (single source of truth): FRAME outer size (mm)
+  dim: {
+    frameW_mm: 3050,
+    frameD_mm: 4050
+  },
+
   overhang: {
     uniform_mm: 0,
     front_mm: null,
@@ -43,30 +47,19 @@ export const DEFAULTS = {
     left_mm: null,
     right_mm: null,
   },
+
+  // Legacy per-mode input fields kept for compatibility (UI may still reference)
   dimInputs: {
     baseW_mm: 3000,
     baseD_mm: 4000,
-    frameW_mm: 3040,
-    frameD_mm: 4040,
-    roofW_mm: 3040,
-    roofD_mm: 4040,
+    frameW_mm: 3050,
+    frameD_mm: 4050,
+    roofW_mm: 3050,
+    roofD_mm: 4050,
   },
 
   roof: {
     style: "apex",
-
-    // UI-only (no geometry impact yet): apex height inputs
-    apex: {
-      eaveHeight_mm: 1850,
-      crestHeight_mm: 2200
-    },
-
-    // UI-only (no geometry impact yet): hipped height inputs
-    hipped: {
-      eaveHeight_mm: 2000,
-      crestHeight_mm: 2400
-    },
-
     pent: {
       minHeight_mm: 2400,
       maxHeight_mm: 2400
@@ -107,13 +100,11 @@ function resolveOverhangSides(ovh) {
 }
 
 /**
- * Dimension resolver implementing Base/Frame/Roof exactly.
+ * Dimension resolver implementing Base/Frame/Roof with a single canonical FRAME size.
  * Returns outer dims for base/frame/roof plus resolved overhangs.
  */
 export function resolveDims(state) {
-  const mode = (state?.dimMode || "base");
-  const G = clampNonNeg(num(state?.dimGap_mm, 40));
-  const inputs = state?.dimInputs || DEFAULTS.dimInputs;
+  const G = clampNonNeg(num(state?.dimGap_mm, DEFAULTS.dimGap_mm));
   const ovh = resolveOverhangSides(state?.overhang || DEFAULTS.overhang);
 
   const sumX = ovh.l_mm + ovh.r_mm;
@@ -121,23 +112,39 @@ export function resolveDims(state) {
 
   const pair = (w, d) => ({ w_mm: clampPosInt(num(w, 1)), d_mm: clampPosInt(num(d, 1)) });
 
-  let base, frame, roof;
-  if (mode === "base") {
-    const b = pair(inputs.baseW_mm, inputs.baseD_mm);
-    const f = pair(b.w_mm + G, b.d_mm + G);
-    const r = pair(f.w_mm + sumX, f.d_mm + sumZ);
-    base = b; frame = f; roof = r;
-  } else if (mode === "frame") {
-    const f = pair(inputs.frameW_mm, inputs.frameD_mm);
-    const b = pair(Math.max(1, f.w_mm - G), Math.max(1, f.d_mm - G));
-    const r = pair(f.w_mm + sumX, f.d_mm + sumZ);
-    base = b; frame = f; roof = r;
-  } else { // roof
-    const r = pair(inputs.roofW_mm, inputs.roofD_mm);
-    const f = pair(Math.max(1, r.w_mm - sumX), Math.max(1, r.d_mm - sumZ));
-    const b = pair(Math.max(1, f.w_mm - G), Math.max(1, f.d_mm - G));
-    base = b; frame = f; roof = r;
+  // Canonical: frame dims
+  let frameW = null;
+  let frameD = null;
+
+  if (state && state.dim && state.dim.frameW_mm != null && state.dim.frameD_mm != null) {
+    frameW = num(state.dim.frameW_mm, null);
+    frameD = num(state.dim.frameD_mm, null);
   }
+
+  // Fallback (legacy): derive frame dims from per-mode input fields if canonical not present.
+  if (frameW == null || frameD == null) {
+    const mode = (state?.dimMode || "base");
+    const inputs = state?.dimInputs || DEFAULTS.dimInputs;
+
+    if (mode === "frame") {
+      frameW = num(inputs.frameW_mm, DEFAULTS.dimInputs.frameW_mm);
+      frameD = num(inputs.frameD_mm, DEFAULTS.dimInputs.frameD_mm);
+    } else if (mode === "roof") {
+      const roofW = num(inputs.roofW_mm, DEFAULTS.dimInputs.roofW_mm);
+      const roofD = num(inputs.roofD_mm, DEFAULTS.dimInputs.roofD_mm);
+      frameW = Math.max(1, roofW - sumX);
+      frameD = Math.max(1, roofD - sumZ);
+    } else { // base
+      const baseW = num(inputs.baseW_mm, DEFAULTS.dimInputs.baseW_mm);
+      const baseD = num(inputs.baseD_mm, DEFAULTS.dimInputs.baseD_mm);
+      frameW = baseW + G;
+      frameD = baseD + G;
+    }
+  }
+
+  const frame = pair(frameW, frameD);
+  const base = pair(Math.max(1, frame.w_mm - G), Math.max(1, frame.d_mm - G));
+  const roof = pair(frame.w_mm + sumX, frame.d_mm + sumZ);
 
   return { base, frame, roof, overhang: ovh };
 }
