@@ -57,16 +57,21 @@ export function build3D(state, ctx) {
   const plateY = prof.studW;
   const wallThk = prof.studH;
 
-  // ---- Cladding (Phase 1): external shiplap, ONE skin mesh per wall/panel ----
+  // ---- Cladding (Phase 1): external shiplap, geometry only ----
   const CLAD_H = 140;
   const CLAD_T = 20;
   const CLAD_DRIP = 30;
 
-  // DEBUG: cladding anchor diagnostics (requested; per wall)
+  const CLAD_Rt = 5;
+  const CLAD_Ht = 45;
+  const CLAD_Rb = 5;
+  const CLAD_Hb = 20;
+
+  // DEBUG: cladding anchor diagnostics (per wall/panel)
   try {
     if (!window.__dbg) window.__dbg = {};
-    if (!window.__dbg.cladding) window.__dbg.cladding = {};
-    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+    if (!window.__dbg.claddingAnchorFromStuds) window.__dbg.claddingAnchorFromStuds = {};
+    if (!window.__dbg.claddingAnchorFromStuds.walls) window.__dbg.claddingAnchorFromStuds.walls = {};
   } catch (e) {}
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
@@ -196,150 +201,199 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  function getCladdingMaterialForSkin(scene, skinHeight_mm) {
-    try {
-      if (!scene._cladMats) scene._cladMats = {};
-      const key = String(Math.max(1, Math.floor(Number(skinHeight_mm) || 1)));
-      if (scene._cladMats[key]) return scene._cladMats[key];
-
-      const mat = new BABYLON.StandardMaterial("cladMat-" + key, scene);
-      mat.diffuseColor = new BABYLON.Color3(0.72, 0.74, 0.76);
-      mat.specularColor = new BABYLON.Color3(0, 0, 0);
-
-      const texW = 512;
-      const texH = 512;
-
-      const tex = new BABYLON.DynamicTexture("cladStripeTex-" + key, { width: texW, height: texH }, scene, false);
-      try {
-        const ctx2d = tex.getContext();
-        ctx2d.fillStyle = "rgb(184,189,194)";
-        ctx2d.fillRect(0, 0, texW, texH);
-
-        const step = Math.max(4, Math.floor(texH / 8));
-        for (let y = 0; y < texH; y += step) {
-          ctx2d.fillStyle = "rgba(0,0,0,0.16)";
-          ctx2d.fillRect(0, y, texW, 1);
-          ctx2d.fillStyle = "rgba(255,255,255,0.10)";
-          ctx2d.fillRect(0, y + 1, texW, 1);
-        }
-        tex.update();
-      } catch (e) {
-        try { tex.update(); } catch (e2) {}
-      }
-
-      tex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
-      tex.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
-
-      const vScale = (Math.max(1, Number(skinHeight_mm) || 1) / CLAD_H);
-      tex.uScale = 1;
-      tex.vScale = vScale;
-
-      mat.diffuseTexture = tex;
-
-      scene._cladMats[key] = mat;
-      return mat;
-    } catch (e) {
-      return (materials && materials.timber) ? materials.timber : null;
-    }
-  }
-
-  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeightFromAnchor) {
+  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight) {
     const isAlongX = axis === "x";
+    const mat = materials && materials.cladding ? materials.cladding : materials.timber;
 
-    let wallBottomPlateBottomY_mm = 0;
-    let wallBottomPlateTopY_mm = plateY;
-    let claddingAnchorY_mm = plateY;
-    let plateParent = null;
+    const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
+    if (courses < 1) return;
+
+    // Anchor from STUDS (world-space), not plates, not world y=0
+    let studCountFound = 0;
+    let minStudBottomY_mm = null;
 
     try {
-      const plateName =
+      const studPrefix =
         (variant === "basic")
-          ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
-          : `wall-${wallId}-plate-bottom`;
+          ? `wall-${wallId}-panel-${panelIndex}-stud-`
+          : `wall-${wallId}-stud-`;
 
-      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
-      if (plateMesh) {
-        plateParent = plateMesh.parent || null;
-      }
-      if (plateMesh && plateMesh.getBoundingInfo) {
-        const bi = plateMesh.getBoundingInfo();
+      const meshes = scene.meshes || [];
+      for (let i = 0; i < meshes.length; i++) {
+        const m = meshes[i];
+        if (!m || m.isDisposed && m.isDisposed()) continue;
+        const nm = String(m.name || "");
+        if (!nm.startsWith(studPrefix)) continue;
+
+        try { m.computeWorldMatrix(true); } catch (e) {}
+
+        if (!m.getBoundingInfo) continue;
+        const bi = m.getBoundingInfo();
         const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-        if (bb && bb.minimumWorld && bb.maximumWorld) {
-          wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
-          wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
-          claddingAnchorY_mm = wallBottomPlateTopY_mm;
-        }
+        if (!bb || !bb.minimumWorld) continue;
+
+        const yb = Number(bb.minimumWorld.y) * 1000;
+        if (!Number.isFinite(yb)) continue;
+
+        studCountFound += 1;
+        if (minStudBottomY_mm === null || yb < minStudBottomY_mm) minStudBottomY_mm = yb;
       }
     } catch (e) {}
 
-    const panelH = Math.max(1, Math.floor(Number(panelHeightFromAnchor) || 1));
-    const skinHeight_mm = panelH + CLAD_DRIP;
-
-    const bottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
-
-    const mat = getCladdingMaterialForSkin(scene, skinHeight_mm);
-
-    let skin = null;
-
-    if (isAlongX) {
-      const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
-      const zMin = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
-
-      skin = mkBox(
-        `clad-${wallId}-panel-${panelIndex}`,
-        panelLen,
-        skinHeight_mm,
-        CLAD_T,
-        { x: origin.x + panelStart, y: bottomY_mm, z: zMin },
-        mat,
-        { wallId, panelIndex, type: "cladding", skin: true, skinHeight_mm, anchorY_mm: claddingAnchorY_mm, drip_mm: CLAD_DRIP }
-      );
-    } else {
-      const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
-      const xMin = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
-
-      skin = mkBox(
-        `clad-${wallId}-panel-${panelIndex}`,
-        CLAD_T,
-        skinHeight_mm,
-        panelLen,
-        { x: xMin, y: bottomY_mm, z: origin.z + panelStart },
-        mat,
-        { wallId, panelIndex, type: "cladding", skin: true, skinHeight_mm, anchorY_mm: claddingAnchorY_mm, drip_mm: CLAD_DRIP }
-      );
+    if (!(studCountFound > 0) || minStudBottomY_mm === null) {
+      // Fail-safe: no studs found => no cladding for this wall/panel, but record debug
+      try {
+        if (!window.__dbg) window.__dbg = {};
+        if (!window.__dbg.claddingAnchorFromStuds) window.__dbg.claddingAnchorFromStuds = {};
+        if (!window.__dbg.claddingAnchorFromStuds.walls) window.__dbg.claddingAnchorFromStuds.walls = {};
+        if (!window.__dbg.claddingAnchorFromStuds.walls[wallId]) window.__dbg.claddingAnchorFromStuds.walls[wallId] = [];
+        window.__dbg.claddingAnchorFromStuds.walls[wallId].push({
+          wallId,
+          panelIndex: variant === "basic" ? panelIndex : null,
+          studCountFound,
+          minStudBottomY_mm: null,
+          derivedBottomPlateTopY_mm: null,
+          firstCourseBottomY_mm: null,
+          expected_mm: null,
+          delta_mm: null,
+        });
+      } catch (e) {}
+      return;
     }
 
-    if (skin) {
-      try { skin.material = mat; } catch (e) {}
-      try { skin.metadata = Object.assign({ dynamic: true }, skin.metadata || {}); } catch (e) {}
-      if (plateParent) {
-        try { skin.parent = plateParent; } catch (e) {}
-      }
-    }
+    const derivedBottomPlateTopY_mm = minStudBottomY_mm;
 
+    // DEBUG per wall/panel
     try {
       if (!window.__dbg) window.__dbg = {};
-      if (!window.__dbg.cladding) window.__dbg.cladding = {};
-      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+      if (!window.__dbg.claddingAnchorFromStuds) window.__dbg.claddingAnchorFromStuds = {};
+      if (!window.__dbg.claddingAnchorFromStuds.walls) window.__dbg.claddingAnchorFromStuds.walls = {};
+      if (!window.__dbg.claddingAnchorFromStuds.walls[wallId]) window.__dbg.claddingAnchorFromStuds.walls[wallId] = [];
 
-      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
-      const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
+      const firstCourseBottomY_mm = derivedBottomPlateTopY_mm - CLAD_DRIP;
+      const expected_mm = derivedBottomPlateTopY_mm - 30;
 
-      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
-      window.__dbg.cladding.walls[wallId].push({
+      window.__dbg.claddingAnchorFromStuds.walls[wallId].push({
         wallId,
-        panelId: panelIndex,
-        skinHeight_mm,
-        anchorY_mm: claddingAnchorY_mm,
-        drip_mm: CLAD_DRIP,
-        wallBottomPlateTopY_mm,
-        wallBottomPlateBottomY_mm,
-        claddingAnchorY_mm,
+        panelIndex: variant === "basic" ? panelIndex : null,
+        studCountFound,
+        minStudBottomY_mm,
+        derivedBottomPlateTopY_mm,
         firstCourseBottomY_mm,
-        expectedFirstCourseBottomY_mm,
-        delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+        expected_mm,
+        delta_mm: (firstCourseBottomY_mm - expected_mm),
       });
     } catch (e) {}
+
+    const parts = [];
+
+    for (let i = 0; i < courses; i++) {
+      const yBase = derivedBottomPlateTopY_mm + i * CLAD_H;
+      const isFirst = i === 0;
+
+      // Drip: first course only; bottom edge at (derivedBottomPlateTopY_mm - 30mm)
+      // Implemented as bottom-only extension (no change to X/Z extents)
+      const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
+      const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
+
+      const yUpperStrip = yBase + CLAD_Hb;
+      const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
+
+      if (isAlongX) {
+        // Front/Back run along X; thickness extrudes +Z.
+        // Outside faces:
+        // - front => outside at z = origin.z (negative Z direction)
+        // - back  => outside at z = origin.z + wallThk (positive Z direction)
+        const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
+
+        // Bottom strip: full thickness (proud)
+        const zBottom = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
+            panelLen,
+            hBottomStrip,
+            CLAD_T,
+            { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
+        );
+
+        // Upper strip: recessed by rebate depth (visible lap)
+        const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
+        const zUpper = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
+
+        // For front: shift inward +5 (toward +Z) by moving min z forward by +5.
+        // For back : keep min at outer plane; reduced thickness naturally recesses outer face by 5.
+        const zUpperMin = (wallId === "front") ? (zUpper + CLAD_Rb) : zUpper;
+
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
+            panelLen,
+            hUpperStrip,
+            tUpper,
+            { x: origin.x + panelStart, y: yUpperStrip, z: zUpperMin },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
+        );
+      } else {
+        // Left/Right run along Z; thickness extrudes +X.
+        // Outside faces:
+        // - left  => outside at x = origin.x (negative X direction)
+        // - right => outside at x = origin.x + wallThk (positive X direction)
+        const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
+
+        // Bottom strip: full thickness (proud)
+        const xBottom = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
+            CLAD_T,
+            hBottomStrip,
+            panelLen,
+            { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
+        );
+
+        // Upper strip: recessed by rebate depth (visible lap)
+        const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
+
+        // For left: shift inward +5 (toward +X) by moving min x forward by +5.
+        // For right: keep min at outer plane; reduced thickness naturally recesses outer face by 5.
+        const xUpperMin = (wallId === "left") ? ((xOuterPlane - CLAD_T) + CLAD_Rb) : xOuterPlane;
+
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
+            tUpper,
+            hUpperStrip,
+            panelLen,
+            { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
+        );
+      }
+    }
+
+    // Merge into one mesh per panel
+    let merged = null;
+    try {
+      merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
+    } catch (e) {
+      merged = null;
+    }
+
+    if (merged) {
+      merged.name = `clad-${wallId}-panel-${panelIndex}`;
+      merged.material = mat;
+      merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
+    }
   }
 
   function doorIntervalsForWall(wallId) {
@@ -796,7 +850,7 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        addCladdingForPanel(wallId, axis, (p + 1), pan.start, pan.len, origin, Math.max(1, panelH - plateY));
+        addCladdingForPanel(wallId, axis, (p + 1), pan.start, pan.len, origin, panelH);
       }
 
       return;
@@ -854,7 +908,7 @@ export function build3D(state, ctx) {
       const h1 = heightAtX(origin.x + length);
       panelH = Math.min(h0, h1);
     }
-    addCladdingForPanel(wallId, axis, 1, 0, length, origin, Math.max(1, panelH - plateY));
+    addCladdingForPanel(wallId, axis, 1, 0, length, origin, panelH);
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
@@ -864,13 +918,6 @@ export function build3D(state, ctx) {
 
   if (flags.left) buildWall("left", "z", sideLenZ, { x: 0, z: wallThk });
   if (flags.right) buildWall("right", "z", sideLenZ, { x: dims.w - wallThk, z: wallThk });
-
-  try {
-    if (!window.__dbg) window.__dbg = {};
-    if (!window.__dbg.cladding) window.__dbg.cladding = {};
-    const count = scene.meshes.filter((m) => m && m.metadata && m.metadata.dynamic === true && String(m.name || "").startsWith("clad-")).length;
-    window.__dbg.cladding.meshCountCladding = count;
-  } catch (e) {}
 }
 
 function resolveProfile(state, variant) {
