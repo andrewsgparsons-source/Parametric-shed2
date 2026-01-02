@@ -36,7 +36,7 @@ export function build3D(state, ctx) {
   const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
 
   scene.meshes
-    .filter((m) => m.metadata && m.metadata.dynamic === true && m.name.startsWith("wall-"))
+    .filter((m) => m.metadata && m.metadata.dynamic === true && (m.name.startsWith("wall-") || m.name.startsWith("clad-")))
     .forEach((m) => {
       if (!m.isDisposed()) m.dispose(false, true);
     });
@@ -89,6 +89,18 @@ export function build3D(state, ctx) {
       return m;
     } catch (e) {
       return null;
+    }
+  })();
+
+  const claddingMat = (() => {
+    try {
+      if (scene._claddingMat) return scene._claddingMat;
+      const m = new BABYLON.StandardMaterial("claddingMat", scene);
+      m.diffuseColor = new BABYLON.Color3(0.80, 0.80, 0.80);
+      scene._claddingMat = m;
+      return m;
+    } catch (e) {
+      return materials && materials.timber ? materials.timber : null;
     }
   })();
 
@@ -549,6 +561,73 @@ export function build3D(state, ctx) {
     }
   }
 
+  function addCladdingForWall(wallId, axis, length, origin) {
+    const isAlongX = axis === "x";
+
+    const isSlopeWall = isPent && isAlongX && (wallId === "front" || wallId === "back");
+    const wallHeightFlat = isPent
+      ? (wallId === "left" ? minH : wallId === "right" ? maxH : height)
+      : height;
+
+    const targetWallTop_mm = isSlopeWall ? Math.max(minH, maxH) : wallHeightFlat;
+
+    // Phase 1 shiplap constants (mm)
+    const starterOverhang_mm = 30; // downward overhang below frame bottom
+    const boardThickness_mm = 18;
+    const boardHeight_mm = 150;
+    const overlap_mm = 20;
+    const pitch_mm = Math.max(1, boardHeight_mm - overlap_mm);
+
+    // Outside face placement per wall orientation (no cavities yet)
+    let baseX = origin.x;
+    let baseZ = origin.z;
+
+    if (isAlongX) {
+      // Front/Back: thickness along Z
+      if (wallId === "front") {
+        baseZ = origin.z - boardThickness_mm;
+      } else {
+        baseZ = origin.z + wallThk;
+      }
+    } else {
+      // Left/Right: thickness along X
+      if (wallId === "left") {
+        baseX = origin.x - boardThickness_mm;
+      } else {
+        baseX = origin.x + wallThk;
+      }
+    }
+
+    const coverHeight_mm = targetWallTop_mm + starterOverhang_mm;
+    const count = Math.max(1, Math.ceil(coverHeight_mm / pitch_mm));
+
+    for (let i = 0; i < count; i++) {
+      const y0 = -starterOverhang_mm + i * pitch_mm;
+
+      if (isAlongX) {
+        mkBox(
+          `clad-${wallId}-board-${i}`,
+          length,
+          boardHeight_mm,
+          boardThickness_mm,
+          { x: origin.x, y: y0, z: baseZ },
+          claddingMat,
+          { cladding: "shiplap", wall: wallId, idx: i }
+        );
+      } else {
+        mkBox(
+          `clad-${wallId}-board-${i}`,
+          boardThickness_mm,
+          boardHeight_mm,
+          length,
+          { x: baseX, y: y0, z: origin.z },
+          claddingMat,
+          { cladding: "shiplap", wall: wallId, idx: i }
+        );
+      }
+    }
+  }
+
   function buildWall(wallId, axis, length, origin) {
     const isAlongX = axis === "x";
     const wallPrefix = `wall-${wallId}-`;
@@ -624,6 +703,8 @@ export function build3D(state, ctx) {
         else addWindowFramingAlongZ(wallId, origin, w);
       }
 
+      addCladdingForWall(wallId, axis, length, origin);
+
       return;
     }
 
@@ -672,6 +753,8 @@ export function build3D(state, ctx) {
       if (isAlongX) addWindowFramingAlongX(wallId, origin, w);
       else addWindowFramingAlongZ(wallId, origin, w);
     }
+
+    addCladdingForWall(wallId, axis, length, origin);
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
