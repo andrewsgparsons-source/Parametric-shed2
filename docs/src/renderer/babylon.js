@@ -19,6 +19,19 @@ export function boot(canvas) {
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(0.96, 0.97, 0.98, 1);
 
+  // DEV-ONLY: Babylon Inspector toggle via URL flag (?inspector=1)
+  // Remove this block in one step after debugging.
+  try {
+    const qs = new URLSearchParams(String(window.location && window.location.search || ""));
+    if (qs.get("inspector") === "1") {
+      if (scene.debugLayer && scene.debugLayer.show) {
+        scene.debugLayer.show({ embedMode: true });
+      } else {
+        console.warn("Inspector requested (?inspector=1) but scene.debugLayer is unavailable (inspector bundle not loaded).");
+      }
+    }
+  } catch (e) {}
+
   const camera = new BABYLON.ArcRotateCamera(
     'cam',
     -Math.PI / 4,
@@ -46,7 +59,6 @@ export function boot(canvas) {
   const materials = {
     timber: mkMat(scene, 'timber', new BABYLON.Color3(0.55, 0.43, 0.33)),
     plate:  mkMat(scene, 'plate',  new BABYLON.Color3(0.45, 0.35, 0.27)),
-    cladding: mkMat(scene, 'cladding', new BABYLON.Color3(0.28, 0.28, 0.30)),
     base:   mkMat(scene, 'base',   new BABYLON.Color3(0.2, 0.2, 0.2)),
     guide:  mkMat(scene, 'guide',  new BABYLON.Color3(0.7, 0.7, 0.7), 0.5),
   };
