@@ -47,12 +47,12 @@ export function build3D(state, ctx) {
       if (!m.isDisposed()) m.dispose(false, true);
     });
 
-  // DEBUG: cladding diagnostics
   try {
-    if (!window.__dbg) window.__dbg = {};
-    if (!window.__dbg.cladding) window.__dbg.cladding = {};
-    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
-    if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
+    (scene.transformNodes || [])
+      .filter((n) => n && n.metadata && n.metadata.dynamic === true && String(n.name || "").startsWith("wallroot-"))
+      .forEach((n) => {
+        try { n.dispose(false, true); } catch (e) {}
+      });
   } catch (e) {}
 
   const dims = {
@@ -74,6 +74,13 @@ export function build3D(state, ctx) {
   const CLAD_Ht = 45;
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
+
+  // DEBUG: cladding anchor diagnostics (requested; per wall/panel)
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    if (!window.__dbg.cladding) window.__dbg.cladding = {};
+    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+  } catch (e) {}
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
 
@@ -116,7 +123,7 @@ export function build3D(state, ctx) {
     }
   })();
 
-  function mkBox(name, Lx, Ly, Lz, pos, mat, meta) {
+  function mkBox(name, Lx, Ly, Lz, pos, mat, meta, parentNode) {
     const mesh = BABYLON.MeshBuilder.CreateBox(
       name,
       {
@@ -131,12 +138,13 @@ export function build3D(state, ctx) {
       (pos.y + Ly / 2) / 1000,
       (pos.z + Lz / 2) / 1000
     );
+    if (parentNode) mesh.parent = parentNode;
     mesh.material = mat;
     mesh.metadata = Object.assign({ dynamic: true }, meta || {});
     return mesh;
   }
 
-  function mkSlopedPlateAlongX(name, Lx, Lz, origin, yTopAtX0, yTopAtX1, mat, meta) {
+  function mkSlopedPlateAlongX(name, Lx, Lz, origin, yTopAtX0, yTopAtX1, mat, meta, parentNode) {
     const x0 = origin.x;
     const x1 = origin.x + Lx;
     const z0 = origin.z;
@@ -197,66 +205,29 @@ export function build3D(state, ctx) {
       }
     } catch (e) {}
 
+    if (parentNode) mesh.parent = parentNode;
     mesh.material = useMat;
     mesh.metadata = Object.assign({ dynamic: true }, meta || {});
     return mesh;
   }
 
-  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight) {
+  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, panelRoot) {
     const isAlongX = axis === "x";
     const mat = materials && materials.cladding ? materials.cladding : materials.timber;
 
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
     if (courses < 1) return;
 
-    // Identify bottom plate mesh by current naming scheme.
-    const plateMeshName =
-      (variant === "basic")
-        ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
-        : `wall-${wallId}-plate-bottom`;
-
-    const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateMeshName) : null;
-
-    // Fail-safe: if missing bottom plate mesh, do not build cladding and report it.
-    if (!plateMesh || !plateMesh.getBoundingInfo) {
-      try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.cladding) window.__dbg.cladding = {};
-        if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
-        window.__dbg.cladding.missingPlates.push({ wallId, panelIndex, plateMeshName });
-      } catch (e) {}
-      return;
-    }
-
-    // Anchor in WORLD SPACE to top face of the bottom plate bounds.
-    let anchorY_mm = null;
-    try {
-      const bi = plateMesh.getBoundingInfo();
-      const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-      if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) {
-        anchorY_mm = Number(bb.maximumWorld.y) * 1000;
-      }
-    } catch (e) {}
-
-    // Fail-safe if bounds not available.
-    if (!(Number.isFinite(anchorY_mm))) {
-      try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.cladding) window.__dbg.cladding = {};
-        if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
-        window.__dbg.cladding.missingPlates.push({ wallId, panelIndex, plateMeshName, reason: "noBounds" });
-      } catch (e) {}
-      return;
-    }
-
     const parts = [];
 
+    const anchorLocalY_mm = plateY;
+
     for (let i = 0; i < courses; i++) {
-      const yBase = anchorY_mm + i * CLAD_H;
+      const yBase = anchorLocalY_mm + i * CLAD_H;
       const isFirst = i === 0;
 
-      // Starter drip: first course only; bottom edge at (anchorY_mm - 30mm).
-      // Implemented as bottom-only extension (no X/Z extent changes).
+      // Drip: first course only; bottom edge at (anchorLocalY_mm - 30mm)
+      // Implemented as bottom-only extension (no change to X/Z extents)
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
 
@@ -264,13 +235,8 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
-        // Front/Back run along X; thickness extrudes +Z.
-        // Outside faces:
-        // - front => outside at z = origin.z (negative Z direction)
-        // - back  => outside at z = origin.z + wallThk (positive Z direction)
         const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
 
-        // Bottom strip: full thickness (proud)
         const zBottom = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
         parts.push(
           mkBox(
@@ -280,16 +246,14 @@ export function build3D(state, ctx) {
             CLAD_T,
             { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
             mat,
-            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } },
+            panelRoot
           )
         );
 
-        // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
         const zUpper = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
 
-        // For front: shift inward +5 (toward +Z) by moving min z forward by +5.
-        // For back : keep min at outer plane; reduced thickness naturally recesses outer face by 5.
         const zUpperMin = (wallId === "front") ? (zUpper + CLAD_Rb) : zUpper;
 
         parts.push(
@@ -300,17 +264,13 @@ export function build3D(state, ctx) {
             tUpper,
             { x: origin.x + panelStart, y: yUpperStrip, z: zUpperMin },
             mat,
-            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } },
+            panelRoot
           )
         );
       } else {
-        // Left/Right run along Z; thickness extrudes +X.
-        // Outside faces:
-        // - left  => outside at x = origin.x (negative X direction)
-        // - right => outside at x = origin.x + wallThk (positive X direction)
         const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
 
-        // Bottom strip: full thickness (proud)
         const xBottom = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
         parts.push(
           mkBox(
@@ -320,15 +280,13 @@ export function build3D(state, ctx) {
             panelLen,
             { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
             mat,
-            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } },
+            panelRoot
           )
         );
 
-        // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
 
-        // For left: shift inward +5 (toward +X) by moving min x forward by +5.
-        // For right: keep min at outer plane; reduced thickness naturally recesses outer face by 5.
         const xUpperMin = (wallId === "left") ? ((xOuterPlane - CLAD_T) + CLAD_Rb) : xOuterPlane;
 
         parts.push(
@@ -339,13 +297,13 @@ export function build3D(state, ctx) {
             panelLen,
             { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart },
             mat,
-            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } },
+            panelRoot
           )
         );
       }
     }
 
-    // Merge into one mesh per panel (existing behavior retained)
     let merged = null;
     try {
       merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
@@ -353,43 +311,47 @@ export function build3D(state, ctx) {
       merged = null;
     }
 
-    const firstCourseBottomY_mm = anchorY_mm - CLAD_DRIP;
-    const expectedBottomY_mm = anchorY_mm - 30;
-    const delta_mm = firstCourseBottomY_mm - expectedBottomY_mm;
+    let mergedMesh = merged;
 
+    if (mergedMesh) {
+      mergedMesh.name = `clad-${wallId}-panel-${panelIndex}`;
+      mergedMesh.material = mat;
+      mergedMesh.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
+      if (panelRoot) mergedMesh.parent = panelRoot;
+    }
+
+    // DEBUG: confirm anchor matches bottom plate top in WORLD after parenting
     try {
+      const plateName = `wall-${wallId}-${variant === "basic" ? `panel-${panelIndex}-` : ""}plate-bottom`;
+      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+
+      let bottomPlateTop_world_mm = 0;
+      if (plateMesh && plateMesh.getBoundingInfo) {
+        const bi = plateMesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (bb && bb.maximumWorld) bottomPlateTop_world_mm = Number(bb.maximumWorld.y) * 1000;
+      }
+
+      let anchorY_world_mm = 0;
+      if (panelRoot && panelRoot.getAbsolutePosition) {
+        anchorY_world_mm = (Number(panelRoot.getAbsolutePosition().y) * 1000) + anchorLocalY_mm;
+      } else {
+        anchorY_world_mm = anchorLocalY_mm;
+      }
+
+      const wallRootName = panelRoot ? String(panelRoot.name || "") : "";
+
       if (!window.__dbg) window.__dbg = {};
       if (!window.__dbg.cladding) window.__dbg.cladding = {};
       if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
       if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
       window.__dbg.cladding.walls[wallId].push({
-        wallId,
-        panelIndex,
-        plateMeshName,
-        anchorY_mm,
-        firstCourseBottomY_mm,
-        expectedBottomY_mm,
-        delta_mm,
+        wallRootName,
+        anchorY_world_mm,
+        bottomPlateTop_world_mm,
+        delta_mm: (anchorY_world_mm - bottomPlateTop_world_mm),
       });
     } catch (e) {}
-
-    if (merged) {
-      merged.name = `clad-${wallId}-panel-${panelIndex}`;
-      merged.material = mat;
-      merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
-      try {
-        // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
-        merged.parent = plateMesh.parent || null;
-      } catch (e) {}
-    } else {
-      // If merge failed for any reason, keep parts as-is; still bind them to the wall's transform chain.
-      const p = plateMesh.parent || null;
-      if (p) {
-        for (let i = 0; i < parts.length; i++) {
-          try { parts[i].parent = p; } catch (e) {}
-        }
-      }
-    }
   }
 
   function doorIntervalsForWall(wallId) {
@@ -431,7 +393,7 @@ export function build3D(state, ctx) {
     return false;
   }
 
-  function addDoorFramingAlongX(wallId, origin, door) {
+  function addDoorFramingAlongX(wallId, origin, door, wallRoot) {
     const thickness = wallThk;
     const doorH = door.h;
     const id = door.id;
@@ -456,7 +418,8 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + (doorX0 - prof.studW), y: plateY, z: origin.z },
       mat,
-      { doorId: id }
+      { doorId: id },
+      wallRoot
     );
     mkBox(
       `wall-${wallId}-door-${id}-upright-right`,
@@ -465,7 +428,8 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + doorX1, y: plateY, z: origin.z },
       mat,
-      { doorId: id }
+      { doorId: id },
+      wallRoot
     );
 
     const headerL = (door.w + 2 * prof.studW);
@@ -481,11 +445,12 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + (doorX0 - prof.studW), y: headerY, z: origin.z },
       mat,
-      { doorId: id }
+      { doorId: id },
+      wallRoot
     );
   }
 
-  function addDoorFramingAlongZ(wallId, origin, door) {
+  function addDoorFramingAlongZ(wallId, origin, door, wallRoot) {
     const thickness = wallThk;
     const doorH = door.h;
     const id = door.id;
@@ -506,7 +471,8 @@ export function build3D(state, ctx) {
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + (doorZ0 - prof.studW) },
       mat,
-      { doorId: id }
+      { doorId: id },
+      wallRoot
     );
     mkBox(
       `wall-${wallId}-door-${id}-upright-right`,
@@ -515,7 +481,8 @@ export function build3D(state, ctx) {
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + doorZ1 },
       mat,
-      { doorId: id }
+      { doorId: id },
+      wallRoot
     );
 
     const headerL = (door.w + 2 * prof.studW);
@@ -531,11 +498,12 @@ export function build3D(state, ctx) {
       headerL,
       { x: origin.x, y: headerY, z: origin.z + (doorZ0 - prof.studW) },
       mat,
-      { doorId: id }
+      { doorId: id },
+      wallRoot
     );
   }
 
-  function addWindowFramingAlongX(wallId, origin, win) {
+  function addWindowFramingAlongX(wallId, origin, win, wallRoot) {
     const thickness = wallThk;
     const id = win.id;
     const useInvalid = invalidWinSet.has(String(id));
@@ -566,7 +534,8 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + (x0 - prof.studW), y: plateY, z: origin.z },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
     mkBox(
       `wall-${wallId}-win-${id}-upright-right`,
@@ -575,7 +544,8 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + x1, y: plateY, z: origin.z },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
 
     const headerL = (win.w + 2 * prof.studW);
@@ -586,7 +556,8 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + (x0 - prof.studW), y: yTop, z: origin.z },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
 
     mkBox(
@@ -596,11 +567,12 @@ export function build3D(state, ctx) {
       thickness,
       { x: origin.x + (x0 - prof.studW), y: y0, z: origin.z },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
   }
 
-  function addWindowFramingAlongZ(wallId, origin, win) {
+  function addWindowFramingAlongZ(wallId, origin, win, wallRoot) {
     const thickness = wallThk;
     const id = win.id;
     const useInvalid = invalidWinSet.has(String(id));
@@ -628,7 +600,8 @@ export function build3D(state, ctx) {
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + (z0 - prof.studW) },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
     mkBox(
       `wall-${wallId}-win-${id}-upright-right`,
@@ -637,7 +610,8 @@ export function build3D(state, ctx) {
       prof.studW,
       { x: origin.x, y: plateY, z: origin.z + z1 },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
 
     const headerL = (win.w + 2 * prof.studW);
@@ -648,7 +622,8 @@ export function build3D(state, ctx) {
       headerL,
       { x: origin.x, y: yTop, z: origin.z + (z0 - prof.studW) },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
 
     mkBox(
@@ -658,11 +633,12 @@ export function build3D(state, ctx) {
       headerL,
       { x: origin.x, y: y0, z: origin.z + (z0 - prof.studW) },
       mat,
-      { windowId: id }
+      { windowId: id },
+      wallRoot
     );
   }
 
-  function buildBasicPanel(wallPrefix, axis, panelLen, origin, offsetAlong, openings, studLenForPosStart) {
+  function buildBasicPanel(wallPrefix, axis, panelLen, origin, offsetAlong, openings, studLenForPosStart, panelRoot) {
     const isAlongX = axis === "x";
 
     const hForStart = (posStart) => {
@@ -677,7 +653,9 @@ export function build3D(state, ctx) {
         plateY,
         wallThk,
         { x: origin.x + offsetAlong, y: 0, z: origin.z },
-        materials.plate
+        materials.plate,
+        null,
+        panelRoot
       );
     } else {
       mkBox(
@@ -686,7 +664,9 @@ export function build3D(state, ctx) {
         plateY,
         panelLen,
         { x: origin.x, y: 0, z: origin.z + offsetAlong },
-        materials.plate
+        materials.plate,
+        null,
+        panelRoot
       );
     }
 
@@ -699,7 +679,9 @@ export function build3D(state, ctx) {
           h,
           wallThk,
           { x, y: plateY, z },
-          materials.timber
+          materials.timber,
+          null,
+          panelRoot
         );
       } else {
         mkBox(
@@ -708,7 +690,9 @@ export function build3D(state, ctx) {
           h,
           prof.studW,
           { x, y: plateY, z },
-          materials.timber
+          materials.timber,
+          null,
+          panelRoot
         );
       }
     };
@@ -767,6 +751,9 @@ export function build3D(state, ctx) {
     const isAlongX = axis === "x";
     const wallPrefix = `wall-${wallId}-`;
 
+    const wallRoot = new BABYLON.TransformNode(`wallroot-${wallId}`, scene);
+    wallRoot.metadata = Object.assign({ dynamic: true }, { type: "wallroot", wallId });
+
     const doors = doorIntervalsForWall(wallId);
     const wins = windowIntervalsForWall(wallId);
     const openingsX = doors.concat(wins);
@@ -780,9 +767,9 @@ export function build3D(state, ctx) {
     const studLenFlat = Math.max(1, wallHeightFlat - 2 * plateY);
 
     if (isAlongX) {
-      mkBox(wallPrefix + "plate-bottom", length, plateY, wallThk, { x: origin.x, y: 0, z: origin.z }, materials.plate);
+      mkBox(wallPrefix + "plate-bottom", length, plateY, wallThk, { x: origin.x, y: 0, z: origin.z }, materials.plate, null, wallRoot);
       if (!isSlopeWall) {
-        mkBox(wallPrefix + "plate-top", length, plateY, wallThk, { x: origin.x, y: wallHeightFlat - plateY, z: origin.z }, materials.plate);
+        mkBox(wallPrefix + "plate-top", length, plateY, wallThk, { x: origin.x, y: wallHeightFlat - plateY, z: origin.z }, materials.plate, null, wallRoot);
       } else {
         const yTop0 = heightAtX(origin.x);
         const yTop1 = heightAtX(origin.x + length);
@@ -794,12 +781,13 @@ export function build3D(state, ctx) {
           yTop0,
           yTop1,
           materials.plate,
-          {}
+          {},
+          wallRoot
         );
       }
     } else {
-      mkBox(wallPrefix + "plate-bottom", wallThk, plateY, length, { x: origin.x, y: 0, z: origin.z }, materials.plate);
-      mkBox(wallPrefix + "plate-top", wallThk, plateY, length, { x: origin.x, y: wallHeightFlat - plateY, z: origin.z }, materials.plate);
+      mkBox(wallPrefix + "plate-bottom", wallThk, plateY, length, { x: origin.x, y: 0, z: origin.z }, materials.plate, null, wallRoot);
+      mkBox(wallPrefix + "plate-top", wallThk, plateY, length, { x: origin.x, y: wallHeightFlat - plateY, z: origin.z }, materials.plate, null, wallRoot);
     }
 
     const studLenForXStart = (xStartRel) => {
@@ -812,9 +800,17 @@ export function build3D(state, ctx) {
     if (variant === "basic") {
       const panels = computeBasicPanels(length, prof, openingsX);
 
+      const panelRoots = [];
+
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
         const pref = wallPrefix + `panel-${p + 1}-`;
+
+        const panelRoot = new BABYLON.TransformNode(`wallroot-${wallId}-panel-${p + 1}`, scene);
+        panelRoot.parent = wallRoot;
+        panelRoot.metadata = Object.assign({ dynamic: true }, { type: "wallroot", wallId, panelIndex: (p + 1) });
+        panelRoots.push(panelRoot);
+
         buildBasicPanel(
           pref,
           axis,
@@ -822,20 +818,21 @@ export function build3D(state, ctx) {
           origin,
           pan.start,
           openingsX,
-          isAlongX ? studLenForXStart : (() => studLenFlat)
+          isAlongX ? studLenForXStart : (() => studLenFlat),
+          panelRoot
         );
       }
 
       for (let i = 0; i < doors.length; i++) {
         const d = doors[i];
-        if (isAlongX) addDoorFramingAlongX(wallId, origin, d);
-        else addDoorFramingAlongZ(wallId, origin, d);
+        if (isAlongX) addDoorFramingAlongX(wallId, origin, d, wallRoot);
+        else addDoorFramingAlongZ(wallId, origin, d, wallRoot);
       }
 
       for (let i = 0; i < wins.length; i++) {
         const w = wins[i];
-        if (isAlongX) addWindowFramingAlongX(wallId, origin, w);
-        else addWindowFramingAlongZ(wallId, origin, w);
+        if (isAlongX) addWindowFramingAlongX(wallId, origin, w, wallRoot);
+        else addWindowFramingAlongZ(wallId, origin, w, wallRoot);
       }
 
       for (let p = 0; p < panels.length; p++) {
@@ -846,7 +843,7 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        addCladdingForPanel(wallId, axis, (p + 1), pan.start, pan.len, origin, panelH);
+        addCladdingForPanel(wallId, axis, (p + 1), pan.start, pan.len, origin, panelH, panelRoots[p]);
       }
 
       return;
@@ -856,9 +853,9 @@ export function build3D(state, ctx) {
     const placeStud = (x, z, posStartRel) => {
       const h = isAlongX ? studLenForXStart(posStartRel) : studLenFlat;
       if (isAlongX) {
-        studs.push(mkBox(wallPrefix + "stud-" + studs.length, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber));
+        studs.push(mkBox(wallPrefix + "stud-" + studs.length, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber, null, wallRoot));
       } else {
-        studs.push(mkBox(wallPrefix + "stud-" + studs.length, wallThk, h, prof.studW, { x, y: plateY, z }, materials.timber));
+        studs.push(mkBox(wallPrefix + "stud-" + studs.length, wallThk, h, prof.studW, { x, y: plateY, z }, materials.timber, null, wallRoot));
       }
     };
 
@@ -888,14 +885,14 @@ export function build3D(state, ctx) {
 
     for (let i = 0; i < doors.length; i++) {
       const d = doors[i];
-      if (isAlongX) addDoorFramingAlongX(wallId, origin, d);
-      else addDoorFramingAlongZ(wallId, origin, d);
+      if (isAlongX) addDoorFramingAlongX(wallId, origin, d, wallRoot);
+      else addDoorFramingAlongZ(wallId, origin, d, wallRoot);
     }
 
     for (let i = 0; i < wins.length; i++) {
       const w = wins[i];
-      if (isAlongX) addWindowFramingAlongX(wallId, origin, w);
-      else addWindowFramingAlongZ(wallId, origin, w);
+      if (isAlongX) addWindowFramingAlongX(wallId, origin, w, wallRoot);
+      else addWindowFramingAlongZ(wallId, origin, w, wallRoot);
     }
 
     let panelH = wallHeightFlat;
@@ -904,7 +901,40 @@ export function build3D(state, ctx) {
       const h1 = heightAtX(origin.x + length);
       panelH = Math.min(h0, h1);
     }
-    addCladdingForPanel(wallId, axis, 1, 0, length, origin, panelH);
+    addCladdingForPanel(wallId, axis, 1, 0, length, origin, panelH, wallRoot);
+
+    // DEBUG: confirm wallroot anchor matches bottom plate top in WORLD after parenting
+    try {
+      const plateName = `wall-${wallId}-plate-bottom`;
+      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+
+      let bottomPlateTop_world_mm = 0;
+      if (plateMesh && plateMesh.getBoundingInfo) {
+        const bi = plateMesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (bb && bb.maximumWorld) bottomPlateTop_world_mm = Number(bb.maximumWorld.y) * 1000;
+      }
+
+      let anchorY_world_mm = 0;
+      if (wallRoot && wallRoot.getAbsolutePosition) {
+        anchorY_world_mm = (Number(wallRoot.getAbsolutePosition().y) * 1000) + plateY;
+      } else {
+        anchorY_world_mm = plateY;
+      }
+
+      const wallRootName = wallRoot ? String(wallRoot.name || "") : "";
+
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.cladding) window.__dbg.cladding = {};
+      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
+      window.__dbg.cladding.walls[wallId].push({
+        wallRootName,
+        anchorY_world_mm,
+        bottomPlateTop_world_mm,
+        delta_mm: (anchorY_world_mm - bottomPlateTop_world_mm),
+      });
+    } catch (e) {}
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
