@@ -231,7 +231,36 @@ export function build3D(state, ctx) {
 
   function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
-    const mat = materials && materials.cladding ? materials.cladding : materials.timber;
+
+    let mat = (materials && materials.cladding) ? materials.cladding : null;
+
+    // Ensure cladding is noticeably lighter without mutating shared timber/plate materials.
+    // Prefer basing the light material on materials.cladding when available.
+    try {
+      if (!scene._claddingMatLight) {
+        let base = mat ? mat : (materials ? materials.timber : null);
+        let m = null;
+
+        if (base && base.clone) {
+          m = base.clone("claddingMatLight");
+        } else {
+          m = new BABYLON.StandardMaterial("claddingMatLight", scene);
+        }
+
+        if (m) {
+          // Light grey / bleached wood look
+          try { m.diffuseColor = new BABYLON.Color3(0.85, 0.85, 0.82); } catch (e) {}
+          try { m.specularColor = new BABYLON.Color3(0.06, 0.06, 0.06); } catch (e) {}
+          try { m.emissiveColor = new BABYLON.Color3(0.02, 0.02, 0.02); } catch (e) {}
+          scene._claddingMatLight = m;
+        } else {
+          scene._claddingMatLight = null;
+        }
+      }
+    } catch (e) {}
+
+    if (scene._claddingMatLight) mat = scene._claddingMatLight;
+    if (!mat) mat = materials.timber;
 
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
     if (courses < 1) return { created: 0, anchor: null };
