@@ -229,14 +229,15 @@ export function build3D(state, ctx) {
       jobsCount: 0,
       jobsProcessedByWallId: {},
       meshesCreatedByWallId: {},
-      sampleOutsideByWallId: {}
+      sampleOutsideByWallId: {},
+      perWall: {}
     };
   } catch (e) {}
 
   function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
 
-    // Light cladding material (do NOT mutate shared materials)
+    // Light cladding material (do NOT mutate shared materials) — KEEP AS-IS
     let mat = materials && materials.cladding ? materials.cladding : materials.timber;
     try {
       if (!scene._claddingMatLight) {
@@ -256,8 +257,11 @@ export function build3D(state, ctx) {
       if (scene._claddingMatLight) mat = scene._claddingMatLight;
     } catch (e) {}
 
-    const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
-    if (courses < 1) return { created: 0, anchor: null };
+    const ph = Number(panelHeight);
+    const panelHeightMm = Number.isFinite(ph) ? ph : height;
+
+    const courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
+    if (courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
 
     const parts = [];
 
@@ -303,28 +307,32 @@ export function build3D(state, ctx) {
     let outwardSignZ = 1;
     let outsidePlaneX_mm = null;
     let outwardSignX = 1;
+    let bboxMissingFallbackUsed = false;
 
     try {
       if (isAlongX) {
-        const originFaceZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
-
         const hasZ = Number.isFinite(zMin_mm) && Number.isFinite(zMax_mm);
         if (hasZ) {
-          const dMin = Math.abs(zMin_mm - originFaceZ_mm);
-          const dMax = Math.abs(zMax_mm - originFaceZ_mm);
-          const originPlaneZ = (dMin < dMax) ? zMin_mm : zMax_mm;
-          outsidePlaneZ_mm = (originPlaneZ === zMin_mm) ? zMax_mm : zMin_mm;
-          outwardSignZ = (outsidePlaneZ_mm === zMax_mm) ? 1 : -1;
+          const zMid = (zMin_mm + zMax_mm) / 2;
+          const buildMidZ = Number(dims && Number.isFinite(dims.d) ? (dims.d / 2) : 0);
+          if (zMid < buildMidZ) {
+            outsidePlaneZ_mm = zMin_mm;
+            outwardSignZ = -1;
+          } else {
+            outsidePlaneZ_mm = zMax_mm;
+            outwardSignZ = 1;
+          }
         } else {
+          bboxMissingFallbackUsed = true;
           if (String(wallId) === "front") {
             outwardSignZ = -1;
-            outsidePlaneZ_mm = originFaceZ_mm;
+            outsidePlaneZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
           } else if (String(wallId) === "back") {
             outwardSignZ = 1;
-            outsidePlaneZ_mm = originFaceZ_mm + wallThk;
+            outsidePlaneZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0) + wallThk;
           } else {
             outwardSignZ = 1;
-            outsidePlaneZ_mm = originFaceZ_mm + wallThk;
+            outsidePlaneZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0) + wallThk;
           }
         }
 
@@ -341,25 +349,28 @@ export function build3D(state, ctx) {
           }
         } catch (e) {}
       } else {
-        const originFaceX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
-
         const hasX = Number.isFinite(xMin_mm) && Number.isFinite(xMax_mm);
         if (hasX) {
-          const dMin = Math.abs(xMin_mm - originFaceX_mm);
-          const dMax = Math.abs(xMax_mm - originFaceX_mm);
-          const originPlaneX = (dMin < dMax) ? xMin_mm : xMax_mm;
-          outsidePlaneX_mm = (originPlaneX === xMin_mm) ? xMax_mm : xMin_mm;
-          outwardSignX = (outsidePlaneX_mm === xMax_mm) ? 1 : -1;
+          const xMid = (xMin_mm + xMax_mm) / 2;
+          const buildMidX = Number(dims && Number.isFinite(dims.w) ? (dims.w / 2) : 0);
+          if (xMid < buildMidX) {
+            outsidePlaneX_mm = xMin_mm;
+            outwardSignX = -1;
+          } else {
+            outsidePlaneX_mm = xMax_mm;
+            outwardSignX = 1;
+          }
         } else {
+          bboxMissingFallbackUsed = true;
           if (String(wallId) === "left") {
             outwardSignX = -1;
-            outsidePlaneX_mm = originFaceX_mm;
+            outsidePlaneX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
           } else if (String(wallId) === "right") {
             outwardSignX = 1;
-            outsidePlaneX_mm = originFaceX_mm + wallThk;
+            outsidePlaneX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0) + wallThk;
           } else {
             outwardSignX = 1;
-            outsidePlaneX_mm = originFaceX_mm + wallThk;
+            outsidePlaneX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0) + wallThk;
           }
         }
 
@@ -428,7 +439,7 @@ export function build3D(state, ctx) {
       if (isAlongX) {
         const outsidePlane = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
 
-        // INNER face on outsidePlane; thickness extends outward
+        // INNER face MUST lie on outsidePlane (gap=0). Rebate affects ONLY thickness.
         const zBottomMin = (outwardSignZ > 0) ? outsidePlane : (outsidePlane - CLAD_T);
         parts.push(
           mkBox(
@@ -459,7 +470,7 @@ export function build3D(state, ctx) {
       } else {
         const outsidePlane = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
 
-        // INNER face on outsidePlane; thickness extends outward
+        // INNER face MUST lie on outsidePlane (gap=0). Rebate affects ONLY thickness.
         const xBottomMin = (outwardSignX > 0) ? outsidePlane : (outsidePlane - CLAD_T);
         parts.push(
           mkBox(
@@ -499,7 +510,9 @@ export function build3D(state, ctx) {
           wallBottomPlateTopY_mm,
           wallBottomPlateBottomY_mm,
           claddingAnchorY_mm
-        }
+        },
+        reason: "parts.length==0",
+        bboxMissingFallbackUsed
       };
     }
 
@@ -537,7 +550,9 @@ export function build3D(state, ctx) {
         wallBottomPlateTopY_mm,
         wallBottomPlateBottomY_mm,
         claddingAnchorY_mm
-      }
+      },
+      reason: (merged ? null : "mergeFailed"),
+      bboxMissingFallbackUsed
     };
   }
 
@@ -585,6 +600,7 @@ export function build3D(state, ctx) {
             if (!window.__dbg.claddingPass.jobsProcessedByWallId) window.__dbg.claddingPass.jobsProcessedByWallId = {};
             if (!window.__dbg.claddingPass.meshesCreatedByWallId) window.__dbg.claddingPass.meshesCreatedByWallId = {};
             if (!window.__dbg.claddingPass.sampleOutsideByWallId) window.__dbg.claddingPass.sampleOutsideByWallId = {};
+            if (!window.__dbg.claddingPass.perWall) window.__dbg.claddingPass.perWall = {};
           } catch (e) {}
 
           const passDbg = (() => {
@@ -597,11 +613,18 @@ export function build3D(state, ctx) {
 
           for (let i = 0; i < claddingJobs.length; i++) {
             const j = claddingJobs[i];
+            const wk = String(j.wallId || "");
+
+            try {
+              if (passDbg && passDbg.perWall) {
+                if (!passDbg.perWall[wk]) passDbg.perWall[wk] = { jobs: 0, created: 0, reasons: [] };
+                passDbg.perWall[wk].jobs = Number(passDbg.perWall[wk].jobs || 0) + 1;
+              }
+            } catch (e) {}
 
             try {
               if (passDbg && passDbg.jobsProcessedByWallId) {
-                const k = String(j.wallId || "");
-                passDbg.jobsProcessedByWallId[k] = Number(passDbg.jobsProcessedByWallId[k] || 0) + 1;
+                passDbg.jobsProcessedByWallId[wk] = Number(passDbg.jobsProcessedByWallId[wk] || 0) + 1;
               }
             } catch (e) {}
 
@@ -614,10 +637,37 @@ export function build3D(state, ctx) {
 
             if (res && Number.isFinite(res.created)) {
               createdCount += res.created;
+
               try {
                 if (passDbg && passDbg.meshesCreatedByWallId) {
-                  const k = String(j.wallId || "");
-                  passDbg.meshesCreatedByWallId[k] = Number(passDbg.meshesCreatedByWallId[k] || 0) + Number(res.created || 0);
+                  passDbg.meshesCreatedByWallId[wk] = Number(passDbg.meshesCreatedByWallId[wk] || 0) + Number(res.created || 0);
+                }
+              } catch (e) {}
+
+              try {
+                if (passDbg && passDbg.perWall) {
+                  if (!passDbg.perWall[wk]) passDbg.perWall[wk] = { jobs: 0, created: 0, reasons: [] };
+                  passDbg.perWall[wk].created = Number(passDbg.perWall[wk].created || 0) + Number(res.created || 0);
+                  if (Number(res.created || 0) === 0) {
+                    const reason = String(res.reason || "");
+                    const fb = !!res.bboxMissingFallbackUsed;
+                    passDbg.perWall[wk].reasons.push({
+                      panelIndex: j.panelIndex,
+                      reason: reason || "created==0",
+                      bboxMissingFallbackUsed: fb
+                    });
+                  }
+                }
+              } catch (e) {}
+            } else {
+              try {
+                if (passDbg && passDbg.perWall) {
+                  if (!passDbg.perWall[wk]) passDbg.perWall[wk] = { jobs: 0, created: 0, reasons: [] };
+                  passDbg.perWall[wk].reasons.push({
+                    panelIndex: j.panelIndex,
+                    reason: "exceptionOrNullRes",
+                    bboxMissingFallbackUsed: false
+                  });
                 }
               } catch (e) {}
             }
