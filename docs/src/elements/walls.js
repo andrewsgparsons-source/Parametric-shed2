@@ -501,6 +501,21 @@ export function build3D(state, ctx) {
       merged = null;
     }
 
+    // PHASE 2k: fix render/shading artifact on merged cladding (NO GEOMETRY CHANGES)
+    if (merged) {
+      try {
+        const pos = merged.getVerticesData ? merged.getVerticesData(BABYLON.VertexBuffer.PositionKind) : null;
+        const idx = merged.getIndices ? merged.getIndices() : null;
+        if (pos && idx && idx.length >= 3) {
+          const normals = [];
+          BABYLON.VertexData.ComputeNormals(pos, idx, normals);
+          if (merged.updateVerticesData) {
+            merged.updateVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
+          }
+        }
+      } catch (e) {}
+    }
+
     // PHASE 2e debug v0.1: partsAfterMerge dump + minY log (NO GEOMETRY CHANGES)
     try {
       window.__dbg = window.__dbg || {};
@@ -654,7 +669,16 @@ export function build3D(state, ctx) {
         __cladDbgMat = mat;
       }
 
+      // PHASE 2k: force cladding material double-sided (ONLY this merged cladding mesh)
+      try {
+        if (__cladDbgMat) __cladDbgMat.backFaceCulling = false;
+      } catch (e) {}
+
       merged.material = __cladDbgMat;
+      try {
+        if (merged.material) merged.material.backFaceCulling = false;
+      } catch (e) {}
+
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
       try {
         // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
