@@ -501,21 +501,6 @@ export function build3D(state, ctx) {
       merged = null;
     }
 
-    // PHASE 2k: fix render/shading artifact on merged cladding (NO GEOMETRY CHANGES)
-    if (merged) {
-      try {
-        const pos = merged.getVerticesData ? merged.getVerticesData(BABYLON.VertexBuffer.PositionKind) : null;
-        const idx = merged.getIndices ? merged.getIndices() : null;
-        if (pos && idx && idx.length >= 3) {
-          const normals = [];
-          BABYLON.VertexData.ComputeNormals(pos, idx, normals);
-          if (merged.updateVerticesData) {
-            merged.updateVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
-          }
-        }
-      } catch (e) {}
-    }
-
     // PHASE 2e debug v0.1: partsAfterMerge dump + minY log (NO GEOMETRY CHANGES)
     try {
       window.__dbg = window.__dbg || {};
@@ -669,16 +654,7 @@ export function build3D(state, ctx) {
         __cladDbgMat = mat;
       }
 
-      // PHASE 2k: force cladding material double-sided (ONLY this merged cladding mesh)
-      try {
-        if (__cladDbgMat) __cladDbgMat.backFaceCulling = false;
-      } catch (e) {}
-
       merged.material = __cladDbgMat;
-      try {
-        if (merged.material) merged.material.backFaceCulling = false;
-      } catch (e) {}
-
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
       try {
         // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
@@ -699,6 +675,49 @@ export function build3D(state, ctx) {
           hardClipMeshToMinAllowed(merged);
         }
       }
+
+      // PHASE 2k: render/shading artifact mitigation on merged cladding (NO GEOMETRY CHANGES)
+      // 1) force double-sided on this merged mesh only (do not mutate shared materials)
+      try {
+        if (merged.material) {
+          // If somehow we're still holding a shared instance, clone before mutating.
+          if (merged.material === mat) {
+            let m2 = null;
+            try {
+              if (mat && typeof mat.clone === "function") {
+                m2 = mat.clone(`cladMat2-${wallId}-${panelIndex}-${__cladStamp}`);
+              }
+            } catch (e) {}
+            if (!m2) {
+              try {
+                m2 = new BABYLON.StandardMaterial(`cladMat2-${wallId}-${panelIndex}-${__cladStamp}`, scene);
+                if (mat && mat.diffuseColor) m2.diffuseColor = mat.diffuseColor.clone ? mat.diffuseColor.clone() : mat.diffuseColor;
+                if (mat && mat.alpha !== undefined) m2.alpha = mat.alpha;
+                if (mat && mat.specularColor) m2.specularColor = mat.specularColor.clone ? mat.specularColor.clone() : mat.specularColor;
+              } catch (e) { m2 = null; }
+            }
+            if (m2) merged.material = m2;
+          }
+          merged.material.backFaceCulling = false;
+        }
+      } catch (e) {}
+
+      // 2) recompute normals on merged mesh
+      try {
+        const pos = merged.getVerticesData ? merged.getVerticesData(BABYLON.VertexBuffer.PositionKind) : null;
+        const idx = merged.getIndices ? merged.getIndices() : null;
+        if (pos && idx && idx.length) {
+          const normals = [];
+          BABYLON.VertexData.ComputeNormals(pos, idx, normals);
+          if (normals && normals.length === pos.length) {
+            if (merged.updateVerticesData) {
+              merged.updateVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
+            } else if (merged.setVerticesData) {
+              merged.setVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
+            }
+          }
+        }
+      } catch (e) {}
 
       let postMinY = getMeshMinYmm(merged);
 
