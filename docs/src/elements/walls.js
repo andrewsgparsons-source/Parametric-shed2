@@ -318,18 +318,11 @@ export function build3D(state, ctx) {
       const courseBottomEdgeY = (i === 0) ? minAllowed_mm : (P_bottom_mm + i * CLAD_H);
 
       if (i === 0) {
-        // Floating board fix v0.1: DO NOT create split strips for c0.
+        // PHASE 2j: Starter course MUST be exactly one plain box (no bands/splits/trims)
         // Create ONE full-height starter board only (CLAD_H tall), bottom at minAllowed.
-        // PHASE 2i DIAG: offset starter outward by +10mm along exterior normal.
-        const starterOutward_mm = 10;
-        let appliedOffset_mm = 0;
-
         if (isAlongX) {
           const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
-          let zFull = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
-
-          if (wallId === "front") { zFull -= starterOutward_mm; appliedOffset_mm = starterOutward_mm; }
-          else { zFull += starterOutward_mm; appliedOffset_mm = starterOutward_mm; }
+          const zFull = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
 
           const m0 = mkBox(
             `clad-${wallId}-panel-${panelIndex}-c0`,
@@ -345,14 +338,9 @@ export function build3D(state, ctx) {
           } catch (e) {}
           parts.push(m0);
           recordPartBounds(m0, 0);
-
-          console.log("STARTER_OUTWARD_TEST", wallId, panelIndex, appliedOffset_mm);
         } else {
           const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
-          let xFull = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
-
-          if (wallId === "left") { xFull -= starterOutward_mm; appliedOffset_mm = starterOutward_mm; }
-          else { xFull += starterOutward_mm; appliedOffset_mm = starterOutward_mm; }
+          const xFull = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
 
           const m0 = mkBox(
             `clad-${wallId}-panel-${panelIndex}-c0`,
@@ -368,8 +356,6 @@ export function build3D(state, ctx) {
           } catch (e) {}
           parts.push(m0);
           recordPartBounds(m0, 0);
-
-          console.log("STARTER_OUTWARD_TEST", wallId, panelIndex, appliedOffset_mm);
         }
 
         continue;
