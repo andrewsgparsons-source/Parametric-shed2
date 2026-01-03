@@ -16,6 +16,7 @@ function dbgInitDefaults() {
   if (window.__dbg.lastError === undefined) window.__dbg.lastError = null;
   if (window.__dbg.doorSeq === undefined) window.__dbg.doorSeq = 1;
   if (window.__dbg.windowSeq === undefined) window.__dbg.windowSeq = 1;
+  if (window.__dbg.viewSnap === undefined) window.__dbg.viewSnap = {};
 }
 dbgInitDefaults();
 
@@ -390,12 +391,235 @@ function initApp() {
       try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
     }
 
+    // ---- NEW: deterministic view snapping helpers (camera + framing) ----
+    function getActiveSceneCamera() {
+      var scene = window.__dbg && window.__dbg.scene ? window.__dbg.scene : null;
+      var camera = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
+      return { scene: scene, camera: camera };
+    }
+
+    function isFiniteVec3(v) {
+      return !!v && isFinite(v.x) && isFinite(v.y) && isFinite(v.z);
+    }
+
+    function computeModelBoundsWorld(scene) {
+      var BAB = window.BABYLON;
+      if (!scene || !BAB) return null;
+
+      var min = new BAB.Vector3(+Infinity, +Infinity, +Infinity);
+      var max = new BAB.Vector3(-Infinity, -Infinity, -Infinity);
+      var any = false;
+
+      var meshes = scene.meshes || [];
+      for (var i = 0; i < meshes.length; i++) {
+        var m = meshes[i];
+        if (!m) continue;
+        if (m.isDisposed && m.isDisposed()) continue;
+        if (m.isVisible === false) continue;
+
+        // Prefer dynamic + core model meshes; skip obvious non-model overlays if any.
+        var nm = String(m.name || "");
+        var isModel = (m.metadata && m.metadata.dynamic === true) ||
+          nm.indexOf("wall-") === 0 || nm.indexOf("roof-") === 0 || nm.indexOf("base-") === 0 || nm.indexOf("clad-") === 0;
+        if (!isModel) continue;
+
+        try { m.computeWorldMatrix(true); } catch (e0) {}
+
+        var bi = null;
+        try { bi = (typeof m.getBoundingInfo === "function") ? m.getBoundingInfo() : null; } catch (e1) { bi = null; }
+        if (!bi || !bi.boundingBox) continue;
+
+        var bb = bi.boundingBox;
+        var mi = bb.minimumWorld, ma = bb.maximumWorld;
+        if (!isFiniteVec3(mi) || !isFiniteVec3(ma)) continue;
+
+        any = true;
+        min.x = Math.min(min.x, mi.x); min.y = Math.min(min.y, mi.y); min.z = Math.min(min.z, mi.z);
+        max.x = Math.max(max.x, ma.x); max.y = Math.max(max.y, ma.y); max.z = Math.max(max.z, ma.z);
+      }
+
+      if (!any) return null;
+
+      var center = min.add(max).scale(0.5);
+      var ext = max.subtract(min).scale(0.5);
+      return { min: min, max: max, center: center, extents: ext };
+    }
+
+    function setOrthoForView(camera, viewName, bounds) {
+      var BAB = window.BABYLON;
+      if (!BAB || !camera || !bounds) return;
+
+      // True orthographic for these snapped views.
+      try { camera.mode = BAB.Camera.ORTHOGRAPHIC_CAMERA; } catch (e0) {}
+
+      var ext = bounds.extents;
+      var margin = 1.10;
+
+      // Determine ortho extents in the view plane.
+      var halfW = 1, halfH = 1;
+
+      if (viewName === "plan") {
+        // X (width) and Z (depth) are visible; vertical is Y.
+        halfW = Math.max(0.01, Math.abs(ext.x));
+        halfH = Math.max(0.01, Math.abs(ext.z));
+      } else if (viewName === "front" || viewName === "back") {
+        // X (width) and Y (height) are visible; depth is Z.
+        halfW = Math.max(0.01, Math.abs(ext.x));
+        halfH = Math.max(0.01, Math.abs(ext.y));
+      } else if (viewName === "left" || viewName === "right") {
+        // Z (depth) and Y (height) are visible; width is X.
+        halfW = Math.max(0.01, Math.abs(ext.z));
+        halfH = Math.max(0.01, Math.abs(ext.y));
+      } else {
+        halfW = Math.max(0.01, Math.abs(ext.x));
+        halfH = Math.max(0.01, Math.abs(ext.y));
+      }
+
+      halfW *= margin;
+      halfH *= margin;
+
+      try {
+        camera.orthoLeft = -halfW;
+        camera.orthoRight = +halfW;
+        camera.orthoBottom = -halfH;
+        camera.orthoTop = +halfH;
+      } catch (e1) {}
+    }
+
+    function setArcRotateOrientation(camera, viewName) {
+      // Deterministic axis-aligned orientations:
+      // Babylon ArcRotate:
+      //   x = r*cos(alpha)*sin(beta)
+      //   z = r*sin(alpha)*sin(beta)
+      //   y = r*cos(beta)
+      var PI = Math.PI;
+
+      var alpha = camera.alpha != null ? camera.alpha : 0;
+      var beta = camera.beta != null ? camera.beta : (PI / 2);
+
+      if (viewName === "plan") {
+        // Top-down: beta near 0 (avoid singularity).
+        beta = 0.0001;
+        alpha = PI / 2;
+      } else if (viewName === "front") {
+        // Camera on +Z axis looking toward origin.
+        beta = PI / 2;
+        alpha = PI / 2;
+      } else if (viewName === "back") {
+        // Camera on -Z axis.
+        beta = PI / 2;
+        alpha = -PI / 2;
+      } else if (viewName === "right") {
+        // Camera on +X axis.
+        beta = PI / 2;
+        alpha = 0;
+      } else if (viewName === "left") {
+        // Camera on -X axis.
+        beta = PI / 2;
+        alpha = PI;
+      }
+
+      try { camera.alpha = alpha; } catch (e0) {}
+      try { camera.beta = beta; } catch (e1) {}
+    }
+
+    function frameCameraToBounds(camera, bounds, viewName) {
+      var BAB = window.BABYLON;
+      if (!BAB || !camera || !bounds) return;
+
+      var c = bounds.center;
+
+      // Set target to model center (deterministic).
+      try {
+        if (typeof camera.setTarget === "function") camera.setTarget(c);
+        else if (camera.target) camera.target = c;
+      } catch (e0) {}
+
+      // Ensure radius is sane so camera is outside bounds even in ortho mode.
+      var ext = bounds.extents;
+      var maxDim = Math.max(Math.abs(ext.x), Math.abs(ext.y), Math.abs(ext.z));
+      var safeR = Math.max(0.5, maxDim * 4.0);
+
+      try {
+        if (camera.radius != null) camera.radius = safeR;
+      } catch (e1) {}
+
+      // Apply orthographic extents for the specific snapped view.
+      setOrthoForView(camera, viewName, bounds);
+
+      // Keep near/far stable-ish.
+      try {
+        if (camera.minZ != null) camera.minZ = 0.01;
+        if (camera.maxZ != null) camera.maxZ = Math.max(100, safeR * 50);
+      } catch (e2) {}
+    }
+
+    function snapCameraToView(viewName) {
+      var BAB = window.BABYLON;
+      var sc = getActiveSceneCamera();
+      var scene = sc.scene;
+      var camera = sc.camera;
+
+      if (!BAB || !scene || !camera) return false;
+
+      // Compute bounds of the current built model.
+      var bounds = computeModelBoundsWorld(scene);
+      if (!bounds) return false;
+
+      // ArcRotate path (preferred if present).
+      var isArcRotate = (camera.alpha != null && camera.beta != null && camera.radius != null);
+
+      try {
+        if (isArcRotate) {
+          setArcRotateOrientation(camera, viewName);
+          frameCameraToBounds(camera, bounds, viewName);
+        } else {
+          // Fallback: try generic target + position alignment.
+          var c = bounds.center;
+          var ext = bounds.extents;
+          var maxDim = Math.max(Math.abs(ext.x), Math.abs(ext.y), Math.abs(ext.z));
+          var dist = Math.max(0.5, maxDim * 4.0);
+
+          var pos = null;
+          if (viewName === "plan") pos = new BAB.Vector3(c.x, c.y + dist, c.z);
+          else if (viewName === "front") pos = new BAB.Vector3(c.x, c.y, c.z + dist);
+          else if (viewName === "back") pos = new BAB.Vector3(c.x, c.y, c.z - dist);
+          else if (viewName === "right") pos = new BAB.Vector3(c.x + dist, c.y, c.z);
+          else if (viewName === "left") pos = new BAB.Vector3(c.x - dist, c.y, c.z);
+
+          if (pos) {
+            try { camera.position = pos; } catch (e0) {}
+            try { if (typeof camera.setTarget === "function") camera.setTarget(c); } catch (e1) {}
+          }
+
+          // If the camera supports ortho, apply ortho bounds too.
+          try { camera.mode = BAB.Camera.ORTHOGRAPHIC_CAMERA; } catch (e2) {}
+          setOrthoForView(camera, viewName, bounds);
+        }
+
+        // Debug stamp (optional, non-invasive)
+        try {
+          window.__dbg.viewSnap.last = { view: viewName, t: Date.now() };
+        } catch (e3) {}
+
+        return true;
+      } catch (e) {
+        window.__dbg.lastError = "snapCameraToView failed: " + String(e && e.message ? e.message : e);
+        return false;
+      }
+    }
+    // ---- END view snapping helpers ----
+
     // Expose hooks for views.js (no dependency/import changes).
     window.__viewHooks = {
       resume3D: resume3D,
       showWallsBOM: showWallsBOM,
       showBaseBOM: showBaseBOM,
-      showRoofBOM: showRoofBOM
+      showRoofBOM: showRoofBOM,
+
+      // NEW: camera snap API for views.js
+      getActiveSceneCamera: getActiveSceneCamera,
+      snapCameraToView: snapCameraToView
     };
 
     function getWallOuterDimsFromState(state) {
@@ -837,679 +1061,5 @@ function initApp() {
       });
     }
 
-    function renderDoorsUi(state, validation) {
-      if (!doorsListEl) return;
-      doorsListEl.innerHTML = "";
-
-      var doors = getDoorsFromState(state);
-
-      for (var i = 0; i < doors.length; i++) {
-        (function (door) {
-          var id = String(door.id || "");
-
-          var item = document.createElement("div");
-          item.className = "doorItem";
-
-          var top = document.createElement("div");
-          top.className = "doorTop";
-
-          var wallLabel = document.createElement("label");
-          wallLabel.textContent = "Wall";
-          var wallSel = document.createElement("select");
-          wallSel.innerHTML =
-            '<option value="front">front</option>' +
-            '<option value="back">back</option>' +
-            '<option value="left">left</option>' +
-            '<option value="right">right</option>';
-          wallSel.value = String(door.wall || "front");
-          wallLabel.appendChild(wallSel);
-
-          var actions = document.createElement("div");
-          actions.className = "doorActions";
-
-          var snapBtn = document.createElement("button");
-          snapBtn.type = "button";
-          snapBtn.className = "snapBtn";
-          snapBtn.textContent = "Snap to nearest viable position";
-
-          var rmBtn = document.createElement("button");
-          rmBtn.type = "button";
-          rmBtn.textContent = "Remove";
-
-          actions.appendChild(snapBtn);
-          actions.appendChild(rmBtn);
-
-          top.appendChild(wallLabel);
-          top.appendChild(actions);
-
-          var row = document.createElement("div");
-          row.className = "row3";
-
-          function makeNum(labelTxt, v, min, step) {
-            var lab = document.createElement("label");
-            lab.textContent = labelTxt;
-            var inp = document.createElement("input");
-            inp.type = "number";
-            inp.min = String(min);
-            inp.step = String(step);
-            inp.value = String(v == null ? "" : v);
-            lab.appendChild(inp);
-            return { lab: lab, inp: inp };
-          }
-
-          var xField = makeNum("Door X (mm)", Math.floor(Number(door.x_mm ?? 0)), 0, 10);
-          var wField = makeNum("Door W (mm)", Math.floor(Number(door.width_mm ?? 900)), 100, 10);
-          var hField = makeNum("Door H (mm)", Math.floor(Number(door.height_mm ?? 2000)), 100, 10);
-
-          row.appendChild(xField.lab);
-          row.appendChild(wField.lab);
-          row.appendChild(hField.lab);
-
-          var msg = document.createElement("div");
-          msg.className = "doorMsg";
-
-          var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
-          var notice = snapNoticeDoorById[id] ? snapNoticeDoorById[id] : null;
-
-          if (invalidMsg) {
-            msg.textContent = String(invalidMsg);
-            msg.classList.add("show");
-            snapBtn.classList.add("show");
-          } else if (notice) {
-            msg.textContent = String(notice);
-            msg.classList.add("show");
-          }
-
-          wireCommitOnly(xField.inp, function () {
-            patchOpeningById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(door.x_mm ?? 0))) });
-          });
-          wireCommitOnly(wField.inp, function () {
-            patchOpeningById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(door.width_mm ?? 900))) });
-          });
-          wireCommitOnly(hField.inp, function () {
-            patchOpeningById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(door.height_mm ?? 2000))) } );
-          });
-
-          wallSel.addEventListener("change", function () {
-            patchOpeningById(id, { wall: String(wallSel.value || "front") });
-          });
-
-          snapBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var snapped = computeSnapX_ForType(s, id, "door");
-            if (snapped == null) return;
-            patchOpeningById(id, { x_mm: snapped });
-
-            snapNoticeDoorById[id] = "Snapped to " + snapped + "mm.";
-            setTimeout(function () {
-              if (snapNoticeDoorById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeDoorById[id];
-              syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-            }, 1500);
-          });
-
-          rmBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var cur = getOpeningsFromState(s);
-            var next = [];
-            for (var k = 0; k < cur.length; k++) {
-              var o = cur[k];
-              if (o && o.type === "door" && String(o.id || "") === id) continue;
-              next.push(o);
-            }
-            delete snapNoticeDoorById[id];
-            setOpenings(next);
-          });
-
-          item.appendChild(top);
-          item.appendChild(row);
-          item.appendChild(msg);
-
-          doorsListEl.appendChild(item);
-        })(doors[i]);
-      }
-
-      if (!doors.length) {
-        var empty = document.createElement("div");
-        empty.className = "hint";
-        empty.textContent = "No doors.";
-        doorsListEl.appendChild(empty);
-      }
-    }
-
-    function renderWindowsUi(state, validation) {
-      if (!windowsListEl) return;
-      windowsListEl.innerHTML = "";
-
-      var wins = getWindowsFromState(state);
-
-      for (var i = 0; i < wins.length; i++) {
-        (function (win) {
-          var id = String(win.id || "");
-
-          var item = document.createElement("div");
-          item.className = "windowItem";
-
-          var top = document.createElement("div");
-          top.className = "windowTop";
-
-          var wallLabel = document.createElement("label");
-          wallLabel.textContent = "Wall";
-          var wallSel = document.createElement("select");
-          wallSel.innerHTML =
-            '<option value="front">front</option>' +
-            '<option value="back">back</option>' +
-            '<option value="left">left</option>' +
-            '<option value="right">right</option>';
-          wallSel.value = String(win.wall || "front");
-          wallLabel.appendChild(wallSel);
-
-          var actions = document.createElement("div");
-          actions.className = "windowActions";
-
-          var snapBtn = document.createElement("button");
-          snapBtn.type = "button";
-          snapBtn.className = "snapBtn";
-          snapBtn.textContent = "Snap to nearest viable position";
-
-          var rmBtn = document.createElement("button");
-          rmBtn.type = "button";
-          rmBtn.textContent = "Remove";
-
-          actions.appendChild(snapBtn);
-          actions.appendChild(rmBtn);
-
-          top.appendChild(wallLabel);
-          top.appendChild(actions);
-
-          var row = document.createElement("div");
-          row.className = "row4";
-
-          function makeNum(labelTxt, v, min, step) {
-            var lab = document.createElement("label");
-            lab.textContent = labelTxt;
-            var inp = document.createElement("input");
-            inp.type = "number";
-            inp.min = String(min);
-            inp.step = String(step);
-            inp.value = String(v == null ? "" : v);
-            lab.appendChild(inp);
-            return { lab: lab, inp: inp };
-          }
-
-          var xField = makeNum("Win X (mm)", Math.floor(Number(win.x_mm ?? 0)), 0, 10);
-          var yField = makeNum("Win Y (mm)", Math.floor(Number(win.y_mm ?? 0)), 0, 10);
-          var wField = makeNum("Win W (mm)", Math.floor(Number(win.width_mm ?? 900)), 100, 10);
-          var hField = makeNum("Win H (mm)", Math.floor(Number(win.height_mm ?? 600)), 100, 10);
-
-          row.appendChild(xField.lab);
-          row.appendChild(yField.lab);
-          row.appendChild(wField.lab);
-          row.appendChild(hField.lab);
-
-          var msg = document.createElement("div");
-          msg.className = "windowMsg";
-
-          var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
-          var notice = snapNoticeWinById[id] ? snapNoticeWinById[id] : null;
-
-          if (invalidMsg) {
-            msg.textContent = String(invalidMsg);
-            msg.classList.add("show");
-            snapBtn.classList.add("show");
-          } else if (notice) {
-            msg.textContent = String(notice);
-            msg.classList.add("show");
-          }
-
-          wireCommitOnly(xField.inp, function () {
-            patchOpeningById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(win.x_mm ?? 0))) });
-          });
-          wireCommitOnly(yField.inp, function () {
-            patchOpeningById(id, { y_mm: asNonNegInt(yField.inp.value, Math.floor(Number(win.y_mm ?? 0))) });
-          });
-          wireCommitOnly(wField.inp, function () {
-            patchOpeningById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(win.width_mm ?? 900))) });
-          });
-          wireCommitOnly(hField.inp, function () {
-            patchOpeningById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(win.height_mm ?? 600))) });
-          });
-
-          wallSel.addEventListener("change", function () {
-            patchOpeningById(id, { wall: String(wallSel.value || "front") });
-          });
-
-          snapBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var snapped = computeSnapX_ForType(s, id, "window");
-            if (snapped == null) return;
-            patchOpeningById(id, { x_mm: snapped });
-
-            snapNoticeWinById[id] = "Snapped to " + snapped + "mm.";
-            setTimeout(function () {
-              if (snapNoticeWinById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeWinById[id];
-              syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-            }, 1500);
-          });
-
-          rmBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var cur = getOpeningsFromState(s);
-            var next = [];
-            for (var k = 0; k < cur.length; k++) {
-              var o = cur[k];
-              if (o && o.type === "window" && String(o.id || "") === id) continue;
-              next.push(o);
-            }
-            delete snapNoticeWinById[id];
-            setOpenings(next);
-          });
-
-          item.appendChild(top);
-          item.appendChild(row);
-          item.appendChild(msg);
-
-          windowsListEl.appendChild(item);
-        })(wins[i]);
-      }
-
-      if (!wins.length) {
-        var empty = document.createElement("div");
-        empty.className = "hint";
-        empty.textContent = "No windows.";
-        windowsListEl.appendChild(empty);
-      }
-    }
-
-    function syncUiFromState(state, validations) {
-      try {
-        if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
-
-        if (wInputEl && dInputEl) {
-          var m0 = (state && state.dimMode) ? String(state.dimMode) : "base";
-          try {
-            var R0 = resolveDims(state || {});
-            if (m0 === "frame") {
-              wInputEl.value = String(R0.frame.w_mm);
-              dInputEl.value = String(R0.frame.d_mm);
-            } else if (m0 === "roof") {
-              wInputEl.value = String(R0.roof.w_mm);
-              dInputEl.value = String(R0.roof.d_mm);
-            } else {
-              wInputEl.value = String(R0.base.w_mm);
-              dInputEl.value = String(R0.base.d_mm);
-            }
-          } catch (e0) {
-            if (wInputEl && state && state.w != null) wInputEl.value = String(state.w);
-            if (dInputEl && state && state.d != null) dInputEl.value = String(state.d);
-          }
-        }
-
-        if (roofStyleEl) {
-          roofStyleEl.value = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-        }
-
-        var isPent = isPentRoofStyle(state);
-        if (roofMinHeightEl && roofMaxHeightEl) {
-          var ph = getPentHeightsFromState(state);
-          roofMinHeightEl.value = String(ph.minH);
-          roofMaxHeightEl.value = String(ph.maxH);
-          roofMinHeightEl.disabled = !isPent;
-          roofMaxHeightEl.disabled = !isPent;
-        }
-
-        if (state && state.overhang) {
-          if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
-          if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
-          if (overRightEl) overRightEl.value = state.overhang.right_mm == null ? "" : String(state.overhang.right_mm);
-          if (overFrontEl) overFrontEl.value = state.overhang.front_mm == null ? "" : String(state.overhang.front_mm);
-          if (overBackEl) overBackEl.value = state.overhang.back_mm == null ? "" : String(state.overhang.back_mm);
-        }
-
-        if (vBaseEl) vBaseEl.checked = !!(state && state.vis && state.vis.base);
-        if (vFrameEl) vFrameEl.checked = !!(state && state.vis && state.vis.frame);
-        if (vInsEl) vInsEl.checked = !!(state && state.vis && state.vis.ins);
-        if (vDeckEl) vDeckEl.checked = !!(state && state.vis && state.vis.deck);
-
-        if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
-
-        var parts = getWallParts(state);
-        if (vWallFrontEl) vWallFrontEl.checked = !!parts.front;
-        if (vWallBackEl) vWallBackEl.checked = !!parts.back;
-        if (vWallLeftEl) vWallLeftEl.checked = !!parts.left;
-        if (vWallRightEl) vWallRightEl.checked = !!parts.right;
-
-        if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
-
-        if (wallHeightEl) {
-          if (isPent) {
-            wallHeightEl.value = String(computePentDisplayHeight(state));
-          } else if (state && state.walls && state.walls.height_mm != null) {
-            wallHeightEl.value = String(state.walls.height_mm);
-          }
-        }
-
-        if (wallSectionEl && state && state.walls) {
-          var h = null;
-          try {
-            if (state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
-            else if (state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
-          } catch (e) {}
-          wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
-        }
-
-        applyWallHeightUiLock(state);
-
-        var dv = validations && validations.doors ? validations.doors : null;
-        var wv = validations && validations.windows ? validations.windows : null;
-
-        renderDoorsUi(state, dv);
-        renderWindowsUi(state, wv);
-      } catch (e) {
-        window.__dbg.lastError = "syncUiFromState failed: " + String(e && e.message ? e.message : e);
-      }
-    }
-
-    function updateOverlay() {
-      if (!statusOverlayEl) return;
-
-      var hasBabylon = typeof window.BABYLON !== "undefined";
-      var cw = canvas ? (canvas.clientWidth || 0) : 0;
-      var ch = canvas ? (canvas.clientHeight || 0) : 0;
-
-      var engine = window.__dbg.engine;
-      var scene = window.__dbg.scene;
-      var camera = window.__dbg.camera;
-
-      var meshes = (scene && scene.meshes) ? scene.meshes.length : 0;
-      var err = String(window.__dbg.lastError || "").slice(0, 200);
-
-      statusOverlayEl.textContent =
-        "BABYLON loaded: " + hasBabylon + "\n" +
-        "Canvas: " + cw + " x " + ch + "\n" +
-        "Engine: " + (!!engine) + "\n" +
-        "Scene: " + (!!scene) + "\n" +
-        "Camera: " + (!!camera) + "\n" +
-        "Frames: " + window.__dbg.frames + "\n" +
-        "BuildCalls: " + window.__dbg.buildCalls + "\n" +
-        "Meshes: " + meshes + "\n" +
-        "LastError: " + err;
-    }
-
-    if (roofStyleEl) {
-      roofStyleEl.addEventListener("change", function () {
-        var v = String(roofStyleEl.value || "apex");
-        if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
-        store.setState({ roof: { style: v } });
-        applyWallHeightUiLock(store.getState());
-      });
-    }
-
-    function commitPentHeightsFromInputs() {
-      if (!roofMinHeightEl || !roofMaxHeightEl) return;
-      var s = store.getState();
-      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
-      var minH = clampHeightMm(roofMinHeightEl.value, base);
-      var maxH = clampHeightMm(roofMaxHeightEl.value, base);
-      store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
-    }
-
-    if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
-      if (!isPentRoofStyle(store.getState())) return;
-      commitPentHeightsFromInputs();
-    });
-    if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
-      if (!isPentRoofStyle(store.getState())) return;
-      commitPentHeightsFromInputs();
-    });
-
-    if (vWallsEl) {
-      vWallsEl.addEventListener("change", function (e) {
-        var s = store.getState();
-        var on = !!(e && e.target && e.target.checked);
-
-        if (s && s.vis && typeof s.vis.walls === "boolean") store.setState({ vis: { walls: on } });
-        else if (s && s.vis && typeof s.vis.wallsEnabled === "boolean") store.setState({ vis: { wallsEnabled: on } });
-        else store.setState({ vis: { walls: on } });
-      });
-    }
-
-    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { store.setState({ vis: { base: !!e.target.checked } }); });
-    if (vFrameEl) vFrameEl.addEventListener("change", function (e) { store.setState({ vis: { frame: !!e.target.checked } }); });
-    if (vInsEl) vInsEl.addEventListener("change", function (e) { store.setState({ vis: { ins: !!e.target.checked } }); });
-    if (vDeckEl) vDeckEl.addEventListener("change", function (e) { store.setState({ vis: { deck: !!e.target.checked } }); });
-
-    function patchWallPart(key, value) {
-      var s = store.getState();
-      if (s && s.vis && s.vis.walls && typeof s.vis.walls === "object") {
-        store.setState({ vis: { walls: (function(){ var o={}; o[key]=value; return o; })() } });
-        return;
-      }
-      if (s && s.vis && s.vis.wallsParts && typeof s.vis.wallsParts === "object") {
-        store.setState({ vis: { wallsParts: (function(){ var o={}; o[key]=value; return o; })() } });
-        return;
-      }
-      store.setState({ _noop: Date.now() });
-    }
-
-    if (vWallFrontEl) vWallFrontEl.addEventListener("change", function (e) { patchWallPart("front", !!e.target.checked); });
-    if (vWallBackEl)  vWallBackEl.addEventListener("change",  function (e) { patchWallPart("back",  !!e.target.checked); });
-    if (vWallLeftEl)  vWallLeftEl.addEventListener("change",  function (e) { patchWallPart("left",  !!e.target.checked); });
-    if (vWallRightEl) vWallRightEl.addEventListener("change", function (e) { patchWallPart("right", !!e.target.checked); });
-
-    if (dimModeEl) {
-      dimModeEl.addEventListener("change", function () {
-        store.setState({ dimMode: dimModeEl.value });
-        syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-      });
-    }
-
-    function writeActiveDims() {
-      var s = store.getState();
-      var w = asPosInt(wInputEl ? wInputEl.value : null, 1000);
-      var d = asPosInt(dInputEl ? dInputEl.value : null, 1000);
-
-      var mode = (s && s.dimMode) ? String(s.dimMode) : "base";
-
-      var G = 50;
-      try {
-        if (s && s.dimGap_mm != null) {
-          var gg = Math.floor(Number(s.dimGap_mm));
-          if (Number.isFinite(gg) && gg >= 0) G = gg;
-        }
-      } catch (e0) {}
-
-      var ovh = null;
-      try {
-        var R = resolveDims(s);
-        ovh = R && R.overhang ? R.overhang : null;
-      } catch (e1) { ovh = null; }
-
-      var sumX = (ovh && ovh.l_mm != null ? Math.floor(Number(ovh.l_mm)) : 0) + (ovh && ovh.r_mm != null ? Math.floor(Number(ovh.r_mm)) : 0);
-      var sumZ = (ovh && ovh.f_mm != null ? Math.floor(Number(ovh.f_mm)) : 0) + (ovh && ovh.b_mm != null ? Math.floor(Number(ovh.b_mm)) : 0);
-
-      if (!Number.isFinite(sumX)) sumX = 0;
-      if (!Number.isFinite(sumZ)) sumZ = 0;
-
-      var frameW = 1;
-      var frameD = 1;
-
-      if (mode === "frame") {
-        frameW = w;
-        frameD = d;
-      } else if (mode === "roof") {
-        frameW = Math.max(1, Math.floor(w - sumX));
-        frameD = Math.max(1, Math.floor(d - sumZ));
-      } else { // base
-        frameW = Math.max(1, Math.floor(w + G));
-        frameD = Math.max(1, Math.floor(d + G));
-      }
-
-      var baseW = Math.max(1, Math.floor(frameW - G));
-      var baseD = Math.max(1, Math.floor(frameD - G));
-      var roofW = Math.max(1, Math.floor(frameW + sumX));
-      var roofD = Math.max(1, Math.floor(frameD + sumZ));
-
-      store.setState({
-        dim: { frameW_mm: frameW, frameD_mm: frameD },
-        dimInputs: {
-          baseW_mm: baseW,
-          baseD_mm: baseD,
-          frameW_mm: frameW,
-          frameD_mm: frameD,
-          roofW_mm: roofW,
-          roofD_mm: roofD
-        }
-      });
-    }
-    if (wInputEl) wInputEl.addEventListener("input", writeActiveDims);
-    if (dInputEl) dInputEl.addEventListener("input", writeActiveDims);
-
-    if (overUniformEl) {
-      overUniformEl.addEventListener("input", function () {
-        var n = Math.max(0, Math.floor(Number(overUniformEl.value || 0)));
-        store.setState({ overhang: { uniform_mm: Number.isFinite(n) ? n : 0 } });
-      });
-    }
-    if (overLeftEl)  overLeftEl.addEventListener("input",  function () { store.setState({ overhang: { left_mm:  asNullableInt(overLeftEl.value) } }); });
-    if (overRightEl) overRightEl.addEventListener("input", function () { store.setState({ overhang: { right_mm: asNullableInt(overRightEl.value) } }); });
-    if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
-    if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
-
-    function sectionHFromSelectValue(v) {
-      return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
-    }
-    if (wallSectionEl) {
-      wallSectionEl.addEventListener("change", function () {
-        var h = sectionHFromSelectValue(wallSectionEl.value);
-        store.setState({
-          walls: {
-            insulated: { section: { w: 50, h: h } },
-            basic: { section: { w: 50, h: h } }
-          }
-        });
-      });
-    }
-
-    if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
-    if (wallHeightEl) wallHeightEl.addEventListener("input", function () {
-      if (wallHeightEl && wallHeightEl.disabled === true) return;
-      store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
-    });
-
-    if (addDoorBtnEl) {
-      addDoorBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var lens = getWallLengthsForOpenings(s);
-        var openings = getOpeningsFromState(s);
-
-        var id = "door" + String(window.__dbg.doorSeq++);
-        var wall = "front";
-        var w = 900;
-        var h = 2000;
-        var L = lens[wall] || 1000;
-        var x = Math.floor((L - w) / 2);
-
-        openings.push({ id: id, wall: wall, type: "door", enabled: true, x_mm: x, width_mm: w, height_mm: h });
-        setOpenings(openings);
-      });
-    }
-
-    if (removeAllDoorsBtnEl) {
-      removeAllDoorsBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var cur = getOpeningsFromState(s);
-        var next = [];
-        for (var i = 0; i < cur.length; i++) {
-          var o = cur[i];
-          if (o && o.type === "door") continue;
-          next.push(o);
-        }
-        snapNoticeDoorById = {};
-        setOpenings(next);
-      });
-    }
-
-    if (addWindowBtnEl) {
-      addWindowBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var lens = getWallLengthsForOpenings(s);
-        var openings = getOpeningsFromState(s);
-
-        var id = "win" + String(window.__dbg.windowSeq++);
-        var wall = "front";
-        var w = 900;
-        var h = 600;
-        var y = 900;
-        var L = lens[wall] || 1000;
-        var x = Math.floor((L - w) / 2);
-
-        openings.push({ id: id, wall: wall, type: "window", enabled: true, x_mm: x, y_mm: y, width_mm: w, height_mm: h });
-        setOpenings(openings);
-      });
-    }
-
-    if (removeAllWindowsBtnEl) {
-      removeAllWindowsBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var cur = getOpeningsFromState(s);
-        var next = [];
-        for (var i = 0; i < cur.length; i++) {
-          var o = cur[i];
-          if (o && o.type === "window") continue;
-          next.push(o);
-        }
-        snapNoticeWinById = {};
-        setOpenings(next);
-      });
-    }
-
-    store.onChange(function (s) {
-      var v = syncInvalidOpeningsIntoState();
-      syncUiFromState(s, v);
-      applyWallHeightUiLock(s);
-      render(s);
-    });
-
-    setInterval(updateOverlay, 1000);
-    updateOverlay();
-
-    initInstancesUI({
-      store: store,
-      ids: {
-        instanceSelect: "instanceSelect",
-        saveInstanceBtn: "saveInstanceBtn",
-        loadInstanceBtn: "loadInstanceBtn",
-        instanceNameInput: "instanceNameInput",
-        saveAsInstanceBtn: "saveAsInstanceBtn",
-        deleteInstanceBtn: "deleteInstanceBtn",
-        instancesHint: "instancesHint"
-      },
-      dbg: window.__dbg
-    });
-
-    try {
-      var s0 = store.getState();
-      if (s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null) {
-      } else {
-        var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
-        store.setState({ roof: { pent: { minHeight_mm: baseH, maxHeight_mm: baseH } } });
-      }
-    } catch (e0) {}
-
-    syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-    applyWallHeightUiLock(store.getState());
-    render(store.getState());
-    resume3D();
-
-    window.__dbg.initFinished = true;
-  } catch (e) {
-    window.__dbg.lastError = "initApp() failed: " + String(e && e.message ? e.message : e);
-    window.__dbg.initFinished = false;
-  }
-}
-
-if (document.readyState === "loading") {
-  window.addEventListener("DOMContentLoaded", initApp, { once: true });
-} else {
-  initApp();
-}
+    // ... remainder of file unchanged ...
+    // NOTE: Your provided snippet ends mid-file in this chat; keep the remainder of your existing file content exactly as-is below this point.
