@@ -276,6 +276,62 @@ export function build3D(state, ctx) {
 
     const minAllowed_mm = (P_bottom_mm - CLAD_DRIP);
 
+    // PHASE 2L-alt: remove underside (bottom face) of starter board mesh (-c0) by editing vertex data (NO CSG)
+    function removeBottomFaceFromBox(mesh) {
+      if (!mesh || !mesh.getVerticesData || !mesh.getIndices || !mesh.setIndices) return;
+      try {
+        const pos = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+        const idx = mesh.getIndices();
+        if (!pos || !idx || !idx.length) return;
+
+        // Find local-space minimum Y (bottom face plane for a box)
+        let minY = Number.POSITIVE_INFINITY;
+        for (let i = 1; i < pos.length; i += 3) {
+          const y = pos[i];
+          if (y < minY) minY = y;
+        }
+        if (!Number.isFinite(minY)) return;
+
+        const eps = 1e-6;
+        const newIdx = [];
+        for (let t = 0; t < idx.length; t += 3) {
+          const i0 = idx[t + 0] * 3;
+          const i1 = idx[t + 1] * 3;
+          const i2 = idx[t + 2] * 3;
+          const y0 = pos[i0 + 1];
+          const y1 = pos[i1 + 1];
+          const y2 = pos[i2 + 1];
+
+          const isBottomTri =
+            (y0 <= (minY + eps)) &&
+            (y1 <= (minY + eps)) &&
+            (y2 <= (minY + eps));
+
+          if (!isBottomTri) {
+            newIdx.push(idx[t + 0], idx[t + 1], idx[t + 2]);
+          }
+        }
+
+        // Apply filtered indices (removes downward-facing underside for the starter board)
+        mesh.setIndices(newIdx);
+
+        // Recompute normals for the edited topology
+        try {
+          const normals = [];
+          BABYLON.VertexData.ComputeNormals(pos, newIdx, normals);
+          if (normals && normals.length === pos.length) {
+            if (mesh.updateVerticesData) mesh.updateVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
+            else if (mesh.setVerticesData) mesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
+          }
+        } catch (e) {}
+
+        try {
+          if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
+          if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
+        } catch (e) {}
+      } catch (e) {}
+    }
+
     // Cladding course bounds diag v0.1 (PHASE 2c): per-part metadata + bounds list before merge
     function recordPartBounds(mesh, courseIndex) {
       if (!mesh) return;
@@ -333,6 +389,10 @@ export function build3D(state, ctx) {
             mat,
             { wallId, panelIndex, course: 0, type: "cladding", part: "starter", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           );
+
+          // PHASE 2L-alt: delete underside face on starter only
+          removeBottomFaceFromBox(m0);
+
           try {
             m0.metadata = Object.assign({}, m0.metadata || {}, { wallId, panelIndex, courseIndex: 0, courseKind: "starter" });
           } catch (e) {}
@@ -351,6 +411,10 @@ export function build3D(state, ctx) {
             mat,
             { wallId, panelIndex, course: 0, type: "cladding", part: "starter", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           );
+
+          // PHASE 2L-alt: delete underside face on starter only
+          removeBottomFaceFromBox(m0);
+
           try {
             m0.metadata = Object.assign({}, m0.metadata || {}, { wallId, panelIndex, courseIndex: 0, courseKind: "starter" });
           } catch (e) {}
