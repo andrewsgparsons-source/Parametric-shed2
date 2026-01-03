@@ -67,6 +67,9 @@ export function build3D(state, ctx) {
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
 
+  // DIAGNOSTIC STEP 1: render EXACTLY ONE cladding board on FRONT wall only (panel 1 only)
+  const __DIAG_ONE_FRONT_ONE_BOARD = true;
+
   // DEBUG containers
   try {
     if (!window.__dbg) window.__dbg = {};
@@ -261,7 +264,8 @@ export function build3D(state, ctx) {
     const panelHeightMm = Number.isFinite(ph) ? ph : height;
 
     const courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
-    if (courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
+    const __courses = (__DIAG_ONE_FRONT_ONE_BOARD ? 1 : courses);
+    if (__courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
 
     const parts = [];
 
@@ -423,7 +427,7 @@ export function build3D(state, ctx) {
       }
     } catch (e) {}
 
-    for (let i = 0; i < courses; i++) {
+    for (let i = 0; i < __courses; i++) {
       const isFirst = i === 0;
       const firstCourseYOffsetMm = (isFirst ? 125 : 0);
       const yBase = claddingAnchorY_mm + i * CLAD_H + firstCourseYOffsetMm;
@@ -1139,15 +1143,29 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        claddingJobs.push({
-          wallId,
-          axis,
-          panelIndex: (p + 1),
-          panelStart: pan.start,
-          panelLen: pan.len,
-          origin,
-          panelHeight: panelH
-        });
+        if (__DIAG_ONE_FRONT_ONE_BOARD) {
+          if (String(wallId) === "front" && (p === 0)) {
+            claddingJobs.push({
+              wallId,
+              axis,
+              panelIndex: (p + 1),
+              panelStart: pan.start,
+              panelLen: pan.len,
+              origin,
+              panelHeight: panelH
+            });
+          }
+        } else {
+          claddingJobs.push({
+            wallId,
+            axis,
+            panelIndex: (p + 1),
+            panelStart: pan.start,
+            panelLen: pan.len,
+            origin,
+            panelHeight: panelH
+          });
+        }
       }
 
       return;
@@ -1206,15 +1224,29 @@ export function build3D(state, ctx) {
       panelH = Math.min(h0, h1);
     }
 
-    claddingJobs.push({
-      wallId,
-      axis,
-      panelIndex: 1,
-      panelStart: 0,
-      panelLen: length,
-      origin,
-      panelHeight: panelH
-    });
+    if (__DIAG_ONE_FRONT_ONE_BOARD) {
+      if (String(wallId) === "front") {
+        claddingJobs.push({
+          wallId,
+          axis,
+          panelIndex: 1,
+          panelStart: 0,
+          panelLen: length,
+          origin,
+          panelHeight: panelH
+        });
+      }
+    } else {
+      claddingJobs.push({
+        wallId,
+        axis,
+        panelIndex: 1,
+        panelStart: 0,
+        panelLen: length,
+        origin,
+        panelHeight: panelH
+      });
+    }
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
