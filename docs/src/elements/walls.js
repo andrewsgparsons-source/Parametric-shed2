@@ -273,6 +273,11 @@ export function build3D(state, ctx) {
     let claddingAnchorY_mm = plateY;
     let plateParent = null;
 
+    let bbMinX_mm = null;
+    let bbMaxX_mm = null;
+    let bbMinZ_mm = null;
+    let bbMaxZ_mm = null;
+
     try {
       const plateName =
         (variant === "basic")
@@ -290,6 +295,47 @@ export function build3D(state, ctx) {
           wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
           wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
           claddingAnchorY_mm = wallBottomPlateTopY_mm;
+
+          bbMinX_mm = Number(bb.minimumWorld.x) * 1000;
+          bbMaxX_mm = Number(bb.maximumWorld.x) * 1000;
+          bbMinZ_mm = Number(bb.minimumWorld.z) * 1000;
+          bbMaxZ_mm = Number(bb.maximumWorld.z) * 1000;
+        }
+      }
+    } catch (e) {}
+
+    // Robust outside-plane selection (geometry-derived; no wallId sign logic)
+    let outsidePlaneZ_mm = null;
+    let outwardZ = 1;
+    let outsidePlaneX_mm = null;
+    let outwardX = 1;
+
+    try {
+      if (isAlongX) {
+        const originZ = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
+        if (Number.isFinite(bbMinZ_mm) && Number.isFinite(bbMaxZ_mm)) {
+          const dMin = Math.abs(bbMinZ_mm - originZ);
+          const dMax = Math.abs(bbMaxZ_mm - originZ);
+          if (dMin < dMax) outsidePlaneZ_mm = bbMaxZ_mm;
+          else outsidePlaneZ_mm = bbMinZ_mm;
+
+          outwardZ = (outsidePlaneZ_mm === bbMaxZ_mm) ? 1 : -1;
+        } else {
+          outsidePlaneZ_mm = originZ + wallThk;
+          outwardZ = 1;
+        }
+      } else {
+        const originX = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
+        if (Number.isFinite(bbMinX_mm) && Number.isFinite(bbMaxX_mm)) {
+          const dMin = Math.abs(bbMinX_mm - originX);
+          const dMax = Math.abs(bbMaxX_mm - originX);
+          if (dMin < dMax) outsidePlaneX_mm = bbMaxX_mm;
+          else outsidePlaneX_mm = bbMinX_mm;
+
+          outwardX = (outsidePlaneX_mm === bbMaxX_mm) ? 1 : -1;
+        } else {
+          outsidePlaneX_mm = originX + wallThk;
+          outwardX = 1;
         }
       }
     } catch (e) {}
@@ -342,28 +388,26 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
-        // Front/Back run along X; thickness extrudes +Z.
-        // OUTSIDE face (per repo facts): z = origin.z + wallThk
-        // Inner face of cladding must touch outside face; cladding extends outward (+Z) only.
-        const zOuterPlane = origin.z + wallThk;
+        // Front/Back run along X; thickness extrudes along Z.
+        // Place cladding so its INNER face lies exactly on the selected outside plane,
+        // and thickness extends entirely in the outward direction.
+        const zInner = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
 
-        // Bottom strip: full thickness (proud) — inner face touches wall outside face
-        const zBottom = zOuterPlane;
+        const zBottomMin = (outwardZ > 0) ? zInner : (zInner - CLAD_T);
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
             panelLen,
             hBottomStrip,
             CLAD_T,
-            { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
+            { x: origin.x + panelStart, y: yBottomStrip, z: zBottomMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
         );
 
-        // Upper strip: recessed by rebate depth (visible lap) — inner face still touches wall outside face
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const zUpperMin = zOuterPlane;
+        const zUpperMin = (outwardZ > 0) ? zInner : (zInner - tUpper);
 
         parts.push(
           mkBox(
@@ -377,28 +421,26 @@ export function build3D(state, ctx) {
           )
         );
       } else {
-        // Left/Right run along Z; thickness extrudes +X.
-        // OUTSIDE face (per repo facts): x = origin.x + wallThk
-        // Inner face of cladding must touch outside face; cladding extends outward (+X) only.
-        const xOuterPlane = origin.x + wallThk;
+        // Left/Right run along Z; thickness extrudes along X.
+        // Place cladding so its INNER face lies exactly on the selected outside plane,
+        // and thickness extends entirely in the outward direction.
+        const xInner = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
 
-        // Bottom strip: full thickness (proud) — inner face touches wall outside face
-        const xBottom = xOuterPlane;
+        const xBottomMin = (outwardX > 0) ? xInner : (xInner - CLAD_T);
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
             CLAD_T,
             hBottomStrip,
             panelLen,
-            { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
+            { x: xBottomMin, y: yBottomStrip, z: origin.z + panelStart },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
         );
 
-        // Upper strip: recessed by rebate depth (visible lap) — inner face still touches wall outside face
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const xUpperMin = xOuterPlane;
+        const xUpperMin = (outwardX > 0) ? xInner : (xInner - tUpper);
 
         parts.push(
           mkBox(
