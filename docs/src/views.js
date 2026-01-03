@@ -10,6 +10,13 @@ export function initViews() {
   var controlPanel = document.getElementById("controlPanel");
   var uiLayer = document.getElementById("ui-layer");
 
+  // NEW: view snap buttons (optional; must not break if missing)
+  var snapPlanBtn = document.getElementById("snapPlanBtn");
+  var snapFrontBtn = document.getElementById("snapFrontBtn");
+  var snapBackBtn = document.getElementById("snapBackBtn");
+  var snapLeftBtn = document.getElementById("snapLeftBtn");
+  var snapRightBtn = document.getElementById("snapRightBtn");
+
   // Roof page is optional at init; required only when selecting roof view.
   if (!canvas || !basePage || !wallsPage || !viewSelect || !topbar) return;
 
@@ -178,6 +185,26 @@ export function initViews() {
     purgeSidebars(document);
     focusActive(v);
   }
+
+  function runSnap(viewName) {
+    // Always ensure 3D view is active before snapping.
+    applyView("3d", "snap");
+
+    // Defer one frame so attachControl/resize has run and matrices are stable.
+    requestAnimationFrame(function () {
+      try {
+        var hooks = window.__viewHooks || null;
+        if (hooks && typeof hooks.snapCameraToView === "function") hooks.snapCameraToView(viewName);
+      } catch (e) {}
+    });
+  }
+
+  // Wire snap buttons (if present)
+  if (snapPlanBtn)  snapPlanBtn.addEventListener("click",  function () { runSnap("plan"); });
+  if (snapFrontBtn) snapFrontBtn.addEventListener("click", function () { runSnap("front"); });
+  if (snapBackBtn)  snapBackBtn.addEventListener("click",  function () { runSnap("back"); });
+  if (snapLeftBtn)  snapLeftBtn.addEventListener("click",  function () { runSnap("left"); });
+  if (snapRightBtn) snapRightBtn.addEventListener("click", function () { runSnap("right"); });
 
   viewSelect.addEventListener("change", function (e) {
     var v = e && e.target ? e.target.value : "3d";
