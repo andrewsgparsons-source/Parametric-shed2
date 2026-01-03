@@ -1,4 +1,3 @@
-// FILE: docs/src/elements/walls.js
 /**
  * Build four walls. Coordinates:
  * - Front/Back run along X, thickness extrudes +Z.
@@ -457,13 +456,15 @@ export function build3D(state, ctx) {
         const boardCenterWorldZ = wallOutsideFaceWorld + outwardNormalZ * (CLAD_T / 2);
         const zBottomMin = boardCenterWorldZ - (CLAD_T / 2);
 
+        const xShift_mm = (Number.isFinite(xMin_mm) ? Math.max(0, xMin_mm - (origin.x + panelStart)) : 0);
+
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
             panelLen,
             hBottomStrip,
             CLAD_T,
-            { x: (Number.isFinite(xMin_mm) ? xMin_mm : (origin.x + panelStart)), y: yBottomStrip, z: zBottomMin },
+            { x: origin.x + panelStart + xShift_mm, y: yBottomStrip, z: zBottomMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
@@ -479,7 +480,7 @@ export function build3D(state, ctx) {
             panelLen,
             hUpperStrip,
             tUpper,
-            { x: (Number.isFinite(xMin_mm) ? xMin_mm : (origin.x + panelStart)), y: yUpperStrip, z: zUpperMin },
+            { x: origin.x + panelStart + xShift_mm, y: yUpperStrip, z: zUpperMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
@@ -494,13 +495,15 @@ export function build3D(state, ctx) {
         const boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T / 2);
         const xBottomMin = boardCenterWorldX - (CLAD_T / 2);
 
+        const zShift_mm = (Number.isFinite(zMin_mm) ? Math.max(0, zMin_mm - (origin.z + panelStart)) : 0);
+
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
             CLAD_T,
             hBottomStrip,
             panelLen,
-            { x: xBottomMin, y: yBottomStrip, z: (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + panelStart)) },
+            { x: xBottomMin, y: yBottomStrip, z: origin.z + panelStart + zShift_mm },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
@@ -516,7 +519,7 @@ export function build3D(state, ctx) {
             tUpper,
             hUpperStrip,
             panelLen,
-            { x: xUpperMin, y: yUpperStrip, z: (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + panelStart)) },
+            { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart + zShift_mm },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
