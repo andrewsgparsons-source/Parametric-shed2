@@ -41,38 +41,11 @@ export function build3D(state, ctx) {
       if (!m.isDisposed()) m.dispose(false, true);
     });
 
-  // Cladding debug v0.2: mesh counts + broader disposal to ensure no stray intermediates remain
-  let __cladBefore = 0;
-  let __cladAfter = 0;
-  try {
-    __cladBefore = (scene.meshes || []).filter((m) => m && String(m.name || "").startsWith("clad-")).length;
-  } catch (e) {}
-
-  // Cladding disposal v0.3: catch merged + any stray course parts (ONLY cladding-like names)
   scene.meshes
-    .filter((m) => {
-      if (!m) return false;
-      const nm = String(m.name || "");
-      const isCladLike = nm.startsWith("clad-") || (nm.includes("clad-") && nm.includes("-c"));
-      return isCladLike;
-    })
+    .filter((m) => m.metadata && m.metadata.dynamic === true && m.name.startsWith("clad-"))
     .forEach((m) => {
       if (!m.isDisposed()) m.dispose(false, true);
     });
-
-  try {
-    __cladAfter = (scene.meshes || []).filter((m) => m && String(m.name || "").startsWith("clad-")).length;
-    if (!window.__dbg) window.__dbg = {};
-    window.__dbg.claddingMeshCounts = { before: __cladBefore, after: __cladAfter };
-  } catch (e) {}
-
-  // DEBUG: cladding diagnostics
-  try {
-    if (!window.__dbg) window.__dbg = {};
-    if (!window.__dbg.cladding) window.__dbg.cladding = {};
-    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
-    if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
-  } catch (e) {}
 
   const dims = {
     w: Math.max(1, Math.floor(state.w)),
@@ -93,6 +66,14 @@ export function build3D(state, ctx) {
   const CLAD_Ht = 45;
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
+
+  // DEBUG containers
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    if (!window.__dbg.cladding) window.__dbg.cladding = {};
+    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+    window.__dbg.cladding.walls = {};
+  } catch (e) {}
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
 
@@ -221,628 +202,301 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight) {
+  // ---- Deferred cladding build (one frame later) ----
+  const claddingJobs = [];
+
+  // Unique per build3D invocation
+  const buildId = (() => {
+    try {
+      const n = Number(scene._claddingBuildSeq || 0) + 1;
+      scene._claddingBuildSeq = n;
+      return `${Date.now()}-${n}`;
+    } catch (e) {
+      return `${Date.now()}-0`;
+    }
+  })();
+
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    window.__dbg.claddingPass = {
+      buildId,
+      timestamp: Date.now(),
+      deferredScheduled: false,
+      deferredRan: false,
+      staleSkip: false,
+      claddingMeshesCreated: 0,
+      anchorsUsed: []
+    };
+  } catch (e) {}
+
+  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
     const mat = materials && materials.cladding ? materials.cladding : materials.timber;
 
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
-    if (courses < 1) return;
-
-    // Identify bottom plate mesh by current naming scheme.
-    const plateMeshName =
-      (variant === "basic")
-        ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
-        : `wall-${wallId}-plate-bottom`;
-
-    const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateMeshName) : null;
-
-    // Fail-safe: if missing bottom plate mesh, do not build cladding and report it.
-    if (!plateMesh || !plateMesh.getBoundingInfo) {
-      try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.cladding) window.__dbg.cladding = {};
-        if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
-        window.__dbg.cladding.missingPlates.push({ wallId, panelIndex, plateMeshName });
-      } catch (e) {}
-      return;
-    }
-
-    // Anchor in WORLD SPACE to bottom face of the bottom plate bounds (P_bottom).
-    let P_bottom_mm = null;
-    let P_top_mm = null;
-    try {
-      const bi = plateMesh.getBoundingInfo();
-      const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-      if (bb) {
-        if (bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) {
-          P_bottom_mm = Number(bb.minimumWorld.y) * 1000;
-        }
-        if (bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) {
-          P_top_mm = Number(bb.maximumWorld.y) * 1000;
-        }
-      }
-    } catch (e) {}
-
-    // Fail-safe if bounds not available.
-    if (!(Number.isFinite(P_bottom_mm))) {
-      try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.cladding) window.__dbg.cladding = {};
-        if (!window.__dbg.cladding.missingPlates) window.__dbg.cladding.missingPlates = [];
-        window.__dbg.cladding.missingPlates.push({ wallId, panelIndex, plateMeshName, reason: "noBounds" });
-      } catch (e) {}
-      return;
-    }
-
-    const minAllowed_mm = (P_bottom_mm - CLAD_DRIP);
-
-    // PHASE 2L-alt: remove underside (bottom face) of starter board mesh (-c0) by editing vertex data (NO CSG)
-    function removeBottomFaceFromBox(mesh) {
-      if (!mesh || !mesh.getVerticesData || !mesh.getIndices || !mesh.setIndices) return;
-      try {
-        const pos = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-        const idx = mesh.getIndices();
-        if (!pos || !idx || !idx.length) return;
-
-        // Find local-space minimum Y (bottom face plane for a box)
-        let minY = Number.POSITIVE_INFINITY;
-        for (let i = 1; i < pos.length; i += 3) {
-          const y = pos[i];
-          if (y < minY) minY = y;
-        }
-        if (!Number.isFinite(minY)) return;
-
-        const eps = 1e-6;
-        const newIdx = [];
-        for (let t = 0; t < idx.length; t += 3) {
-          const i0 = idx[t + 0] * 3;
-          const i1 = idx[t + 1] * 3;
-          const i2 = idx[t + 2] * 3;
-          const y0 = pos[i0 + 1];
-          const y1 = pos[i1 + 1];
-          const y2 = pos[i2 + 1];
-
-          const isBottomTri =
-            (y0 <= (minY + eps)) &&
-            (y1 <= (minY + eps)) &&
-            (y2 <= (minY + eps));
-
-          if (!isBottomTri) {
-            newIdx.push(idx[t + 0], idx[t + 1], idx[t + 2]);
-          }
-        }
-
-        // Apply filtered indices (removes downward-facing underside for the starter board)
-        mesh.setIndices(newIdx);
-
-        // Recompute normals for the edited topology
-        try {
-          const normals = [];
-          BABYLON.VertexData.ComputeNormals(pos, newIdx, normals);
-          if (normals && normals.length === pos.length) {
-            if (mesh.updateVerticesData) mesh.updateVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
-            else if (mesh.setVerticesData) mesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
-          }
-        } catch (e) {}
-
-        try {
-          if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
-          if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
-        } catch (e) {}
-      } catch (e) {}
-    }
-
-    // Cladding course bounds diag v0.1 (PHASE 2c): per-part metadata + bounds list before merge
-    function recordPartBounds(mesh, courseIndex) {
-      if (!mesh) return;
-      try {
-        window.__dbg = window.__dbg || {};
-        window.__dbg.cladCourseBounds = window.__dbg.cladCourseBounds || {};
-        window.__dbg.cladCourseBounds[wallId] = window.__dbg.cladCourseBounds[wallId] || {};
-        window.__dbg.cladCourseBounds[wallId][panelIndex] = window.__dbg.cladCourseBounds[wallId][panelIndex] || [];
-
-        try {
-          if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
-          if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
-        } catch (e) {}
-
-        let minY = null;
-        let maxY = null;
-        try {
-          if (mesh.getBoundingInfo) {
-            const bi = mesh.getBoundingInfo();
-            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
-            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
-          }
-        } catch (e) {}
-
-        window.__dbg.cladCourseBounds[wallId][panelIndex].push({
-          name: mesh.name || "",
-          courseIndex: courseIndex,
-          minY_mm: minY,
-          maxY_mm: maxY
-        });
-      } catch (e) {}
-    }
+    if (courses < 1) return { created: 0, anchor: null };
 
     const parts = [];
 
-    for (let i = 0; i < courses; i++) {
-      // Starter course: bottom must be exactly minAllowed (plateBottom - 30mm)
-      // All other courses unchanged.
-      const courseBottomEdgeY = (i === 0) ? minAllowed_mm : (P_bottom_mm + i * CLAD_H);
+    // Anchor cladding to TOP of the wall panel's own bottom plate (world-space), not assumed y=0.
+    let wallBottomPlateBottomY_mm = 0;
+    let wallBottomPlateTopY_mm = plateY;
+    let claddingAnchorY_mm = plateY;
+    let plateParent = null;
 
-      if (i === 0) {
-        // PHASE 2j: Starter course MUST be exactly one plain box (no bands/splits/trims)
-        // Create ONE full-height starter board only (CLAD_H tall), bottom at minAllowed.
-        if (isAlongX) {
-          const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
-          const zFull = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
+    try {
+      const plateName =
+        (variant === "basic")
+          ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
+          : `wall-${wallId}-plate-bottom`;
 
-          const m0 = mkBox(
-            `clad-${wallId}-panel-${panelIndex}-c0`,
-            panelLen,
-            CLAD_H,
-            CLAD_T,
-            { x: origin.x + panelStart, y: courseBottomEdgeY, z: zFull },
-            mat,
-            { wallId, panelIndex, course: 0, type: "cladding", part: "starter", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
-          );
-
-          // PHASE 2L-alt: delete underside face on starter only
-          removeBottomFaceFromBox(m0);
-
-          try {
-            m0.metadata = Object.assign({}, m0.metadata || {}, { wallId, panelIndex, courseIndex: 0, courseKind: "starter" });
-          } catch (e) {}
-          parts.push(m0);
-          recordPartBounds(m0, 0);
-        } else {
-          const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
-          const xFull = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
-
-          const m0 = mkBox(
-            `clad-${wallId}-panel-${panelIndex}-c0`,
-            CLAD_T,
-            CLAD_H,
-            panelLen,
-            { x: xFull, y: courseBottomEdgeY, z: origin.z + panelStart },
-            mat,
-            { wallId, panelIndex, course: 0, type: "cladding", part: "starter", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
-          );
-
-          // PHASE 2L-alt: delete underside face on starter only
-          removeBottomFaceFromBox(m0);
-
-          try {
-            m0.metadata = Object.assign({}, m0.metadata || {}, { wallId, panelIndex, courseIndex: 0, courseKind: "starter" });
-          } catch (e) {}
-          parts.push(m0);
-          recordPartBounds(m0, 0);
-        }
-
-        continue;
+      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+      if (plateMesh) {
+        plateParent = plateMesh.parent || null;
       }
+      if (plateMesh && plateMesh.getBoundingInfo) {
+        const bi = plateMesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (bb && bb.minimumWorld && bb.maximumWorld) {
+          wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
+          wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
+          claddingAnchorY_mm = wallBottomPlateTopY_mm;
+        }
+      }
+    } catch (e) {}
 
-      // Existing behavior (i >= 1): split bottom/upper strips for shiplap profile
-      const yBottomStrip = courseBottomEdgeY;
-      const hBottomStrip = CLAD_Hb;
+    // DEBUG per wall/panel anchor (and per wall requested earlier)
+    try {
+      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
+      const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
 
-      const yUpperStrip = courseBottomEdgeY + CLAD_Hb;
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.cladding) window.__dbg.cladding = {};
+      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+
+      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
+      window.__dbg.cladding.walls[wallId].push({
+        wallId,
+        wallBottomPlateTopY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm,
+        firstCourseBottomY_mm,
+        expectedFirstCourseBottomY_mm,
+        delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+      });
+
+      if (buildPass && buildPass.anchorsUsed) {
+        buildPass.anchorsUsed.push({
+          wallId,
+          panelIndex,
+          wallBottomPlateTopY_mm,
+          wallBottomPlateBottomY_mm,
+          claddingAnchorY_mm,
+          firstCourseBottomY_mm,
+          expectedFirstCourseBottomY_mm,
+          delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+        });
+      }
+    } catch (e) {}
+
+    for (let i = 0; i < courses; i++) {
+      const yBase = claddingAnchorY_mm + i * CLAD_H;
+      const isFirst = i === 0;
+
+      // Drip: first course only; bottom edge at (claddingAnchorY_mm - 30mm)
+      // Implemented as bottom-only extension (no change to X/Z extents)
+      const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
+      const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
+
+      const yUpperStrip = yBase + CLAD_Hb;
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
+        // Front/Back run along X; thickness extrudes +Z.
+        // Outside faces:
+        // - front => outside at z = origin.z (negative Z direction)
+        // - back  => outside at z = origin.z + wallThk (positive Z direction)
         const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
 
+        // Bottom strip: full thickness (proud)
         const zBottom = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
-        const mBot = mkBox(
-          `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
-          panelLen,
-          hBottomStrip,
-          CLAD_T,
-          { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
-          mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
+            panelLen,
+            hBottomStrip,
+            CLAD_T,
+            { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
         );
-        try {
-          mBot.metadata = Object.assign({}, mBot.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "bottom" });
-        } catch (e) {}
-        parts.push(mBot);
-        recordPartBounds(mBot, i);
 
+        // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
         const zUpper = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
+
+        // For front: shift inward +5 (toward +Z) by moving min z forward by +5.
+        // For back : keep min at outer plane; reduced thickness naturally recesses outer face by 5.
         const zUpperMin = (wallId === "front") ? (zUpper + CLAD_Rb) : zUpper;
 
-        const mUp = mkBox(
-          `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
-          panelLen,
-          hUpperStrip,
-          tUpper,
-          { x: origin.x + panelStart, y: yUpperStrip, z: zUpperMin },
-          mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
+            panelLen,
+            hUpperStrip,
+            tUpper,
+            { x: origin.x + panelStart, y: yUpperStrip, z: zUpperMin },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
         );
-        try {
-          mUp.metadata = Object.assign({}, mUp.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "upper" });
-        } catch (e) {}
-        parts.push(mUp);
-        recordPartBounds(mUp, i);
       } else {
+        // Left/Right run along Z; thickness extrudes +X.
+        // Outside faces:
+        // - left  => outside at x = origin.x (negative X direction)
+        // - right => outside at x = origin.x + wallThk (positive X direction)
         const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
 
+        // Bottom strip: full thickness (proud)
         const xBottom = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
-        const mBot = mkBox(
-          `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
-          CLAD_T,
-          hBottomStrip,
-          panelLen,
-          { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
-          mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
+            CLAD_T,
+            hBottomStrip,
+            panelLen,
+            { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
         );
-        try {
-          mBot.metadata = Object.assign({}, mBot.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "bottom" });
-        } catch (e) {}
-        parts.push(mBot);
-        recordPartBounds(mBot, i);
 
+        // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
+
+        // For left: shift inward +5 (toward +X) by moving min x forward by +5.
+        // For right: keep min at outer plane; reduced thickness naturally recesses outer face by 5.
         const xUpperMin = (wallId === "left") ? ((xOuterPlane - CLAD_T) + CLAD_Rb) : xOuterPlane;
 
-        const mUp = mkBox(
-          `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
-          tUpper,
-          hUpperStrip,
-          panelLen,
-          { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart },
-          mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+        parts.push(
+          mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
+            tUpper,
+            hUpperStrip,
+            panelLen,
+            { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart },
+            mat,
+            { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          )
         );
-        try {
-          mUp.metadata = Object.assign({}, mUp.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "upper" });
-        } catch (e) {}
-        parts.push(mUp);
-        recordPartBounds(mUp, i);
       }
     }
 
-    // PHASE 2e debug v0.1: partsBeforeMerge dump + lowest-by-minY log (NO GEOMETRY CHANGES)
-    try {
-      window.__dbg = window.__dbg || {};
-      window.__dbg.partsBeforeMerge = window.__dbg.partsBeforeMerge || {};
-      window.__dbg.partsBeforeMerge[wallId] = window.__dbg.partsBeforeMerge[wallId] || {};
-      window.__dbg.partsBeforeMerge[wallId][panelIndex] = parts.map((p) => {
-        let minY = null;
-        let maxY = null;
-        try {
-          if (p && p.computeWorldMatrix) p.computeWorldMatrix(true);
-          if (p && p.refreshBoundingInfo) p.refreshBoundingInfo(true);
-          if (p && p.getBoundingInfo) {
-            const bi = p.getBoundingInfo();
-            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
-            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
-          }
-        } catch (e) {}
-        return {
-          name: p && p.name ? p.name : "",
-          courseIndex: p && p.metadata ? p.metadata.courseIndex : undefined,
-          minY_mm: minY,
-          maxY_mm: maxY
-        };
-      });
-
-      const arrBM = window.__dbg.partsBeforeMerge[wallId][panelIndex] || [];
-      let lowest = null;
-      for (let i = 0; i < arrBM.length; i++) {
-        const e = arrBM[i];
-        const y = Number(e && e.minY_mm);
-        if (!Number.isFinite(y)) continue;
-        if (!lowest || y < Number(lowest.minY_mm)) lowest = e;
-      }
-      console.log("CLAD_BEFORE_MERGE_LOWEST", wallId, panelIndex, lowest);
-    } catch (e) {}
-
-    // TASK 3 (from PHASE 2c): compact summary log (first 10 entries sorted by minY_mm)
-    try {
-      const arr = (((window.__dbg || {}).cladCourseBounds || {})[wallId] || {})[panelIndex] || [];
-      const sorted = arr.slice().sort((a, b) => {
-        const ay = Number.isFinite(Number(a && a.minY_mm)) ? Number(a.minY_mm) : Number.POSITIVE_INFINITY;
-        const by = Number.isFinite(Number(b && b.minY_mm)) ? Number(b && b.minY_mm) : Number.POSITIVE_INFINITY;
-        return ay - by;
-      });
-      console.log("CLAD_COURSE_BOUNDS", wallId, panelIndex, sorted.slice(0, 10));
-    } catch (e) {}
-
-    // Merge into one mesh per panel (existing behavior retained)
+    // Merge into one mesh per panel
     let merged = null;
     try {
-      // Cladding merge v0.4: allow multiMultiMaterials=true (per task), still disposing strays explicitly below
-      merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, true);
+      merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
     } catch (e) {
       merged = null;
     }
 
-    // PHASE 2e debug v0.1: partsAfterMerge dump + minY log (NO GEOMETRY CHANGES)
-    try {
-      window.__dbg = window.__dbg || {};
-      window.__dbg.partsAfterMerge = window.__dbg.partsAfterMerge || {};
-      window.__dbg.partsAfterMerge[wallId] = window.__dbg.partsAfterMerge[wallId] || {};
-      if (merged) {
-        try {
-          if (merged.computeWorldMatrix) merged.computeWorldMatrix(true);
-          if (merged.refreshBoundingInfo) merged.refreshBoundingInfo(true);
-        } catch (e) {}
+    let created = 0;
 
-        let minY = null;
-        let maxY = null;
-        try {
-          if (merged.getBoundingInfo) {
-            const bi = merged.getBoundingInfo();
-            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
-            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
-          }
-        } catch (e) {}
-
-        window.__dbg.partsAfterMerge[wallId][panelIndex] = {
-          mergedName: merged.name || "",
-          minY_mm: minY,
-          maxY_mm: maxY
-        };
-
-        console.log("CLAD_AFTER_MERGE_MINY", wallId, panelIndex, minY);
-      } else {
-        window.__dbg.partsAfterMerge[wallId][panelIndex] = null;
-        console.log("CLAD_AFTER_MERGE_MINY", wallId, panelIndex, null);
-      }
-    } catch (e) {}
-
-    // Cladding debug v0.4: guarantee NO stray course pieces remain after merge
     if (merged) {
-      for (let i = 0; i < parts.length; i++) {
-        const pm = parts[i];
-        if (!pm) continue;
-        try {
-          if (pm === merged) continue;
-          if (!pm.isDisposed()) pm.dispose(false, true);
-        } catch (e) {}
+      merged.name = `clad-${wallId}-panel-${panelIndex}`;
+      merged.material = mat;
+      merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
+      if (plateParent) merged.parent = plateParent;
+      created = 1;
+    } else {
+      // If merge failed for any reason, keep parts as-is; still bind them to the wall's parent if present.
+      if (plateParent) {
+        for (let i = 0; i < parts.length; i++) {
+          try { parts[i].parent = plateParent; } catch (e) {}
+        }
       }
+      created = parts.length;
     }
 
-    const computed_C0_bottom_mm = (P_bottom_mm - CLAD_DRIP);
-    const expected_C0_bottom_mm = (P_bottom_mm - 30);
-    const delta_mm = computed_C0_bottom_mm - expected_C0_bottom_mm;
+    return {
+      created,
+      anchor: {
+        wallId,
+        panelIndex,
+        wallBottomPlateTopY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm
+      }
+    };
+  }
+
+  function scheduleDeferredCladdingPass() {
+    try {
+      scene._pendingCladding = { buildId, jobs: claddingJobs };
+    } catch (e) {}
 
     try {
       if (!window.__dbg) window.__dbg = {};
-      if (!window.__dbg.cladding) window.__dbg.cladding = {};
-      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
-      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
-      window.__dbg.cladding.walls[wallId].push({
-        wallId,
-        panelIndex,
-        plateMeshName,
-        P_bottom_mm,
-        P_top_mm,
-        plateFaceUsed: "BOTTOM",
-        claddingFaceUsed: "BOTTOM_EDGE",
-        computed_C0_bottom_mm,
-        expected_C0_bottom_mm,
-        delta_mm,
-      });
+      if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+      window.__dbg.claddingPass.deferredScheduled = true;
     } catch (e) {}
 
-    function hardClipMeshToMinAllowed(mesh) {
-      if (!mesh) return;
-      try {
-        if (!mesh.getVerticesData || !mesh.updateVerticesData) return;
-        const pos = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-        if (!pos || !pos.length) return;
+    try {
+      if (scene && scene.onBeforeRenderObservable && scene.onBeforeRenderObservable.addOnce) {
+        scene.onBeforeRenderObservable.addOnce(() => {
+          let pending = null;
+          try { pending = scene._pendingCladding || null; } catch (e) {}
 
-        const minAllowed_m = minAllowed_mm / 1000;
-
-        // Cladding clip v0.1: force world matrix up-to-date before world-space clamping
-        if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
-
-        const wm = mesh.getWorldMatrix ? mesh.getWorldMatrix() : null;
-        if (!wm) return;
-
-        const inv = new BABYLON.Matrix();
-        wm.invertToRef(inv);
-
-        const vLocal = new BABYLON.Vector3(0, 0, 0);
-        const vWorld = new BABYLON.Vector3(0, 0, 0);
-        const vBack = new BABYLON.Vector3(0, 0, 0);
-
-        for (let i = 0; i < pos.length; i += 3) {
-          vLocal.x = pos[i + 0];
-          vLocal.y = pos[i + 1];
-          vLocal.z = pos[i + 2];
-
-          BABYLON.Vector3.TransformCoordinatesToRef(vLocal, wm, vWorld);
-
-          if (vWorld.y < minAllowed_m) {
-            vWorld.y = minAllowed_m;
-            BABYLON.Vector3.TransformCoordinatesToRef(vWorld, inv, vBack);
-            pos[i + 1] = vBack.y;
+          let stale = false;
+          try {
+            stale = !(pending && String(pending.buildId || "") === String(buildId));
+          } catch (e) {
+            stale = true;
           }
-        }
 
-        mesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind, pos, true);
-        if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
-        if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
-      } catch (e) {}
-    }
-
-    function getMeshMinYmm(mesh) {
-      try {
-        if (!mesh || !mesh.getBoundingInfo) return null;
-        // Cladding clip v0.1: ensure boundingBox.minimumWorld is current
-        if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
-        if (mesh.refreshBoundingInfo) mesh.refreshBoundingInfo(true);
-        const bi = mesh.getBoundingInfo();
-        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-        if (!bb || !bb.minimumWorld) return null;
-        const y = Number(bb.minimumWorld.y);
-        if (!Number.isFinite(y)) return null;
-        return y * 1000;
-      } catch (e) {
-        return null;
-      }
-    }
-
-    if (merged) {
-      // Cladding debug v0.1 (PHASE 1 proof)
-      const __cladStamp = Date.now();
-
-      // 3) CONSOLE LOG (once per wall/panel)
-      console.log("CLADDING_ACTIVE", wallId, panelIndex, __cladStamp);
-
-      // 1) STAMP NAME (prove this exact merge path is running in deployed build)
-      merged.name = `clad-${wallId}-panel-${panelIndex}-STAMP-${__cladStamp}`;
-
-      // 2) OBVIOUS MATERIAL (cladding-only; do not mutate shared timber/plate/cladding material)
-      let __cladDbgMat = null;
-      try {
-        if (mat && typeof mat.clone === "function") {
-          __cladDbgMat = mat.clone(`cladDbgMat-${wallId}-${panelIndex}-${__cladStamp}`);
-        } else {
-          __cladDbgMat = new BABYLON.StandardMaterial(`cladDbgMat-${wallId}-${panelIndex}-${__cladStamp}`, scene);
-        }
-        __cladDbgMat.diffuseColor = new BABYLON.Color3(1, 0, 0); // bright red
-        __cladDbgMat.alpha = 0.20;
-      } catch (e) {
-        __cladDbgMat = mat;
-      }
-
-      merged.material = __cladDbgMat;
-      merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
-      try {
-        // Keep cladding in same transform space as the plate mesh (avoid wall-vs-cladding drift)
-        merged.parent = plateMesh.parent || null;
-      } catch (e) {}
-
-      // ---- PHASE 2 REAL FIX (least invasive): C) post-process merged mesh vertex positions ----
-      // LOCKED RULE: no cladding vertices may exist below minAllowed (P_bottom - 30mm), tolerance 1mm.
-      const tol_mm = 1;
-
-      let preMinY = getMeshMinYmm(merged);
-      if (Number.isFinite(preMinY) && preMinY < (minAllowed_mm - tol_mm)) {
-        hardClipMeshToMinAllowed(merged);
-
-        // If the parent/world matrix changes after the first clip, re-evaluate once.
-        let checkMinY = getMeshMinYmm(merged);
-        if (Number.isFinite(checkMinY) && checkMinY < (minAllowed_mm - tol_mm)) {
-          hardClipMeshToMinAllowed(merged);
-        }
-      }
-
-      // PHASE 2k: render/shading artifact mitigation on merged cladding (NO GEOMETRY CHANGES)
-      // 1) force double-sided on this merged mesh only (do not mutate shared materials)
-      try {
-        if (merged.material) {
-          // If somehow we're still holding a shared instance, clone before mutating.
-          if (merged.material === mat) {
-            let m2 = null;
+          if (stale) {
             try {
-              if (mat && typeof mat.clone === "function") {
-                m2 = mat.clone(`cladMat2-${wallId}-${panelIndex}-${__cladStamp}`);
-              }
+              if (!window.__dbg) window.__dbg = {};
+              if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+              window.__dbg.claddingPass.deferredRan = false;
+              window.__dbg.claddingPass.staleSkip = true;
             } catch (e) {}
-            if (!m2) {
-              try {
-                m2 = new BABYLON.StandardMaterial(`cladMat2-${wallId}-${panelIndex}-${__cladStamp}`, scene);
-                if (mat && mat.diffuseColor) m2.diffuseColor = mat.diffuseColor.clone ? mat.diffuseColor.clone() : mat.diffuseColor;
-                if (mat && mat.alpha !== undefined) m2.alpha = mat.alpha;
-                if (mat && mat.specularColor) m2.specularColor = mat.specularColor.clone ? mat.specularColor.clone() : mat.specularColor;
-              } catch (e) { m2 = null; }
-            }
-            if (m2) merged.material = m2;
+            return;
           }
-          merged.material.backFaceCulling = false;
-        }
-      } catch (e) {}
 
-      // 2) recompute normals on merged mesh
-      try {
-        const pos = merged.getVerticesData ? merged.getVerticesData(BABYLON.VertexBuffer.PositionKind) : null;
-        const idx = merged.getIndices ? merged.getIndices() : null;
-        if (pos && idx && idx.length) {
-          const normals = [];
-          BABYLON.VertexData.ComputeNormals(pos, idx, normals);
-          if (normals && normals.length === pos.length) {
-            if (merged.updateVerticesData) {
-              merged.updateVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
-            } else if (merged.setVerticesData) {
-              merged.setVerticesData(BABYLON.VertexBuffer.NormalKind, normals, true);
-            }
-          }
-        }
-      } catch (e) {}
+          let createdCount = 0;
 
-      let postMinY = getMeshMinYmm(merged);
-
-      // Required report structure
-      try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.claddingClipReport) window.__dbg.claddingClipReport = {};
-        if (!window.__dbg.claddingClipReport[wallId]) window.__dbg.claddingClipReport[wallId] = {};
-        window.__dbg.claddingClipReport[wallId][panelIndex] = {
-          minWorldY_mm: postMinY,
-          minAllowed_mm: minAllowed_mm,
-          delta_mm: (Number.isFinite(postMinY) ? (postMinY - minAllowed_mm) : null),
-        };
-      } catch (e) {}
-
-      // Existing debug stream retained
-      if (Number.isFinite(postMinY) && postMinY < (minAllowed_mm - tol_mm)) {
-        try {
-          if (!window.__dbg) window.__dbg = {};
-          if (!window.__dbg.claddingClip) window.__dbg.claddingClip = [];
-          window.__dbg.claddingClip.push({
-            wallId,
-            panelIndex,
-            cladMinY_mm: postMinY,
-            minAllowed_mm: minAllowed_mm,
-            delta_mm: (postMinY - minAllowed_mm),
-          });
-        } catch (e) {}
-      }
-    } else {
-      // If merge failed for any reason, keep parts as-is; still bind them to the wall's transform chain.
-      const p = plateMesh.parent || null;
-      if (p) {
-        for (let i = 0; i < parts.length; i++) {
-          try { parts[i].parent = p; } catch (e) {}
-        }
-      }
-
-      // HARD CLIP fallback: apply to each part if merge failed
-      for (let i = 0; i < parts.length; i++) {
-        let preMinY = getMeshMinYmm(parts[i]);
-        if (Number.isFinite(preMinY) && preMinY < minAllowed_mm) {
-          hardClipMeshToMinAllowed(parts[i]);
-        }
-        let postMinY = getMeshMinYmm(parts[i]);
-        if (Number.isFinite(postMinY) && postMinY < minAllowed_mm) {
           try {
             if (!window.__dbg) window.__dbg = {};
-            if (!window.__dbg.claddingClip) window.__dbg.claddingClip = [];
-            window.__dbg.claddingClip.push({
-              wallId,
-              panelIndex,
-              cladMinY_mm: postMinY,
-              minAllowed_mm: minAllowed_mm,
-              delta_mm: (postMinY - minAllowed_mm),
-              part: (parts[i] && parts[i].name) ? parts[i].name : "",
-            });
+            if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+            if (!window.__dbg.claddingPass.anchorsUsed) window.__dbg.claddingPass.anchorsUsed = [];
           } catch (e) {}
-        }
+
+          const passDbg = (() => {
+            try {
+              return window.__dbg && window.__dbg.claddingPass ? window.__dbg.claddingPass : null;
+            } catch (e) {
+              return null;
+            }
+          })();
+
+          for (let i = 0; i < claddingJobs.length; i++) {
+            const j = claddingJobs[i];
+            const res = addCladdingForPanel(j.wallId, j.axis, j.panelIndex, j.panelStart, j.panelLen, j.origin, j.panelHeight, passDbg);
+            if (res && Number.isFinite(res.created)) createdCount += res.created;
+          }
+
+          try {
+            if (!window.__dbg) window.__dbg = {};
+            if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+            window.__dbg.claddingPass.deferredRan = true;
+            window.__dbg.claddingPass.staleSkip = false;
+            window.__dbg.claddingPass.claddingMeshesCreated = createdCount;
+          } catch (e) {}
+        });
       }
-    }
+    } catch (e) {}
   }
 
   function doorIntervalsForWall(wallId) {
@@ -1299,7 +953,15 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        addCladdingForPanel(wallId, axis, (p + 1), pan.start, pan.len, origin, panelH);
+        claddingJobs.push({
+          wallId,
+          axis,
+          panelIndex: (p + 1),
+          panelStart: pan.start,
+          panelLen: pan.len,
+          origin,
+          panelHeight: panelH
+        });
       }
 
       return;
@@ -1357,7 +1019,16 @@ export function build3D(state, ctx) {
       const h1 = heightAtX(origin.x + length);
       panelH = Math.min(h0, h1);
     }
-    addCladdingForPanel(wallId, axis, 1, 0, length, origin, panelH);
+
+    claddingJobs.push({
+      wallId,
+      axis,
+      panelIndex: 1,
+      panelStart: 0,
+      panelLen: length,
+      origin,
+      panelHeight: panelH
+    });
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
@@ -1368,37 +1039,8 @@ export function build3D(state, ctx) {
   if (flags.left) buildWall("left", "z", sideLenZ, { x: 0, z: wallThk });
   if (flags.right) buildWall("right", "z", sideLenZ, { x: dims.w - wallThk, z: wallThk });
 
-  // Cladding audit v0.1: dump any cladding-like meshes AFTER build (debug only)
-  try {
-    if (!window.__dbg) window.__dbg = {};
-    window.__dbg.cladMeshNames = (scene.meshes || [])
-      .filter((m) => m && !m.isDisposed && m.isDisposed ? false : (!!m && !m.isDisposed()))
-      .filter((m) => m && typeof m.name === "string" && (
-        m.name.startsWith("clad-") || m.name.includes("clad") || m.name.includes("ship")
-      ))
-      .map((m) => {
-        let minY = null;
-        let maxY = null;
-        try {
-          if (m.getBoundingInfo) {
-            const bi = m.getBoundingInfo();
-            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
-            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
-          }
-        } catch (e) {}
-        return {
-          name: m.name,
-          parent: m.parent ? m.parent.name : null,
-          minY: minY,
-          maxY: maxY,
-          meta: m.metadata || null
-        };
-      });
-
-    console.log("CLAD_MESH_COUNT", window.__dbg.cladMeshNames.length,
-      (window.__dbg.cladMeshNames || []).slice(0, 10).map((x) => x && x.name ? x.name : ""));
-  } catch (e) {}
+  // Schedule one-shot deferred cladding build (one frame later)
+  scheduleDeferredCladdingPass();
 }
 
 function resolveProfile(state, variant) {
@@ -1660,7 +1302,6 @@ export function updateBOM(state) {
         // Panel contents (all include L/W/D)
         sections.push([`  Bottom Plate`, 1, pan.len, plateY, wallThk, ""]);
         sections.push([`  Top Plate`, 1, pan.len, plateY, wallThk, ""]);
-
 
         if (variant === "basic") {
           // Mirrors current basic wall panel stud policy (3 studs per panel in buildBasicPanel; suppression is geometric-only)
