@@ -457,11 +457,12 @@ export function build3D(state, ctx) {
         const zBottomMin = boardCenterWorldZ - (CLAD_T / 2);
 
         const xShift_mm = (Number.isFinite(xMin_mm) ? Math.max(0, xMin_mm - (origin.x + panelStart)) : 0);
+        const panelLenAdj = Math.max(1, panelLen - xShift_mm);
 
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
-            panelLen,
+            panelLenAdj,
             hBottomStrip,
             CLAD_T,
             { x: origin.x + panelStart + xShift_mm, y: yBottomStrip, z: zBottomMin },
@@ -477,7 +478,7 @@ export function build3D(state, ctx) {
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
-            panelLen,
+            panelLenAdj,
             hUpperStrip,
             tUpper,
             { x: origin.x + panelStart + xShift_mm, y: yUpperStrip, z: zUpperMin },
@@ -496,13 +497,14 @@ export function build3D(state, ctx) {
         const xBottomMin = boardCenterWorldX - (CLAD_T / 2);
 
         const zShift_mm = (Number.isFinite(zMin_mm) ? Math.max(0, zMin_mm - (origin.z + panelStart)) : 0);
+        const panelLenAdj = Math.max(1, panelLen - zShift_mm);
 
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
             CLAD_T,
             hBottomStrip,
-            panelLen,
+            panelLenAdj,
             { x: xBottomMin, y: yBottomStrip, z: origin.z + panelStart + zShift_mm },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
@@ -518,7 +520,7 @@ export function build3D(state, ctx) {
             `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
             tUpper,
             hUpperStrip,
-            panelLen,
+            panelLenAdj,
             { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart + zShift_mm },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
