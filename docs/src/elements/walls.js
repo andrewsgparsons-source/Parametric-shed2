@@ -228,14 +228,33 @@ export function build3D(state, ctx) {
       anchorsUsed: [],
       jobsCount: 0,
       jobsProcessedByWallId: {},
-      meshesCreatedByWallId: {}
+      meshesCreatedByWallId: {},
+      sampleOutsideByWallId: {}
     };
   } catch (e) {}
 
   function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
 
-    const mat = materials && materials.cladding ? materials.cladding : materials.timber;
+    // Light cladding material (do NOT mutate shared materials)
+    let mat = materials && materials.cladding ? materials.cladding : materials.timber;
+    try {
+      if (!scene._claddingMatLight) {
+        let base = (materials && materials.cladding) ? materials.cladding : null;
+        let m = null;
+        if (base && base.clone) {
+          m = base.clone("claddingMatLight");
+        } else {
+          m = new BABYLON.StandardMaterial("claddingMatLight", scene);
+        }
+        if (m) {
+          m.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+          try { m.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); } catch (e) {}
+          scene._claddingMatLight = m;
+        }
+      }
+      if (scene._claddingMatLight) mat = scene._claddingMatLight;
+    } catch (e) {}
 
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
     if (courses < 1) return { created: 0, anchor: null };
@@ -248,10 +267,10 @@ export function build3D(state, ctx) {
     let claddingAnchorY_mm = plateY;
     let plateParent = null;
 
-    let bbMinX_mm = null;
-    let bbMaxX_mm = null;
-    let bbMinZ_mm = null;
-    let bbMaxZ_mm = null;
+    let xMin_mm = null;
+    let xMax_mm = null;
+    let zMin_mm = null;
+    let zMax_mm = null;
 
     try {
       const plateName =
@@ -271,73 +290,95 @@ export function build3D(state, ctx) {
           wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
           claddingAnchorY_mm = wallBottomPlateTopY_mm;
 
-          bbMinX_mm = Number(bb.minimumWorld.x) * 1000;
-          bbMaxX_mm = Number(bb.maximumWorld.x) * 1000;
-          bbMinZ_mm = Number(bb.minimumWorld.z) * 1000;
-          bbMaxZ_mm = Number(bb.maximumWorld.z) * 1000;
+          xMin_mm = Number(bb.minimumWorld.x) * 1000;
+          xMax_mm = Number(bb.maximumWorld.x) * 1000;
+          zMin_mm = Number(bb.minimumWorld.z) * 1000;
+          zMax_mm = Number(bb.maximumWorld.z) * 1000;
         }
       }
     } catch (e) {}
 
-    // Robust outside-plane selection (geometry-derived) with deterministic fallback ONLY when bbox is invalid
+    // Determine outside plane + outward sign per panel (bbox-derived), with deterministic fallback ONLY if bbox invalid
     let outsidePlaneZ_mm = null;
-    let outwardZ = 1;
+    let outwardSignZ = 1;
     let outsidePlaneX_mm = null;
-    let outwardX = 1;
+    let outwardSignX = 1;
 
     try {
       if (isAlongX) {
-        const originZ = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
+        const originFaceZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
 
-        const hasZ = Number.isFinite(bbMinZ_mm) && Number.isFinite(bbMaxZ_mm);
+        const hasZ = Number.isFinite(zMin_mm) && Number.isFinite(zMax_mm);
         if (hasZ) {
-          const dMin = Math.abs(bbMinZ_mm - originZ);
-          const dMax = Math.abs(bbMaxZ_mm - originZ);
-          if (dMin < dMax) outsidePlaneZ_mm = bbMaxZ_mm;
-          else outsidePlaneZ_mm = bbMinZ_mm;
-
-          outwardZ = (outsidePlaneZ_mm === bbMaxZ_mm) ? 1 : -1;
+          const dMin = Math.abs(zMin_mm - originFaceZ_mm);
+          const dMax = Math.abs(zMax_mm - originFaceZ_mm);
+          const originPlaneZ = (dMin < dMax) ? zMin_mm : zMax_mm;
+          outsidePlaneZ_mm = (originPlaneZ === zMin_mm) ? zMax_mm : zMin_mm;
+          outwardSignZ = (outsidePlaneZ_mm === zMax_mm) ? 1 : -1;
         } else {
-          // Fallback: deterministic outward direction per wallId (ONLY when bbox detection fails)
           if (String(wallId) === "front") {
-            outwardZ = -1;
-            outsidePlaneZ_mm = originZ;
+            outwardSignZ = -1;
+            outsidePlaneZ_mm = originFaceZ_mm;
           } else if (String(wallId) === "back") {
-            outwardZ = 1;
-            outsidePlaneZ_mm = originZ + wallThk;
+            outwardSignZ = 1;
+            outsidePlaneZ_mm = originFaceZ_mm + wallThk;
           } else {
-            outwardZ = 1;
-            outsidePlaneZ_mm = originZ + wallThk;
+            outwardSignZ = 1;
+            outsidePlaneZ_mm = originFaceZ_mm + wallThk;
           }
         }
+
+        try {
+          if (buildPass && buildPass.sampleOutsideByWallId) {
+            const k = String(wallId || "");
+            if (!buildPass.sampleOutsideByWallId[k]) {
+              buildPass.sampleOutsideByWallId[k] = {
+                axis,
+                outsidePlane_mm: outsidePlaneZ_mm,
+                outwardSign: outwardSignZ
+              };
+            }
+          }
+        } catch (e) {}
       } else {
-        const originX = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
+        const originFaceX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
 
-        const hasX = Number.isFinite(bbMinX_mm) && Number.isFinite(bbMaxX_mm);
+        const hasX = Number.isFinite(xMin_mm) && Number.isFinite(xMax_mm);
         if (hasX) {
-          const dMin = Math.abs(bbMinX_mm - originX);
-          const dMax = Math.abs(bbMaxX_mm - originX);
-          if (dMin < dMax) outsidePlaneX_mm = bbMaxX_mm;
-          else outsidePlaneX_mm = bbMinX_mm;
-
-          outwardX = (outsidePlaneX_mm === bbMaxX_mm) ? 1 : -1;
+          const dMin = Math.abs(xMin_mm - originFaceX_mm);
+          const dMax = Math.abs(xMax_mm - originFaceX_mm);
+          const originPlaneX = (dMin < dMax) ? xMin_mm : xMax_mm;
+          outsidePlaneX_mm = (originPlaneX === xMin_mm) ? xMax_mm : xMin_mm;
+          outwardSignX = (outsidePlaneX_mm === xMax_mm) ? 1 : -1;
         } else {
-          // Fallback: deterministic outward direction per wallId (ONLY when bbox detection fails)
           if (String(wallId) === "left") {
-            outwardX = -1;
-            outsidePlaneX_mm = originX;
+            outwardSignX = -1;
+            outsidePlaneX_mm = originFaceX_mm;
           } else if (String(wallId) === "right") {
-            outwardX = 1;
-            outsidePlaneX_mm = originX + wallThk;
+            outwardSignX = 1;
+            outsidePlaneX_mm = originFaceX_mm + wallThk;
           } else {
-            outwardX = 1;
-            outsidePlaneX_mm = originX + wallThk;
+            outwardSignX = 1;
+            outsidePlaneX_mm = originFaceX_mm + wallThk;
           }
         }
+
+        try {
+          if (buildPass && buildPass.sampleOutsideByWallId) {
+            const k = String(wallId || "");
+            if (!buildPass.sampleOutsideByWallId[k]) {
+              buildPass.sampleOutsideByWallId[k] = {
+                axis,
+                outsidePlane_mm: outsidePlaneX_mm,
+                outwardSign: outwardSignX
+              };
+            }
+          }
+        } catch (e) {}
       }
     } catch (e) {}
 
-    // DEBUG per wall/panel anchor (and per wall requested earlier)
+    // DEBUG per wall/panel anchor
     try {
       const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
       const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
@@ -385,11 +426,10 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
-        // Place cladding so its INNER face lies exactly on the selected outside plane,
-        // and thickness extends entirely in the outward direction.
-        const zInner = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
+        const outsidePlane = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
 
-        const zBottomMin = (outwardZ > 0) ? zInner : (zInner - CLAD_T);
+        // INNER face on outsidePlane; thickness extends outward
+        const zBottomMin = (outwardSignZ > 0) ? outsidePlane : (outsidePlane - CLAD_T);
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -403,7 +443,7 @@ export function build3D(state, ctx) {
         );
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const zUpperMin = (outwardZ > 0) ? zInner : (zInner - tUpper);
+        const zUpperMin = (outwardSignZ > 0) ? outsidePlane : (outsidePlane - tUpper);
 
         parts.push(
           mkBox(
@@ -417,11 +457,10 @@ export function build3D(state, ctx) {
           )
         );
       } else {
-        // Place cladding so its INNER face lies exactly on the selected outside plane,
-        // and thickness extends entirely in the outward direction.
-        const xInner = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
+        const outsidePlane = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
 
-        const xBottomMin = (outwardX > 0) ? xInner : (xInner - CLAD_T);
+        // INNER face on outsidePlane; thickness extends outward
+        const xBottomMin = (outwardSignX > 0) ? outsidePlane : (outsidePlane - CLAD_T);
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -435,7 +474,7 @@ export function build3D(state, ctx) {
         );
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const xUpperMin = (outwardX > 0) ? xInner : (xInner - tUpper);
+        const xUpperMin = (outwardSignX > 0) ? outsidePlane : (outsidePlane - tUpper);
 
         parts.push(
           mkBox(
@@ -545,6 +584,7 @@ export function build3D(state, ctx) {
             window.__dbg.claddingPass.jobsCount = claddingJobs.length;
             if (!window.__dbg.claddingPass.jobsProcessedByWallId) window.__dbg.claddingPass.jobsProcessedByWallId = {};
             if (!window.__dbg.claddingPass.meshesCreatedByWallId) window.__dbg.claddingPass.meshesCreatedByWallId = {};
+            if (!window.__dbg.claddingPass.sampleOutsideByWallId) window.__dbg.claddingPass.sampleOutsideByWallId = {};
           } catch (e) {}
 
           const passDbg = (() => {
