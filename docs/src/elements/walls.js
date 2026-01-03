@@ -448,6 +448,7 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
+        const xPanelMin = (Number.isFinite(xMin_mm) ? xMin_mm : (origin.x + panelStart));
         const wallOutsideFaceWorld = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
         const outwardNormalZ = outwardSignZ;
 
@@ -463,7 +464,7 @@ export function build3D(state, ctx) {
             panelLen,
             hBottomStrip,
             CLAD_T,
-            { x: origin.x + panelStart, y: yBottomStrip, z: zBottomMin },
+            { x: xPanelMin, y: yBottomStrip, z: zBottomMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
@@ -479,12 +480,13 @@ export function build3D(state, ctx) {
             panelLen,
             hUpperStrip,
             tUpper,
-            { x: origin.x + panelStart, y: yUpperStrip, z: zUpperMin },
+            { x: xPanelMin, y: yUpperStrip, z: zUpperMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
         );
       } else {
+        const zPanelMin = (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + panelStart));
         const wallOutsideFaceWorld = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
         const outwardNormalX = outwardSignX;
 
@@ -500,7 +502,7 @@ export function build3D(state, ctx) {
             CLAD_T,
             hBottomStrip,
             panelLen,
-            { x: xBottomMin, y: yBottomStrip, z: origin.z + panelStart },
+            { x: xBottomMin, y: yBottomStrip, z: zPanelMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
@@ -516,7 +518,7 @@ export function build3D(state, ctx) {
             tUpper,
             hUpperStrip,
             panelLen,
-            { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart },
+            { x: xUpperMin, y: yUpperStrip, z: zPanelMin },
             mat,
             { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
           )
