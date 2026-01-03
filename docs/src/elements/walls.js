@@ -276,15 +276,14 @@ export function build3D(state, ctx) {
 
     const minAllowed_mm = (P_bottom_mm - CLAD_DRIP);
 
-    // Course bounds debug v0.1: per-course attribution before merge (NO geometry changes)
-    function recordCourseBounds(mesh, courseIndex, kind) {
+    // Cladding course bounds diag v0.1 (PHASE 2c): per-part metadata + bounds list before merge
+    function recordPartBounds(mesh, courseIndex) {
       if (!mesh) return;
       try {
-        if (!window.__dbg) window.__dbg = {};
-        if (!window.__dbg.courseBounds) window.__dbg.courseBounds = {};
-        if (!window.__dbg.courseBounds[wallId]) window.__dbg.courseBounds[wallId] = {};
-        if (!window.__dbg.courseBounds[wallId][panelIndex]) window.__dbg.courseBounds[wallId][panelIndex] = {};
-        if (!window.__dbg.courseBounds[wallId][panelIndex][courseIndex]) window.__dbg.courseBounds[wallId][panelIndex][courseIndex] = {};
+        window.__dbg = window.__dbg || {};
+        window.__dbg.cladCourseBounds = window.__dbg.cladCourseBounds || {};
+        window.__dbg.cladCourseBounds[wallId] = window.__dbg.cladCourseBounds[wallId] || {};
+        window.__dbg.cladCourseBounds[wallId][panelIndex] = window.__dbg.cladCourseBounds[wallId][panelIndex] || [];
 
         try {
           if (mesh.computeWorldMatrix) mesh.computeWorldMatrix(true);
@@ -302,11 +301,12 @@ export function build3D(state, ctx) {
           }
         } catch (e) {}
 
-        window.__dbg.courseBounds[wallId][panelIndex][courseIndex][kind] = {
+        window.__dbg.cladCourseBounds[wallId][panelIndex].push({
           name: mesh.name || "",
+          courseIndex: courseIndex,
           minY_mm: minY,
           maxY_mm: maxY
-        };
+        });
       } catch (e) {}
     }
 
@@ -341,15 +341,18 @@ export function build3D(state, ctx) {
             wallId,
             panelIndex,
             course: i,
-            courseIndex: i,
-            kind: "bottom",
             type: "cladding",
             part: "bottom",
             profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
           }
         );
+        // TASK 1: metadata attribution
+        try {
+          mBot.metadata = Object.assign({}, mBot.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "bottom" });
+        } catch (e) {}
         parts.push(mBot);
-        recordCourseBounds(mBot, i, "bottom");
+        // TASK 2: bounds list before merge
+        recordPartBounds(mBot, i);
 
         // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
@@ -370,15 +373,18 @@ export function build3D(state, ctx) {
             wallId,
             panelIndex,
             course: i,
-            courseIndex: i,
-            kind: "upper",
             type: "cladding",
             part: "upper",
             profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
           }
         );
+        // TASK 1: metadata attribution
+        try {
+          mUp.metadata = Object.assign({}, mUp.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "upper" });
+        } catch (e) {}
         parts.push(mUp);
-        recordCourseBounds(mUp, i, "upper");
+        // TASK 2: bounds list before merge
+        recordPartBounds(mUp, i);
       } else {
         // Left/Right run along Z; thickness extrudes +X.
         // Outside faces:
@@ -399,15 +405,18 @@ export function build3D(state, ctx) {
             wallId,
             panelIndex,
             course: i,
-            courseIndex: i,
-            kind: "bottom",
             type: "cladding",
             part: "bottom",
             profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
           }
         );
+        // TASK 1: metadata attribution
+        try {
+          mBot.metadata = Object.assign({}, mBot.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "bottom" });
+        } catch (e) {}
         parts.push(mBot);
-        recordCourseBounds(mBot, i, "bottom");
+        // TASK 2: bounds list before merge
+        recordPartBounds(mBot, i);
 
         // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
@@ -427,17 +436,31 @@ export function build3D(state, ctx) {
             wallId,
             panelIndex,
             course: i,
-            courseIndex: i,
-            kind: "upper",
             type: "cladding",
             part: "upper",
             profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
           }
         );
+        // TASK 1: metadata attribution
+        try {
+          mUp.metadata = Object.assign({}, mUp.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "upper" });
+        } catch (e) {}
         parts.push(mUp);
-        recordCourseBounds(mUp, i, "upper");
+        // TASK 2: bounds list before merge
+        recordPartBounds(mUp, i);
       }
     }
+
+    // TASK 3: compact summary log (first 10 entries sorted by minY_mm)
+    try {
+      const arr = (((window.__dbg || {}).cladCourseBounds || {})[wallId] || {})[panelIndex] || [];
+      const sorted = arr.slice().sort((a, b) => {
+        const ay = Number.isFinite(Number(a && a.minY_mm)) ? Number(a.minY_mm) : Number.POSITIVE_INFINITY;
+        const by = Number.isFinite(Number(b && b.minY_mm)) ? Number(b.minY_mm) : Number.POSITIVE_INFINITY;
+        return ay - by;
+      });
+      console.log("CLAD_COURSE_BOUNDS", wallId, panelIndex, sorted.slice(0, 10));
+    } catch (e) {}
 
     // Merge into one mesh per panel (existing behavior retained)
     let merged = null;
