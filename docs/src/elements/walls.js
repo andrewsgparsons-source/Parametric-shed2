@@ -67,7 +67,7 @@ export function build3D(state, ctx) {
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
 
-  // DIAGNOSTIC STEP 1: render EXACTLY ONE cladding board on FRONT wall only (panel 1 only)
+  // DIAGNOSTIC: ONLY FRONT wall, ONLY first panel, ONLY one board
   const __DIAG_ONE_FRONT_ONE_BOARD = true;
 
   // DEBUG containers
@@ -240,6 +240,12 @@ export function build3D(state, ctx) {
   function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
 
+    if (__DIAG_ONE_FRONT_ONE_BOARD) {
+      if (!(String(wallId) === "front" && Number(panelIndex) === 1)) {
+        return { created: 0, anchor: null, reason: "diagSkipNotFrontPanel1" };
+      }
+    }
+
     // Light cladding material (do NOT mutate shared materials) — KEEP AS-IS
     let mat = materials && materials.cladding ? materials.cladding : materials.timber;
     try {
@@ -263,9 +269,10 @@ export function build3D(state, ctx) {
     const ph = Number(panelHeight);
     const panelHeightMm = Number.isFinite(ph) ? ph : height;
 
-    const courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
-    const __courses = (__DIAG_ONE_FRONT_ONE_BOARD ? 1 : courses);
-    if (__courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
+    let courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
+    if (__DIAG_ONE_FRONT_ONE_BOARD) courses = 1;
+
+    if (courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
 
     const parts = [];
 
@@ -427,7 +434,7 @@ export function build3D(state, ctx) {
       }
     } catch (e) {}
 
-    for (let i = 0; i < __courses; i++) {
+    for (let i = 0; i < courses; i++) {
       const isFirst = i === 0;
       const firstCourseYOffsetMm = (isFirst ? 125 : 0);
       const yBase = claddingAnchorY_mm + i * CLAD_H + firstCourseYOffsetMm;
@@ -441,10 +448,15 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
-        const outsidePlane = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
+        const wallOutsideFaceWorld = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
+        const outwardNormalZ = outwardSignZ;
 
-        // INNER face MUST lie on outsidePlane (gap=0). Rebate affects ONLY thickness.
-        const zBottomMin = (outwardSignZ > 0) ? outsidePlane : (outsidePlane - CLAD_T);
+        // Solve center placement so INNER face is exactly on wallOutsideFaceWorld:
+        // boardCenterWorldZ = wallOutsideFaceWorld + outwardNormalZ * (CLAD_T/2)
+        // mkBox expects MIN corner => minZ = centerZ - CLAD_T/2
+        const boardCenterWorldZ = wallOutsideFaceWorld + outwardNormalZ * (CLAD_T / 2);
+        const zBottomMin = boardCenterWorldZ - (CLAD_T / 2);
+
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -458,7 +470,8 @@ export function build3D(state, ctx) {
         );
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const zUpperMin = (outwardSignZ > 0) ? outsidePlane : (outsidePlane - tUpper);
+        const boardCenterWorldZ_upper = wallOutsideFaceWorld + outwardNormalZ * (tUpper / 2);
+        const zUpperMin = boardCenterWorldZ_upper - (tUpper / 2);
 
         parts.push(
           mkBox(
@@ -472,10 +485,15 @@ export function build3D(state, ctx) {
           )
         );
       } else {
-        const outsidePlane = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
+        const wallOutsideFaceWorld = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
+        const outwardNormalX = outwardSignX;
 
-        // INNER face MUST lie on outsidePlane (gap=0). Rebate affects ONLY thickness.
-        const xBottomMin = (outwardSignX > 0) ? outsidePlane : (outsidePlane - CLAD_T);
+        // Solve center placement so INNER face is exactly on wallOutsideFaceWorld:
+        // boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T/2)
+        // mkBox expects MIN corner => minX = centerX - CLAD_T/2
+        const boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T / 2);
+        const xBottomMin = boardCenterWorldX - (CLAD_T / 2);
+
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -489,7 +507,8 @@ export function build3D(state, ctx) {
         );
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const xUpperMin = (outwardSignX > 0) ? outsidePlane : (outsidePlane - tUpper);
+        const boardCenterWorldX_upper = wallOutsideFaceWorld + outwardNormalX * (tUpper / 2);
+        const xUpperMin = boardCenterWorldX_upper - (tUpper / 2);
 
         parts.push(
           mkBox(
@@ -534,13 +553,29 @@ export function build3D(state, ctx) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
-      if (plateParent) merged.parent = plateParent;
+
+      if (plateParent) {
+        try {
+          const absPos = merged.getAbsolutePosition ? merged.getAbsolutePosition().clone() : null;
+          merged.parent = plateParent;
+          if (absPos && merged.setAbsolutePosition) merged.setAbsolutePosition(absPos);
+        } catch (e) {
+          try { merged.parent = plateParent; } catch (e2) {}
+        }
+      }
+
       created = 1;
     } else {
       // If merge failed for any reason, keep parts as-is; still bind them to the wall's parent if present.
       if (plateParent) {
         for (let i = 0; i < parts.length; i++) {
-          try { parts[i].parent = plateParent; } catch (e) {}
+          try {
+            const absPos = parts[i].getAbsolutePosition ? parts[i].getAbsolutePosition().clone() : null;
+            parts[i].parent = plateParent;
+            if (absPos && parts[i].setAbsolutePosition) parts[i].setAbsolutePosition(absPos);
+          } catch (e) {
+            try { parts[i].parent = plateParent; } catch (e2) {}
+          }
         }
       }
       created = parts.length;
@@ -1136,6 +1171,9 @@ export function build3D(state, ctx) {
       }
 
       for (let p = 0; p < panels.length; p++) {
+        if (__DIAG_ONE_FRONT_ONE_BOARD) {
+          if (!(String(wallId) === "front" && p === 0)) continue;
+        }
         const pan = panels[p];
         let panelH = wallHeightFlat;
         if (isSlopeWall) {
@@ -1143,29 +1181,15 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        if (__DIAG_ONE_FRONT_ONE_BOARD) {
-          if (String(wallId) === "front" && (p === 0)) {
-            claddingJobs.push({
-              wallId,
-              axis,
-              panelIndex: (p + 1),
-              panelStart: pan.start,
-              panelLen: pan.len,
-              origin,
-              panelHeight: panelH
-            });
-          }
-        } else {
-          claddingJobs.push({
-            wallId,
-            axis,
-            panelIndex: (p + 1),
-            panelStart: pan.start,
-            panelLen: pan.len,
-            origin,
-            panelHeight: panelH
-          });
-        }
+        claddingJobs.push({
+          wallId,
+          axis,
+          panelIndex: (p + 1),
+          panelStart: pan.start,
+          panelLen: pan.len,
+          origin,
+          panelHeight: panelH
+        });
       }
 
       return;
@@ -1225,28 +1249,18 @@ export function build3D(state, ctx) {
     }
 
     if (__DIAG_ONE_FRONT_ONE_BOARD) {
-      if (String(wallId) === "front") {
-        claddingJobs.push({
-          wallId,
-          axis,
-          panelIndex: 1,
-          panelStart: 0,
-          panelLen: length,
-          origin,
-          panelHeight: panelH
-        });
-      }
-    } else {
-      claddingJobs.push({
-        wallId,
-        axis,
-        panelIndex: 1,
-        panelStart: 0,
-        panelLen: length,
-        origin,
-        panelHeight: panelH
-      });
+      if (!(String(wallId) === "front")) return;
     }
+
+    claddingJobs.push({
+      wallId,
+      axis,
+      panelIndex: 1,
+      panelStart: 0,
+      panelLen: length,
+      origin,
+      panelHeight: panelH
+    });
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
