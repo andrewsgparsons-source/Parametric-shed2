@@ -343,13 +343,12 @@ export function build3D(state, ctx) {
 
       if (isAlongX) {
         // Front/Back run along X; thickness extrudes +Z.
-        // Outside faces:
-        // - front => outside at z = origin.z (negative Z direction)
-        // - back  => outside at z = origin.z + wallThk (positive Z direction)
-        const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
+        // OUTSIDE face (per repo facts): z = origin.z + wallThk
+        // Inner face of cladding must touch outside face; cladding extends outward (+Z) only.
+        const zOuterPlane = origin.z + wallThk;
 
-        // Bottom strip: full thickness (proud)
-        const zBottom = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
+        // Bottom strip: full thickness (proud) — inner face touches wall outside face
+        const zBottom = zOuterPlane;
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -362,13 +361,9 @@ export function build3D(state, ctx) {
           )
         );
 
-        // Upper strip: recessed by rebate depth (visible lap)
+        // Upper strip: recessed by rebate depth (visible lap) — inner face still touches wall outside face
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const zUpper = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
-
-        // For front: shift inward +5 (toward +Z) by moving min z forward by +5.
-        // For back : keep min at outer plane; reduced thickness naturally recesses outer face by 5.
-        const zUpperMin = (wallId === "front") ? (zUpper + CLAD_Rb) : zUpper;
+        const zUpperMin = zOuterPlane;
 
         parts.push(
           mkBox(
@@ -383,13 +378,12 @@ export function build3D(state, ctx) {
         );
       } else {
         // Left/Right run along Z; thickness extrudes +X.
-        // Outside faces:
-        // - left  => outside at x = origin.x (negative X direction)
-        // - right => outside at x = origin.x + wallThk (positive X direction)
-        const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
+        // OUTSIDE face (per repo facts): x = origin.x + wallThk
+        // Inner face of cladding must touch outside face; cladding extends outward (+X) only.
+        const xOuterPlane = origin.x + wallThk;
 
-        // Bottom strip: full thickness (proud)
-        const xBottom = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
+        // Bottom strip: full thickness (proud) — inner face touches wall outside face
+        const xBottom = xOuterPlane;
         parts.push(
           mkBox(
             `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -402,12 +396,9 @@ export function build3D(state, ctx) {
           )
         );
 
-        // Upper strip: recessed by rebate depth (visible lap)
+        // Upper strip: recessed by rebate depth (visible lap) — inner face still touches wall outside face
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-
-        // For left: shift inward +5 (toward +X) by moving min x forward by +5.
-        // For right: keep min at outer plane; reduced thickness naturally recesses outer face by 5.
-        const xUpperMin = (wallId === "left") ? ((xOuterPlane - CLAD_T) + CLAD_Rb) : xOuterPlane;
+        const xUpperMin = xOuterPlane;
 
         parts.push(
           mkBox(
