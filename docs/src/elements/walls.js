@@ -313,8 +313,55 @@ export function build3D(state, ctx) {
     const parts = [];
 
     for (let i = 0; i < courses; i++) {
-      const courseBottomEdgeY = (i === 0) ? (P_bottom_mm - CLAD_DRIP) : (P_bottom_mm + i * CLAD_H);
+      // Starter course: bottom must be exactly minAllowed (plateBottom - 30mm)
+      // All other courses unchanged.
+      const courseBottomEdgeY = (i === 0) ? minAllowed_mm : (P_bottom_mm + i * CLAD_H);
 
+      if (i === 0) {
+        // Floating board fix v0.1: DO NOT create split strips for c0.
+        // Create ONE full-height starter board only (CLAD_H tall), bottom at minAllowed.
+        if (isAlongX) {
+          const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
+          const zFull = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
+
+          const m0 = mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c0`,
+            panelLen,
+            CLAD_H,
+            CLAD_T,
+            { x: origin.x + panelStart, y: courseBottomEdgeY, z: zFull },
+            mat,
+            { wallId, panelIndex, course: 0, type: "cladding", part: "starter", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          );
+          try {
+            m0.metadata = Object.assign({}, m0.metadata || {}, { wallId, panelIndex, courseIndex: 0, courseKind: "starter" });
+          } catch (e) {}
+          parts.push(m0);
+          recordPartBounds(m0, 0);
+        } else {
+          const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
+          const xFull = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
+
+          const m0 = mkBox(
+            `clad-${wallId}-panel-${panelIndex}-c0`,
+            CLAD_T,
+            CLAD_H,
+            panelLen,
+            { x: xFull, y: courseBottomEdgeY, z: origin.z + panelStart },
+            mat,
+            { wallId, panelIndex, course: 0, type: "cladding", part: "starter", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          );
+          try {
+            m0.metadata = Object.assign({}, m0.metadata || {}, { wallId, panelIndex, courseIndex: 0, courseKind: "starter" });
+          } catch (e) {}
+          parts.push(m0);
+          recordPartBounds(m0, 0);
+        }
+
+        continue;
+      }
+
+      // Existing behavior (i >= 1): split bottom/upper strips for shiplap profile
       const yBottomStrip = courseBottomEdgeY;
       const hBottomStrip = CLAD_Hb;
 
@@ -322,13 +369,8 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
-        // Front/Back run along X; thickness extrudes +Z.
-        // Outside faces:
-        // - front => outside at z = origin.z (negative Z direction)
-        // - back  => outside at z = origin.z + wallThk (positive Z direction)
         const zOuterPlane = (wallId === "front") ? origin.z : (origin.z + wallThk);
 
-        // Bottom strip: full thickness (proud)
         const zBottom = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
         const mBot = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -337,29 +379,16 @@ export function build3D(state, ctx) {
           CLAD_T,
           { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "bottom",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        // TASK 1: metadata attribution
         try {
           mBot.metadata = Object.assign({}, mBot.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "bottom" });
         } catch (e) {}
         parts.push(mBot);
-        // TASK 2: bounds list before merge
         recordPartBounds(mBot, i);
 
-        // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
         const zUpper = (wallId === "front") ? (zOuterPlane - CLAD_T) : zOuterPlane;
-
-        // For front: shift inward +5 (toward +Z) by moving min z forward by +5.
-        // For back : keep min at outer plane; reduced thickness naturally recesses outer face by 5.
         const zUpperMin = (wallId === "front") ? (zUpper + CLAD_Rb) : zUpper;
 
         const mUp = mkBox(
@@ -369,30 +398,16 @@ export function build3D(state, ctx) {
           tUpper,
           { x: origin.x + panelStart, y: yUpperStrip, z: zUpperMin },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "upper",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        // TASK 1: metadata attribution
         try {
           mUp.metadata = Object.assign({}, mUp.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "upper" });
         } catch (e) {}
         parts.push(mUp);
-        // TASK 2: bounds list before merge
         recordPartBounds(mUp, i);
       } else {
-        // Left/Right run along Z; thickness extrudes +X.
-        // Outside faces:
-        // - left  => outside at x = origin.x (negative X direction)
-        // - right => outside at x = origin.x + wallThk (positive X direction)
         const xOuterPlane = (wallId === "left") ? origin.x : (origin.x + wallThk);
 
-        // Bottom strip: full thickness (proud)
         const xBottom = (wallId === "left") ? (xOuterPlane - CLAD_T) : xOuterPlane;
         const mBot = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -401,28 +416,15 @@ export function build3D(state, ctx) {
           panelLen,
           { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "bottom",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        // TASK 1: metadata attribution
         try {
           mBot.metadata = Object.assign({}, mBot.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "bottom" });
         } catch (e) {}
         parts.push(mBot);
-        // TASK 2: bounds list before merge
         recordPartBounds(mBot, i);
 
-        // Upper strip: recessed by rebate depth (visible lap)
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-
-        // For left: shift inward +5 (toward +X) by moving min x forward by +5.
-        // For right: keep min at outer plane; reduced thickness naturally recesses outer face by 5.
         const xUpperMin = (wallId === "left") ? ((xOuterPlane - CLAD_T) + CLAD_Rb) : xOuterPlane;
 
         const mUp = mkBox(
@@ -432,21 +434,12 @@ export function build3D(state, ctx) {
           panelLen,
           { x: xUpperMin, y: yUpperStrip, z: origin.z + panelStart },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "upper",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb }
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        // TASK 1: metadata attribution
         try {
           mUp.metadata = Object.assign({}, mUp.metadata || {}, { wallId, panelIndex, courseIndex: i, courseKind: "upper" });
         } catch (e) {}
         parts.push(mUp);
-        // TASK 2: bounds list before merge
         recordPartBounds(mUp, i);
       }
     }
@@ -456,7 +449,7 @@ export function build3D(state, ctx) {
       const arr = (((window.__dbg || {}).cladCourseBounds || {})[wallId] || {})[panelIndex] || [];
       const sorted = arr.slice().sort((a, b) => {
         const ay = Number.isFinite(Number(a && a.minY_mm)) ? Number(a.minY_mm) : Number.POSITIVE_INFINITY;
-        const by = Number.isFinite(Number(b && b.minY_mm)) ? Number(b.minY_mm) : Number.POSITIVE_INFINITY;
+        const by = Number.isFinite(Number(b && b.minY_mm)) ? Number(b && b.minY_mm) : Number.POSITIVE_INFINITY;
         return ay - by;
       });
       console.log("CLAD_COURSE_BOUNDS", wallId, panelIndex, sorted.slice(0, 10));
