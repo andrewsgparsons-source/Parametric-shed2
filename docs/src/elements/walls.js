@@ -267,7 +267,8 @@ export function build3D(state, ctx) {
 
     // DEBUG per wall/panel anchor (and per wall requested earlier)
     try {
-      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
+      const firstCourseBaseY_mm = claddingAnchorY_mm + 140;
+      const firstCourseBottomY_mm = firstCourseBaseY_mm - CLAD_DRIP;
       const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
 
       if (!window.__dbg) window.__dbg = {};
@@ -280,6 +281,7 @@ export function build3D(state, ctx) {
         wallBottomPlateTopY_mm,
         wallBottomPlateBottomY_mm,
         claddingAnchorY_mm,
+        firstCourseBaseY_mm,
         firstCourseBottomY_mm,
         expectedFirstCourseBottomY_mm,
         delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
@@ -292,6 +294,7 @@ export function build3D(state, ctx) {
           wallBottomPlateTopY_mm,
           wallBottomPlateBottomY_mm,
           claddingAnchorY_mm,
+          firstCourseBaseY_mm,
           firstCourseBottomY_mm,
           expectedFirstCourseBottomY_mm,
           delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
@@ -300,7 +303,7 @@ export function build3D(state, ctx) {
     } catch (e) {}
 
     for (let i = 0; i < courses; i++) {
-      const yBase = claddingAnchorY_mm + i * CLAD_H;
+      const yBase = claddingAnchorY_mm + i * CLAD_H + (i === 0 ? 140 : 0);
       const isFirst = i === 0;
 
       // Drip: first course only; bottom edge at (claddingAnchorY_mm - 30mm)
