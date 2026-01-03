@@ -444,7 +444,44 @@ export function build3D(state, ctx) {
       }
     }
 
-    // TASK 3: compact summary log (first 10 entries sorted by minY_mm)
+    // PHASE 2e debug v0.1: partsBeforeMerge dump + lowest-by-minY log (NO GEOMETRY CHANGES)
+    try {
+      window.__dbg = window.__dbg || {};
+      window.__dbg.partsBeforeMerge = window.__dbg.partsBeforeMerge || {};
+      window.__dbg.partsBeforeMerge[wallId] = window.__dbg.partsBeforeMerge[wallId] || {};
+      window.__dbg.partsBeforeMerge[wallId][panelIndex] = parts.map((p) => {
+        let minY = null;
+        let maxY = null;
+        try {
+          if (p && p.computeWorldMatrix) p.computeWorldMatrix(true);
+          if (p && p.refreshBoundingInfo) p.refreshBoundingInfo(true);
+          if (p && p.getBoundingInfo) {
+            const bi = p.getBoundingInfo();
+            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
+            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
+          }
+        } catch (e) {}
+        return {
+          name: p && p.name ? p.name : "",
+          courseIndex: p && p.metadata ? p.metadata.courseIndex : undefined,
+          minY_mm: minY,
+          maxY_mm: maxY
+        };
+      });
+
+      const arrBM = window.__dbg.partsBeforeMerge[wallId][panelIndex] || [];
+      let lowest = null;
+      for (let i = 0; i < arrBM.length; i++) {
+        const e = arrBM[i];
+        const y = Number(e && e.minY_mm);
+        if (!Number.isFinite(y)) continue;
+        if (!lowest || y < Number(lowest.minY_mm)) lowest = e;
+      }
+      console.log("CLAD_BEFORE_MERGE_LOWEST", wallId, panelIndex, lowest);
+    } catch (e) {}
+
+    // TASK 3 (from PHASE 2c): compact summary log (first 10 entries sorted by minY_mm)
     try {
       const arr = (((window.__dbg || {}).cladCourseBounds || {})[wallId] || {})[panelIndex] || [];
       const sorted = arr.slice().sort((a, b) => {
@@ -463,6 +500,41 @@ export function build3D(state, ctx) {
     } catch (e) {
       merged = null;
     }
+
+    // PHASE 2e debug v0.1: partsAfterMerge dump + minY log (NO GEOMETRY CHANGES)
+    try {
+      window.__dbg = window.__dbg || {};
+      window.__dbg.partsAfterMerge = window.__dbg.partsAfterMerge || {};
+      window.__dbg.partsAfterMerge[wallId] = window.__dbg.partsAfterMerge[wallId] || {};
+      if (merged) {
+        try {
+          if (merged.computeWorldMatrix) merged.computeWorldMatrix(true);
+          if (merged.refreshBoundingInfo) merged.refreshBoundingInfo(true);
+        } catch (e) {}
+
+        let minY = null;
+        let maxY = null;
+        try {
+          if (merged.getBoundingInfo) {
+            const bi = merged.getBoundingInfo();
+            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+            if (bb && bb.minimumWorld && Number.isFinite(Number(bb.minimumWorld.y))) minY = Number(bb.minimumWorld.y) * 1000;
+            if (bb && bb.maximumWorld && Number.isFinite(Number(bb.maximumWorld.y))) maxY = Number(bb.maximumWorld.y) * 1000;
+          }
+        } catch (e) {}
+
+        window.__dbg.partsAfterMerge[wallId][panelIndex] = {
+          mergedName: merged.name || "",
+          minY_mm: minY,
+          maxY_mm: maxY
+        };
+
+        console.log("CLAD_AFTER_MERGE_MINY", wallId, panelIndex, minY);
+      } else {
+        window.__dbg.partsAfterMerge[wallId][panelIndex] = null;
+        console.log("CLAD_AFTER_MERGE_MINY", wallId, panelIndex, null);
+      }
+    } catch (e) {}
 
     // Cladding debug v0.4: guarantee NO stray course pieces remain after merge
     if (merged) {
