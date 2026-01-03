@@ -225,42 +225,17 @@ export function build3D(state, ctx) {
       deferredRan: false,
       staleSkip: false,
       claddingMeshesCreated: 0,
-      anchorsUsed: []
+      anchorsUsed: [],
+      jobsCount: 0,
+      jobsProcessedByWallId: {},
+      meshesCreatedByWallId: {}
     };
   } catch (e) {}
 
   function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
 
-    let mat = (materials && materials.cladding) ? materials.cladding : null;
-
-    // Ensure cladding is noticeably lighter without mutating shared timber/plate materials.
-    // Prefer basing the light material on materials.cladding when available.
-    try {
-      if (!scene._claddingMatLight) {
-        let base = mat ? mat : (materials ? materials.timber : null);
-        let m = null;
-
-        if (base && base.clone) {
-          m = base.clone("claddingMatLight");
-        } else {
-          m = new BABYLON.StandardMaterial("claddingMatLight", scene);
-        }
-
-        if (m) {
-          // Light grey / bleached wood look
-          try { m.diffuseColor = new BABYLON.Color3(0.85, 0.85, 0.82); } catch (e) {}
-          try { m.specularColor = new BABYLON.Color3(0.06, 0.06, 0.06); } catch (e) {}
-          try { m.emissiveColor = new BABYLON.Color3(0.02, 0.02, 0.02); } catch (e) {}
-          scene._claddingMatLight = m;
-        } else {
-          scene._claddingMatLight = null;
-        }
-      }
-    } catch (e) {}
-
-    if (scene._claddingMatLight) mat = scene._claddingMatLight;
-    if (!mat) mat = materials.timber;
+    const mat = materials && materials.cladding ? materials.cladding : materials.timber;
 
     const courses = Math.max(0, Math.floor(Number(panelHeight) / CLAD_H));
     if (courses < 1) return { created: 0, anchor: null };
@@ -304,7 +279,7 @@ export function build3D(state, ctx) {
       }
     } catch (e) {}
 
-    // Robust outside-plane selection (geometry-derived; no wallId sign logic)
+    // Robust outside-plane selection (geometry-derived) with deterministic fallback ONLY when bbox is invalid
     let outsidePlaneZ_mm = null;
     let outwardZ = 1;
     let outsidePlaneX_mm = null;
@@ -313,7 +288,9 @@ export function build3D(state, ctx) {
     try {
       if (isAlongX) {
         const originZ = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
-        if (Number.isFinite(bbMinZ_mm) && Number.isFinite(bbMaxZ_mm)) {
+
+        const hasZ = Number.isFinite(bbMinZ_mm) && Number.isFinite(bbMaxZ_mm);
+        if (hasZ) {
           const dMin = Math.abs(bbMinZ_mm - originZ);
           const dMax = Math.abs(bbMaxZ_mm - originZ);
           if (dMin < dMax) outsidePlaneZ_mm = bbMaxZ_mm;
@@ -321,12 +298,23 @@ export function build3D(state, ctx) {
 
           outwardZ = (outsidePlaneZ_mm === bbMaxZ_mm) ? 1 : -1;
         } else {
-          outsidePlaneZ_mm = originZ + wallThk;
-          outwardZ = 1;
+          // Fallback: deterministic outward direction per wallId (ONLY when bbox detection fails)
+          if (String(wallId) === "front") {
+            outwardZ = -1;
+            outsidePlaneZ_mm = originZ;
+          } else if (String(wallId) === "back") {
+            outwardZ = 1;
+            outsidePlaneZ_mm = originZ + wallThk;
+          } else {
+            outwardZ = 1;
+            outsidePlaneZ_mm = originZ + wallThk;
+          }
         }
       } else {
         const originX = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
-        if (Number.isFinite(bbMinX_mm) && Number.isFinite(bbMaxX_mm)) {
+
+        const hasX = Number.isFinite(bbMinX_mm) && Number.isFinite(bbMaxX_mm);
+        if (hasX) {
           const dMin = Math.abs(bbMinX_mm - originX);
           const dMax = Math.abs(bbMaxX_mm - originX);
           if (dMin < dMax) outsidePlaneX_mm = bbMaxX_mm;
@@ -334,8 +322,17 @@ export function build3D(state, ctx) {
 
           outwardX = (outsidePlaneX_mm === bbMaxX_mm) ? 1 : -1;
         } else {
-          outsidePlaneX_mm = originX + wallThk;
-          outwardX = 1;
+          // Fallback: deterministic outward direction per wallId (ONLY when bbox detection fails)
+          if (String(wallId) === "left") {
+            outwardX = -1;
+            outsidePlaneX_mm = originX;
+          } else if (String(wallId) === "right") {
+            outwardX = 1;
+            outsidePlaneX_mm = originX + wallThk;
+          } else {
+            outwardX = 1;
+            outsidePlaneX_mm = originX + wallThk;
+          }
         }
       }
     } catch (e) {}
@@ -388,7 +385,6 @@ export function build3D(state, ctx) {
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
       if (isAlongX) {
-        // Front/Back run along X; thickness extrudes along Z.
         // Place cladding so its INNER face lies exactly on the selected outside plane,
         // and thickness extends entirely in the outward direction.
         const zInner = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
@@ -421,7 +417,6 @@ export function build3D(state, ctx) {
           )
         );
       } else {
-        // Left/Right run along Z; thickness extrudes along X.
         // Place cladding so its INNER face lies exactly on the selected outside plane,
         // and thickness extends entirely in the outward direction.
         const xInner = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
@@ -454,6 +449,19 @@ export function build3D(state, ctx) {
           )
         );
       }
+    }
+
+    if (parts.length === 0) {
+      return {
+        created: 0,
+        anchor: {
+          wallId,
+          panelIndex,
+          wallBottomPlateTopY_mm,
+          wallBottomPlateBottomY_mm,
+          claddingAnchorY_mm
+        }
+      };
     }
 
     // Merge into one mesh per panel
@@ -534,6 +542,9 @@ export function build3D(state, ctx) {
             if (!window.__dbg) window.__dbg = {};
             if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
             if (!window.__dbg.claddingPass.anchorsUsed) window.__dbg.claddingPass.anchorsUsed = [];
+            window.__dbg.claddingPass.jobsCount = claddingJobs.length;
+            if (!window.__dbg.claddingPass.jobsProcessedByWallId) window.__dbg.claddingPass.jobsProcessedByWallId = {};
+            if (!window.__dbg.claddingPass.meshesCreatedByWallId) window.__dbg.claddingPass.meshesCreatedByWallId = {};
           } catch (e) {}
 
           const passDbg = (() => {
@@ -546,8 +557,30 @@ export function build3D(state, ctx) {
 
           for (let i = 0; i < claddingJobs.length; i++) {
             const j = claddingJobs[i];
-            const res = addCladdingForPanel(j.wallId, j.axis, j.panelIndex, j.panelStart, j.panelLen, j.origin, j.panelHeight, passDbg);
-            if (res && Number.isFinite(res.created)) createdCount += res.created;
+
+            try {
+              if (passDbg && passDbg.jobsProcessedByWallId) {
+                const k = String(j.wallId || "");
+                passDbg.jobsProcessedByWallId[k] = Number(passDbg.jobsProcessedByWallId[k] || 0) + 1;
+              }
+            } catch (e) {}
+
+            let res = null;
+            try {
+              res = addCladdingForPanel(j.wallId, j.axis, j.panelIndex, j.panelStart, j.panelLen, j.origin, j.panelHeight, passDbg);
+            } catch (e) {
+              res = null;
+            }
+
+            if (res && Number.isFinite(res.created)) {
+              createdCount += res.created;
+              try {
+                if (passDbg && passDbg.meshesCreatedByWallId) {
+                  const k = String(j.wallId || "");
+                  passDbg.meshesCreatedByWallId[k] = Number(passDbg.meshesCreatedByWallId[k] || 0) + Number(res.created || 0);
+                }
+              } catch (e) {}
+            }
           }
 
           try {
