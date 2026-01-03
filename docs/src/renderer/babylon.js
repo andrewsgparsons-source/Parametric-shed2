@@ -63,7 +63,35 @@ export function boot(canvas) {
     guide:  mkMat(scene, 'guide',  new BABYLON.Color3(0.7, 0.7, 0.7), 0.5),
   };
 
-  engine.runRenderLoop(() => scene.render());
+  // Cladding diagnostic v0.1: one-time post-first-render scan (no geometry changes)
+  let __cladScanOnce = false;
+
+  engine.runRenderLoop(() => {
+    scene.render();
+
+    if (!__cladScanOnce) {
+      __cladScanOnce = true;
+
+      try {
+        window.__dbg = window.__dbg || {};
+        window.__dbg.__cladScanDone = true;
+        window.__dbg.cladMeshNames = scene.meshes
+          .filter(m => m && !m.isDisposed() && typeof m.name === "string" &&
+            (m.name.startsWith("clad-") || m.name.includes("clad") || m.name.includes("-c"))
+          )
+          .map(m => ({
+            name: m.name,
+            parent: m.parent ? m.parent.name : null,
+            minY_mm: m.getBoundingInfo ? (m.getBoundingInfo().boundingBox.minimumWorld.y * 1000) : null,
+            maxY_mm: m.getBoundingInfo ? (m.getBoundingInfo().boundingBox.maximumWorld.y * 1000) : null,
+            meta: m.metadata || null
+          }));
+
+        console.log("CLAD_SCAN", window.__dbg.cladMeshNames.length);
+      } catch (e) {}
+    }
+  });
+
   window.addEventListener('resize', () => engine.resize());
 
   return { engine, scene, camera, materials };
