@@ -70,7 +70,9 @@ export function build3D(state, ctx) {
     try {
       const qs = new URLSearchParams(window.location.search || "");
       return String(qs.get("dbgClad") || "") === "1";
-    } catch (e) { return false; }
+    } catch (e) {
+      return false;
+    }
   })();
 
   const CLAD_FIT_EPS_MM = 0.5;
@@ -89,7 +91,7 @@ export function build3D(state, ctx) {
 
   function heightAtX(x_mm) {
     const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
-    const t = frameW > 0 ? (x / frameW) : 0;
+    const t = frameW > 0 ? x / frameW : 0;
     return Math.max(100, Math.floor(minH + (maxH - minH) * t));
   }
 
@@ -206,7 +208,9 @@ export function build3D(state, ctx) {
   function getBoundsAlongAxisMm(mesh, isAlongX) {
     try {
       if (!mesh || !mesh.getBoundingInfo) return null;
-      try { mesh.computeWorldMatrix(true); } catch (e0) {}
+      try {
+        mesh.computeWorldMatrix(true);
+      } catch (e0) {}
       const bi = mesh.getBoundingInfo();
       const bb = bi && bi.boundingBox ? bi.boundingBox : null;
       if (!bb || !bb.minimumWorld || !bb.maximumWorld) return null;
@@ -227,7 +231,7 @@ export function build3D(state, ctx) {
     let mat = materials && materials.cladding ? materials.cladding : materials.timber;
     try {
       if (!scene._claddingMatLight) {
-        let base = (materials && materials.cladding) ? materials.cladding : null;
+        let base = materials && materials.cladding ? materials.cladding : null;
         let m = null;
         if (base && base.clone) {
           m = base.clone("claddingMatLight");
@@ -236,7 +240,9 @@ export function build3D(state, ctx) {
         }
         if (m) {
           m.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
-          try { m.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); } catch (e) {}
+          try {
+            m.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+          } catch (e) {}
           scene._claddingMatLight = m;
         }
       }
@@ -255,7 +261,7 @@ export function build3D(state, ctx) {
     if (dbgClad && cladFitAcc) {
       try {
         const plateName =
-          (variant === "basic")
+          variant === "basic"
             ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
             : `wall-${wallId}-plate-bottom`;
 
@@ -277,7 +283,7 @@ export function build3D(state, ctx) {
 
     for (let i = 0; i < courses; i++) {
       const isFirst = i === 0;
-      const firstCourseYOffsetMm = (isFirst ? 125 : 0);
+      const firstCourseYOffsetMm = isFirst ? 125 : 0;
       const yBase = plateY + i * CLAD_H + firstCourseYOffsetMm;
 
       // Drip: first course only; bottom edge at (plateY - 30mm)
@@ -293,12 +299,12 @@ export function build3D(state, ctx) {
       const absorb = (m) => {
         const b = getBoundsAlongAxisMm(m, isAlongX);
         if (!b || !Number.isFinite(b.min_mm) || !Number.isFinite(b.max_mm)) return;
-        courseMinAxis_mm = (courseMinAxis_mm == null) ? b.min_mm : Math.min(courseMinAxis_mm, b.min_mm);
-        courseMaxAxis_mm = (courseMaxAxis_mm == null) ? b.max_mm : Math.max(courseMaxAxis_mm, b.max_mm);
+        courseMinAxis_mm = courseMinAxis_mm == null ? b.min_mm : Math.min(courseMinAxis_mm, b.min_mm);
+        courseMaxAxis_mm = courseMaxAxis_mm == null ? b.max_mm : Math.max(courseMaxAxis_mm, b.max_mm);
       };
 
       if (isAlongX) {
-        const zBottom = (String(wallId) === "front") ? (origin.z - CLAD_T) : (origin.z + wallThk);
+        const zBottom = String(wallId) === "front" ? origin.z - CLAD_T : origin.z + wallThk;
 
         const m0 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -307,13 +313,20 @@ export function build3D(state, ctx) {
           CLAD_T,
           { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
           mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          {
+            wallId,
+            panelIndex,
+            course: i,
+            type: "cladding",
+            part: "bottom",
+            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
+          }
         );
         parts.push(m0);
         if (dbgClad && cladFitAcc) absorb(m0);
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const zUpper = (String(wallId) === "front") ? (origin.z - tUpper) : (origin.z + wallThk);
+        const zUpper = String(wallId) === "front" ? origin.z - tUpper : origin.z + wallThk;
 
         const m1 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
@@ -322,12 +335,19 @@ export function build3D(state, ctx) {
           tUpper,
           { x: origin.x + panelStart, y: yUpperStrip, z: zUpper },
           mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          {
+            wallId,
+            panelIndex,
+            course: i,
+            type: "cladding",
+            part: "upper",
+            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
+          }
         );
         parts.push(m1);
         if (dbgClad && cladFitAcc) absorb(m1);
       } else {
-        const xBottom = (String(wallId) === "left") ? (origin.x - CLAD_T) : (origin.x + wallThk);
+        const xBottom = String(wallId) === "left" ? origin.x - CLAD_T : origin.x + wallThk;
 
         const m0 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -336,13 +356,20 @@ export function build3D(state, ctx) {
           panelLen,
           { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
           mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          {
+            wallId,
+            panelIndex,
+            course: i,
+            type: "cladding",
+            part: "bottom",
+            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
+          }
         );
         parts.push(m0);
         if (dbgClad && cladFitAcc) absorb(m0);
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const xUpper = (String(wallId) === "left") ? (origin.x - tUpper) : (origin.x + wallThk);
+        const xUpper = String(wallId) === "left" ? origin.x - tUpper : origin.x + wallThk;
 
         const m1 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
@@ -351,29 +378,44 @@ export function build3D(state, ctx) {
           panelLen,
           { x: xUpper, y: yUpperStrip, z: origin.z + panelStart },
           mat,
-          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
+          {
+            wallId,
+            panelIndex,
+            course: i,
+            type: "cladding",
+            part: "upper",
+            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
+          }
         );
         parts.push(m1);
         if (dbgClad && cladFitAcc) absorb(m1);
       }
 
-      if (dbgClad && cladFitAcc && Number.isFinite(panelMinAxis_mm) && Number.isFinite(panelMaxAxis_mm) && Number.isFinite(courseMinAxis_mm) && Number.isFinite(courseMaxAxis_mm)) {
+      if (
+        dbgClad &&
+        cladFitAcc &&
+        Number.isFinite(panelMinAxis_mm) &&
+        Number.isFinite(panelMaxAxis_mm) &&
+        Number.isFinite(courseMinAxis_mm) &&
+        Number.isFinite(courseMaxAxis_mm)
+      ) {
         const overhangLeft_mm = Number(panelMinAxis_mm) - Number(courseMinAxis_mm);
         const overhangRight_mm = Number(courseMaxAxis_mm) - Number(panelMaxAxis_mm);
 
         cladFitAcc.samplesCount += 1;
 
-        if (!((overhangLeft_mm <= CLAD_FIT_EPS_MM) && (overhangRight_mm <= CLAD_FIT_EPS_MM))) {
-          cladFitAcc.ok = false;
-        }
+        const leftBad = overhangLeft_mm > CLAD_FIT_EPS_MM;
+        const rightBad = overhangRight_mm > CLAD_FIT_EPS_MM;
+
+        if (leftBad || rightBad) cladFitAcc.ok = false;
 
         const posL = Math.max(0, overhangLeft_mm);
         const posR = Math.max(0, overhangRight_mm);
-        const side = (posR > posL) ? "right" : "left";
+        const side = posR > posL ? "right" : "left";
         const mm = Math.max(posL, posR);
 
-        if (!cladFitAcc.worst || mm > Number(cladFitAcc.worst.mm || 0)) {
-          cladFitAcc.worst = { side, mm, wallName: String(wallId || ""), panelIndex: Number(panelIndex), courseIndex: Number(i) };
+        if ((leftBad || rightBad) && (!cladFitAcc.worst || mm > Number(cladFitAcc.worst.mm || 0))) {
+          cladFitAcc.worst = { side, mm, wall: String(wallId || ""), panel: Number(panelIndex), course: Number(i) };
         }
       }
     }
@@ -391,12 +433,6 @@ export function build3D(state, ctx) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
-    } else {
-      for (let i = 0; i < parts.length; i++) {
-        try {
-          parts[i].metadata = Object.assign({ dynamic: true }, parts[i].metadata || {}, { wallId, panelIndex, type: "cladding" });
-        } catch (e) {}
-      }
     }
   }
 
@@ -415,8 +451,8 @@ export function build3D(state, ctx) {
               window.__dbg.cladFit = {
                 ok: !!cladFitAcc.ok,
                 eps_mm: CLAD_FIT_EPS_MM,
-                worst: cladFitAcc.worst ? cladFitAcc.worst : { side: "left", mm: 0, wallName: "", panelIndex: null, courseIndex: null },
-                samplesCount: Number(cladFitAcc.samplesCount || 0)
+                worst: cladFitAcc.worst ? cladFitAcc.worst : { side: "left", mm: 0, wall: "", panel: null, course: null },
+                samplesCount: Number(cladFitAcc.samplesCount || 0),
               };
 
               if (window.__dbg.cladFit.ok) {
@@ -426,12 +462,17 @@ export function build3D(state, ctx) {
                 const mm = Number(w.mm || 0);
                 const mmTxt = (mm >= 0 ? "+" : "") + mm.toFixed(1);
                 console.log(
-                  "CLAD_FIT FAIL side=" + String(w.side || "left") +
-                  " mm=" + mmTxt +
-                  " wall=" + String(w.wallName || "") +
-                  " panel=" + String(w.panelIndex != null ? w.panelIndex : "") +
-                  " course=" + String(w.courseIndex != null ? w.courseIndex : "") +
-                  " eps=0.5"
+                  "CLAD_FIT FAIL side=" +
+                    String(w.side || "left") +
+                    " mm=" +
+                    mmTxt +
+                    " wall=" +
+                    String(w.wall || "") +
+                    " panel=" +
+                    String(w.panel != null ? w.panel : "") +
+                    " course=" +
+                    String(w.course != null ? w.course : "") +
+                    " eps=0.5"
                 );
               }
             } catch (e) {}
@@ -493,7 +534,7 @@ export function build3D(state, ctx) {
     const isSlopeWall = isPent && (wallId === "front" || wallId === "back");
     const centerX = origin.x + Math.floor((doorX0 + doorX1) / 2);
 
-    const wallTop = isSlopeWall ? heightAtX(centerX) : (wallId === "left" ? minH : wallId === "right" ? maxH : height);
+    const wallTop = isSlopeWall ? heightAtX(centerX) : wallId === "left" ? minH : wallId === "right" ? maxH : height;
     const studLenLocal = Math.max(1, wallTop - 2 * plateY);
 
     const uprightH = studLenLocal;
@@ -517,7 +558,7 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    const headerL = (door.w + 2 * prof.studW);
+    const headerL = door.w + 2 * prof.studW;
 
     const desiredHeaderY = plateY + doorH;
     const maxHeaderY = Math.max(plateY, wallTop - prof.studH);
@@ -567,7 +608,7 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    const headerL = (door.w + 2 * prof.studW);
+    const headerL = door.w + 2 * prof.studW;
 
     const desiredHeaderY = plateY + doorH;
     const maxHeaderY = Math.max(plateY, wallTop - prof.studH);
@@ -595,7 +636,7 @@ export function build3D(state, ctx) {
 
     const isSlopeWall = isPent && (wallId === "front" || wallId === "back");
     const centerX = origin.x + Math.floor((x0 + x1) / 2);
-    const wallTop = isSlopeWall ? heightAtX(centerX) : (wallId === "left" ? minH : wallId === "right" ? maxH : height);
+    const wallTop = isSlopeWall ? heightAtX(centerX) : wallId === "left" ? minH : wallId === "right" ? maxH : height;
     const studLenLocal = Math.max(1, wallTop - 2 * plateY);
 
     const uprightH = studLenLocal;
@@ -627,7 +668,7 @@ export function build3D(state, ctx) {
       { windowId: id }
     );
 
-    const headerL = (win.w + 2 * prof.studW);
+    const headerL = win.w + 2 * prof.studW;
     mkBox(
       `wall-${wallId}-win-${id}-header`,
       headerL,
@@ -689,7 +730,7 @@ export function build3D(state, ctx) {
       { windowId: id }
     );
 
-    const headerL = (win.w + 2 * prof.studW);
+    const headerL = win.w + 2 * prof.studW;
     mkBox(
       `wall-${wallId}-win-${id}-header`,
       thickness,
@@ -720,45 +761,17 @@ export function build3D(state, ctx) {
     };
 
     if (isAlongX) {
-      mkBox(
-        wallPrefix + "plate-bottom",
-        panelLen,
-        plateY,
-        wallThk,
-        { x: origin.x + offsetAlong, y: 0, z: origin.z },
-        materials.plate
-      );
+      mkBox(wallPrefix + "plate-bottom", panelLen, plateY, wallThk, { x: origin.x + offsetAlong, y: 0, z: origin.z }, materials.plate);
     } else {
-      mkBox(
-        wallPrefix + "plate-bottom",
-        wallThk,
-        plateY,
-        panelLen,
-        { x: origin.x, y: 0, z: origin.z + offsetAlong },
-        materials.plate
-      );
+      mkBox(wallPrefix + "plate-bottom", wallThk, plateY, panelLen, { x: origin.x, y: 0, z: origin.z + offsetAlong }, materials.plate);
     }
 
     const placeStud = (x, z, idx, posStartRel) => {
       const h = hForStart(posStartRel);
       if (isAlongX) {
-        mkBox(
-          wallPrefix + "stud-" + idx,
-          prof.studW,
-          h,
-          wallThk,
-          { x, y: plateY, z },
-          materials.timber
-        );
+        mkBox(wallPrefix + "stud-" + idx, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber);
       } else {
-        mkBox(
-          wallPrefix + "stud-" + idx,
-          wallThk,
-          h,
-          prof.studW,
-          { x, y: plateY, z },
-          materials.timber
-        );
+        mkBox(wallPrefix + "stud-" + idx, wallThk, h, prof.studW, { x, y: plateY, z }, materials.timber);
       }
     };
 
@@ -790,10 +803,13 @@ export function build3D(state, ctx) {
       let midAllowed = true;
       for (let i = 0; i < panelOpenings.length; i++) {
         const d = panelOpenings[i];
-        const ms = (xm - origin.x);
-        if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
+        const ms = xm - origin.x;
+        if (ms + prof.studW > d.x0 && ms < d.x1) {
+          midAllowed = false;
+          break;
+        }
       }
-      if (midAllowed) placeStud(xm, origin.z, 2, (xm - origin.x));
+      if (midAllowed) placeStud(xm, origin.z, 2, xm - origin.x);
     } else {
       const z0 = origin.z + offsetAlong;
       const z1 = origin.z + offsetAlong + panelLen - prof.studW;
@@ -805,10 +821,13 @@ export function build3D(state, ctx) {
       let midAllowed = true;
       for (let i = 0; i < panelOpenings.length; i++) {
         const d = panelOpenings[i];
-        const ms = (zm - origin.z);
-        if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
+        const ms = zm - origin.z;
+        if (ms + prof.studW > d.x0 && ms < d.x1) {
+          midAllowed = false;
+          break;
+        }
       }
-      if (midAllowed) placeStud(origin.x, zm, 2, (zm - origin.z));
+      if (midAllowed) placeStud(origin.x, zm, 2, zm - origin.z);
     }
   }
 
@@ -822,10 +841,7 @@ export function build3D(state, ctx) {
 
     const isSlopeWall = isPent && isAlongX && (wallId === "front" || wallId === "back");
 
-    const wallHeightFlat = isPent
-      ? (wallId === "left" ? minH : wallId === "right" ? maxH : height)
-      : height;
-
+    const wallHeightFlat = isPent ? (wallId === "left" ? minH : wallId === "right" ? maxH : height) : height;
     const studLenFlat = Math.max(1, wallHeightFlat - 2 * plateY);
 
     if (isAlongX) {
@@ -835,16 +851,7 @@ export function build3D(state, ctx) {
       } else {
         const yTop0 = heightAtX(origin.x);
         const yTop1 = heightAtX(origin.x + length);
-        mkSlopedPlateAlongX(
-          wallPrefix + "plate-top",
-          length,
-          wallThk,
-          { x: origin.x, z: origin.z },
-          yTop0,
-          yTop1,
-          materials.plate,
-          {}
-        );
+        mkSlopedPlateAlongX(wallPrefix + "plate-top", length, wallThk, { x: origin.x, z: origin.z }, yTop0, yTop1, materials.plate, {});
       }
     } else {
       mkBox(wallPrefix + "plate-bottom", wallThk, plateY, length, { x: origin.x, y: 0, z: origin.z }, materials.plate);
@@ -864,15 +871,7 @@ export function build3D(state, ctx) {
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
         const pref = wallPrefix + `panel-${p + 1}-`;
-        buildBasicPanel(
-          pref,
-          axis,
-          pan.len,
-          origin,
-          pan.start,
-          openingsX,
-          isAlongX ? studLenForXStart : (() => studLenFlat)
-        );
+        buildBasicPanel(pref, axis, pan.len, origin, pan.start, openingsX, isAlongX ? studLenForXStart : () => studLenFlat);
       }
 
       for (let i = 0; i < doors.length; i++) {
@@ -895,15 +894,7 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        claddingJobs.push({
-          wallId,
-          axis,
-          panelIndex: (p + 1),
-          panelStart: pan.start,
-          panelLen: pan.len,
-          origin,
-          panelHeight: panelH
-        });
+        claddingJobs.push({ wallId, axis, panelIndex: p + 1, panelStart: pan.start, panelLen: pan.len, origin, panelHeight: panelH });
       }
 
       return;
@@ -962,15 +953,7 @@ export function build3D(state, ctx) {
       panelH = Math.min(h0, h1);
     }
 
-    claddingJobs.push({
-      wallId,
-      axis,
-      panelIndex: 1,
-      panelStart: 0,
-      panelLen: length,
-      origin,
-      panelHeight: panelH
-    });
+    claddingJobs.push({ wallId, axis, panelIndex: 1, panelStart: 0, panelLen: length, origin, panelHeight: panelH });
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
@@ -986,10 +969,7 @@ export function build3D(state, ctx) {
 }
 
 function resolveProfile(state, variant) {
-  const defaults =
-    variant === "insulated"
-      ? { studW: 50, studH: 100, spacing: 400 }
-      : { studW: 50, studH: 75, spacing: null };
+  const defaults = variant === "insulated" ? { studW: 50, studH: 100, spacing: 400 } : { studW: 50, studH: 75, spacing: null };
 
   const cfg = state?.walls?.[variant];
   const w = Math.floor(Number(cfg?.section?.w));
@@ -1071,7 +1051,7 @@ function computeBasicPanels(length, prof, openingsX) {
       .map((o) => ({ x0: Math.floor(o.x0 ?? 0), x1: Math.floor(o.x1 ?? 0) }))
       .filter((o) => Number.isFinite(o.x0) && Number.isFinite(o.x1));
 
-    all.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
+    all.sort((a, b) => a.x0 - b.x0 || a.x1 - b.x1);
 
     const clusters = [];
     if (all.length) {
@@ -1111,7 +1091,7 @@ function computeBasicPanels(length, prof, openingsX) {
       let cur = { start: regions[0].start, end: regions[0].end };
       for (let i = 1; i < regions.length; i++) {
         const r = regions[i];
-        if (r.start <= (cur.end + 1)) {
+        if (r.start <= cur.end + 1) {
           cur.end = Math.max(cur.end, r.end);
         } else {
           merged.push(cur);
@@ -1215,7 +1195,7 @@ export function updateBOM(state) {
         if (pi < 0) continue;
 
         const id = String(d.id || "");
-        const headerL = (d.w + 2 * prof.studW);
+        const headerL = d.w + 2 * prof.studW;
 
         openingItemsByPanel[pi].push(["  Door Uprights", 2, studLen, prof.studW, wallThk, `door ${id}`]);
         openingItemsByPanel[pi].push(["  Door Header", 1, headerL, prof.studH, wallThk, `door ${id}`]);
@@ -1228,7 +1208,7 @@ export function updateBOM(state) {
         if (pi < 0) continue;
 
         const id = String(w.id || "");
-        const headerL = (w.w + 2 * prof.studW);
+        const headerL = w.w + 2 * prof.studW;
 
         openingItemsByPanel[pi].push(["  Window Uprights", 2, studLen, prof.studW, wallThk, `window ${id}`]);
         openingItemsByPanel[pi].push(["  Window Header", 1, headerL, prof.studH, wallThk, `window ${id}`]);
@@ -1285,7 +1265,7 @@ export function updateBOM(state) {
 
   function heightAtX(x_mm) {
     const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
-    const t = frameW > 0 ? (x / frameW) : 0;
+    const t = frameW > 0 ? x / frameW : 0;
     return Math.max(100, Math.floor(minH + (maxH - minH) * t));
   }
 
@@ -1311,10 +1291,10 @@ export function updateBOM(state) {
   for (const wname of walls) {
     const L = lengths[wname];
 
-    const isFrontBack = (wname === "front" || wname === "back");
+    const isFrontBack = wname === "front" || wname === "back";
     const isSlopeWall = isFrontBack;
 
-    const wallHFlat = (wname === "left") ? minH : (wname === "right") ? maxH : baseHeight;
+    const wallHFlat = wname === "left" ? minH : wname === "right" ? maxH : baseHeight;
     const studLenFlat = Math.max(1, wallHFlat - 2 * plateY);
 
     sections.push([`WALL: ${wname} (${variant})`, "", "", "", "", `pent slope X; minH=${minH}mm, maxH=${maxH}mm; L=${L}mm`]);
@@ -1341,7 +1321,7 @@ export function updateBOM(state) {
       if (pi < 0) continue;
 
       const id = String(d.id || "");
-      const headerL = (d.w + 2 * prof.studW);
+      const headerL = d.w + 2 * prof.studW;
 
       const cx = Math.floor((d.x0 + d.x1) / 2);
       const topH = isSlopeWall ? heightAtX(cx) : wallHFlat;
@@ -1357,7 +1337,7 @@ export function updateBOM(state) {
       if (pi < 0) continue;
 
       const id = String(w.id || "");
-      const headerL = (w.w + 2 * prof.studW);
+      const headerL = w.w + 2 * prof.studW;
 
       const cx = Math.floor((w.x0 + w.x1) / 2);
       const topH = isSlopeWall ? heightAtX(cx) : wallHFlat;
@@ -1390,7 +1370,10 @@ export function updateBOM(state) {
         else {
           let count = 2;
           let run = 400;
-          while (run <= pan.len - prof.studW) { count += 1; run += prof.spacing; }
+          while (run <= pan.len - prof.studW) {
+            count += 1;
+            run += prof.spacing;
+          }
           sections.push([`  Studs`, count, studLenFlat, prof.studW, wallThk, `pent; ${wname}; @400`]);
         }
       } else {
@@ -1412,7 +1395,7 @@ export function updateBOM(state) {
           const panelOpenings = openingsX.filter((d) => {
             const s = d.x0;
             const e = d.x1;
-            return e > offsetAlong && s < (offsetAlong + panelLen);
+            return e > offsetAlong && s < offsetAlong + panelLen;
           });
 
           const studAt = (posStart) => {
@@ -1435,7 +1418,10 @@ export function updateBOM(state) {
           let midAllowed = true;
           for (let i = 0; i < panelOpenings.length; i++) {
             const d = panelOpenings[i];
-            if (xm + prof.studW > d.x0 && xm < d.x1) { midAllowed = false; break; }
+            if (xm + prof.studW > d.x0 && xm < d.x1) {
+              midAllowed = false;
+              break;
+            }
           }
           if (midAllowed) {
             const cx = Math.floor(xm + prof.studW / 2);
@@ -1466,9 +1452,11 @@ export function updateBOM(state) {
           }
         }
 
-        Object.keys(studsByLen).sort((a, b) => Number(a) - Number(b)).forEach((k) => {
-          sections.push([`  Studs`, studsByLen[k], Number(k), prof.studW, wallThk, `pent slope; ${wname}`]);
-        });
+        Object.keys(studsByLen)
+          .sort((a, b) => Number(a) - Number(b))
+          .forEach((k) => {
+            sections.push([`  Studs`, studsByLen[k], Number(k), prof.studW, wallThk, `pent slope; ${wname}`]);
+          });
       }
 
       const items = openingItemsByPanel[p] || [];
