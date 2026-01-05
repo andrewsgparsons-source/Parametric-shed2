@@ -201,6 +201,7 @@ function initApp() {
 
     var vWallsEl = $("vWalls");
     var vRoofEl = $("vRoof");
+    var vBaseAllEl = $("vBaseAll");
     var vBaseEl = $("vBase");
     var vFrameEl = $("vFrame");
     var vInsEl = $("vIns");
@@ -290,9 +291,8 @@ function initApp() {
       return true;
     }
 
-    function getBaseEnabled(state) { return (state && state.vis && typeof state.vis.base === "boolean") ? state.vis.base : true; }
-
     function getRoofEnabled(state) { return (state && state.vis && typeof state.vis.roof === "boolean") ? state.vis.roof : true; }
+    function getBaseEnabled(state) { return (state && state.vis && typeof state.vis.baseAll === "boolean") ? state.vis.baseAll : true; }
 
     function getWallParts(state) {
       var vis = state && state.vis ? state.vis : null;
@@ -1368,6 +1368,7 @@ function initApp() {
           if (overBackEl) overBackEl.value = state.overhang.back_mm == null ? "" : String(state.overhang.back_mm);
         }
 
+        if (vBaseAllEl) vBaseAllEl.checked = getBaseEnabled(state);
         if (vBaseEl) vBaseEl.checked = !!(state && state.vis && state.vis.base);
         if (vFrameEl) vFrameEl.checked = !!(state && state.vis && state.vis.frame);
         if (vInsEl) vInsEl.checked = !!(state && state.vis && state.vis.ins);
@@ -1479,7 +1480,9 @@ function initApp() {
 
     if (vRoofEl) vRoofEl.addEventListener("change", function(e){ store.setState({ vis: { roof: !!e.target.checked } }); console.log("[vis] roof=", !!e.target.checked); });
 
-    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { var on = !!(e && e.target && e.target.checked); store.setState({ vis: { base: on } }); console.log("[vis] base=", on ? "ON" : "OFF"); });
+    if (vBaseAllEl) vBaseAllEl.addEventListener("change", function(e){ var on = !!(e && e.target && e.target.checked); store.setState({ vis: { baseAll: on } }); console.log("[vis] base=", on ? "ON" : "OFF"); });
+
+    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { store.setState({ vis: { base: !!e.target.checked } }); });
     if (vFrameEl) vFrameEl.addEventListener("change", function (e) { store.setState({ vis: { frame: !!e.target.checked } }); });
     if (vInsEl) vInsEl.addEventListener("change", function (e) { store.setState({ vis: { ins: !!e.target.checked } }); });
     if (vDeckEl) vDeckEl.addEventListener("change", function (e) { store.setState({ vis: { deck: !!e.target.checked } }); });
