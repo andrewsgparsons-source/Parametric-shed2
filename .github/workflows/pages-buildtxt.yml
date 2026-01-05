@@ -1,0 +1,41 @@
+# FILE: .github/workflows/pages-buildtxt.yml
+name: Pages build.txt (short SHA)
+
+on:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: write
+
+jobs:
+  write-build-txt:
+    if: ${{ github.ref_name == github.event.repository.default_branch && github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write docs/build.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="$(printf '%s' "${GITHUB_SHA}" | cut -c1-7)"
+          mkdir -p docs
+          printf '%s\n' "${short_sha}" > docs/build.txt
+
+      - name: Commit and push if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- docs/build.txt; then
+            echo "No changes to docs/build.txt"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/build.txt
+          git commit -m "ci: update docs/build.txt"
+          git push
