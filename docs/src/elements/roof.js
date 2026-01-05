@@ -104,6 +104,8 @@ function buildPent(state, ctx) {
   if (!scene) return;
   if (!isPentEnabled(state)) return;
 
+  const roofParts = getRoofParts(state);
+
   const data = computeRoofData_Pent(state);
   const dims = resolveDims(state);
 
@@ -169,73 +171,77 @@ function buildPent(state, ctx) {
     return { x0: b0, z0: a0, lenX: bLen, lenZ: aLen }; // A->Z, B->X
   }
 
-  // Rim joists (front/back at ends of A; run along B)
-  {
-    const m = mapABtoLocalXZ(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
-    mkBoxBottomLocal(
-      "roof-rim-front",
-      m.lenX,
-      data.rafterD_mm,
-      m.lenZ,
-      m.x0,
-      0,
-      m.z0,
-      roofRoot,
-      joistMat,
-      { roof: "pent", part: "rim", edge: "front" }
-    );
-  }
-  {
-    const m = mapABtoLocalXZ(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
-    mkBoxBottomLocal(
-      "roof-rim-back",
-      m.lenX,
-      data.rafterD_mm,
-      m.lenZ,
-      m.x0,
-      0,
-      m.z0,
-      roofRoot,
-      joistMat,
-      { roof: "pent", part: "rim", edge: "back" }
-    );
+  if (roofParts.structure) {
+    // Rim joists (front/back at ends of A; run along B)
+    {
+      const m = mapABtoLocalXZ(0, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+      mkBoxBottomLocal(
+        "roof-rim-front",
+        m.lenX,
+        data.rafterD_mm,
+        m.lenZ,
+        m.x0,
+        0,
+        m.z0,
+        roofRoot,
+        joistMat,
+        { roof: "pent", part: "rim", edge: "front" }
+      );
+    }
+    {
+      const m = mapABtoLocalXZ(rimBackA0_mm, 0, rimThkA_mm, rimRunB_mm, data.isWShort);
+      mkBoxBottomLocal(
+        "roof-rim-back",
+        m.lenX,
+        data.rafterD_mm,
+        m.lenZ,
+        m.x0,
+        0,
+        m.z0,
+        roofRoot,
+        joistMat,
+        { roof: "pent", part: "rim", edge: "back" }
+      );
+    }
+
+    // Rafters (span A, placed along B @600)
+    for (let i = 0; i < data.rafters.length; i++) {
+      const r = data.rafters[i];
+      const mapped = mapABtoLocalXZ(0, r.b0_mm, data.rafterLen_mm, data.rafterW_mm, data.isWShort);
+
+      mkBoxBottomLocal(
+        `roof-rafter-${i}`,
+        mapped.lenX,
+        data.rafterD_mm,
+        mapped.lenZ,
+        mapped.x0,
+        0,
+        mapped.z0,
+        roofRoot,
+        joistMat,
+        { roof: "pent", part: "rafter" }
+      );
+    }
   }
 
-  // Rafters (span A, placed along B @600)
-  for (let i = 0; i < data.rafters.length; i++) {
-    const r = data.rafters[i];
-    const mapped = mapABtoLocalXZ(0, r.b0_mm, data.rafterLen_mm, data.rafterW_mm, data.isWShort);
-
-    mkBoxBottomLocal(
-      `roof-rafter-${i}`,
-      mapped.lenX,
-      data.rafterD_mm,
-      mapped.lenZ,
-      mapped.x0,
-      0,
-      mapped.z0,
-      roofRoot,
-      joistMat,
-      { roof: "pent", part: "rafter" }
-    );
-  }
-
-  // OSB (bottom on top of rafters)
-  const osbBottomY_m_local = data.rafterD_mm / 1000;
-  for (let i = 0; i < data.osb.all.length; i++) {
-    const p = data.osb.all[i];
-    mkBoxBottomLocal(
-      `roof-osb-${i}`,
-      p.xLen_mm,
-      data.osbThickness_mm,
-      p.zLen_mm,
-      p.x0_mm,
-      osbBottomY_m_local,
-      p.z0_mm,
-      roofRoot,
-      osbMat,
-      { roof: "pent", part: "osb", kind: p.kind }
-    );
+  if (roofParts.osb) {
+    // OSB (bottom on top of rafters)
+    const osbBottomY_m_local = data.rafterD_mm / 1000;
+    for (let i = 0; i < data.osb.all.length; i++) {
+      const p = data.osb.all[i];
+      mkBoxBottomLocal(
+        `roof-osb-${i}`,
+        p.xLen_mm,
+        data.osbThickness_mm,
+        p.zLen_mm,
+        p.x0_mm,
+        osbBottomY_m_local,
+        p.z0_mm,
+        roofRoot,
+        osbMat,
+        { roof: "pent", part: "osb", kind: p.kind }
+      );
+    }
   }
 
   // ---- Analytic alignment (no wall mesh queries) ----
@@ -359,7 +365,7 @@ function buildPent(state, ctx) {
   }
 
   try {
-    if (typeof window !== "undefined" && window.__dbg) {
+    if (roofParts.structure && typeof window !== "undefined" && window.__dbg) {
       const lowW = worldOfLocal(pLowLocal);
       const highW = worldOfLocal(pHighLocal);
 
@@ -637,6 +643,8 @@ function buildApex(state, ctx) {
   const { scene, materials } = ctx || {};
   if (!scene) return;
 
+  const roofParts = getRoofParts(state);
+
   const dims = resolveDims(state);
 
   const ovh = (dims && dims.overhang) ? dims.overhang : { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
@@ -821,113 +829,117 @@ function buildApex(state, ctx) {
     }
   }
 
-  for (let i = 0; i < trussPos.length; i++) buildTruss(i, trussPos[i]);
+  if (roofParts.structure) {
+    for (let i = 0; i < trussPos.length; i++) buildTruss(i, trussPos[i]);
 
-  // Ridge beam along B at (x=A/2, y=rise)
-  mkBoxBottomLocal(
-    "roof-ridge",
-    memberW_mm,
-    memberD_mm,
-    B_mm,
-    Math.max(0, Math.floor(halfSpan_mm - memberW_mm / 2)),
-    rise_mm / 1000,
-    0,
-    roofRoot,
-    joistMat,
-    { roof: "apex", part: "ridge" }
-  );
-
-  // Two purlins along B (one each slope) at ~half rise
-  const purlY_mm = Math.floor(rise_mm * 0.5);
-  const purlX1_mm = Math.max(0, Math.floor(A_mm * 0.25 - memberW_mm / 2));
-  const purlX2_mm = Math.max(0, Math.floor(A_mm * 0.75 - memberW_mm / 2));
-
-  mkBoxBottomLocal(
-    "roof-purlin-L",
-    memberW_mm,
-    memberD_mm,
-    B_mm,
-    purlX1_mm,
-    purlY_mm / 1000,
-    0,
-    roofRoot,
-    joistMat,
-    { roof: "apex", part: "purlin", side: "L" }
-  );
-  mkBoxBottomLocal(
-    "roof-purlin-R",
-    memberW_mm,
-    memberD_mm,
-    B_mm,
-    purlX2_mm,
-    purlY_mm / 1000,
-    0,
-    roofRoot,
-    joistMat,
-    { roof: "apex", part: "purlin", side: "R" }
-  );
-
-  // Simple sheathing as two sloped OSB "panels" (visual)
-  // Panel thickness = 18mm, depth = B, length along slope = rafterLen
-  // IMPORTANT: panels are offset to the OTHER SIDE of the purlins (outside of the roof plane).
-  const osbThk = 18;
-
-  // Offset distance from the (rough) truss/purlin center plane to the outside face:
-  // move along the roof normal by (purlin depth/2 + osb thickness/2)
-  const osbOffset_mm = (memberD_mm / 2) + (osbThk / 2);
-
-  // For a slope angle theta, a unit normal (pointing "outwards") in local XY:
-  // left slope (+theta): n = (-sin(theta), +cos(theta))
-  // right slope (-theta): n = (+sin(theta), +cos(theta))
-  const sinT = Math.sin(slopeAng);
-  const cosT = Math.cos(slopeAng);
-
-  {
-    // Left panel baseline center
-    const baseCx = halfSpan_mm / 2;
-    const baseCy = rise_mm / 2 + osbThk / 2;
-
-    // Offset outward
-    const cx = baseCx + (-sinT) * osbOffset_mm;
-    const cy = baseCy + (cosT) * osbOffset_mm;
-
-    const left = mkBoxCenteredLocal(
-      "roof-apex-osb-L",
-      rafterLen_mm,
-      osbThk,
+    // Ridge beam along B at (x=A/2, y=rise)
+    mkBoxBottomLocal(
+      "roof-ridge",
+      memberW_mm,
+      memberD_mm,
       B_mm,
-      cx,
-      cy,
-      B_mm / 2,
+      Math.max(0, Math.floor(halfSpan_mm - memberW_mm / 2)),
+      rise_mm / 1000,
+      0,
       roofRoot,
-      osbMat,
-      { roof: "apex", part: "osb", side: "L" }
+      joistMat,
+      { roof: "apex", part: "ridge" }
     );
-    left.rotation = new BABYLON.Vector3(0, 0, slopeAng);
+
+    // Two purlins along B (one each slope) at ~half rise
+    const purlY_mm = Math.floor(rise_mm * 0.5);
+    const purlX1_mm = Math.max(0, Math.floor(A_mm * 0.25 - memberW_mm / 2));
+    const purlX2_mm = Math.max(0, Math.floor(A_mm * 0.75 - memberW_mm / 2));
+
+    mkBoxBottomLocal(
+      "roof-purlin-L",
+      memberW_mm,
+      memberD_mm,
+      B_mm,
+      purlX1_mm,
+      purlY_mm / 1000,
+      0,
+      roofRoot,
+      joistMat,
+      { roof: "apex", part: "purlin", side: "L" }
+    );
+    mkBoxBottomLocal(
+      "roof-purlin-R",
+      memberW_mm,
+      memberD_mm,
+      B_mm,
+      purlX2_mm,
+      purlY_mm / 1000,
+      0,
+      roofRoot,
+      joistMat,
+      { roof: "apex", part: "purlin", side: "R" }
+    );
   }
 
-  {
-    // Right panel baseline center
-    const baseCx = halfSpan_mm + (halfSpan_mm / 2);
-    const baseCy = rise_mm / 2 + osbThk / 2;
+  if (roofParts.osb) {
+    // Simple sheathing as two sloped OSB "panels" (visual)
+    // Panel thickness = 18mm, depth = B, length along slope = rafterLen
+    // IMPORTANT: panels are offset to the OTHER SIDE of the purlins (outside of the roof plane).
+    const osbThk = 18;
 
-    // Offset outward
-    const cx = baseCx + (sinT) * osbOffset_mm;
-    const cy = baseCy + (cosT) * osbOffset_mm;
+    // Offset distance from the (rough) truss/purlin center plane to the outside face:
+    // move along the roof normal by (purlin depth/2 + osb thickness/2)
+    const osbOffset_mm = (memberD_mm / 2) + (osbThk / 2);
 
-    const right = mkBoxCenteredLocal(
-      "roof-apex-osb-R",
-      rafterLen_mm,
-      osbThk,
-      B_mm,
-      cx,
-      cy,
-      B_mm / 2,
-      roofRoot,
-      osbMat,
-      { roof: "apex", part: "osb", side: "R" }
-    );
-    right.rotation = new BABYLON.Vector3(0, 0, -slopeAng);
+    // For a slope angle theta, a unit normal (pointing "outwards") in local XY:
+    // left slope (+theta): n = (-sin(theta), +cos(theta))
+    // right slope (-theta): n = (+sin(theta), +cos(theta))
+    const sinT = Math.sin(slopeAng);
+    const cosT = Math.cos(slopeAng);
+
+    {
+      // Left panel baseline center
+      const baseCx = halfSpan_mm / 2;
+      const baseCy = rise_mm / 2 + osbThk / 2;
+
+      // Offset outward
+      const cx = baseCx + (-sinT) * osbOffset_mm;
+      const cy = baseCy + (cosT) * osbOffset_mm;
+
+      const left = mkBoxCenteredLocal(
+        "roof-apex-osb-L",
+        rafterLen_mm,
+        osbThk,
+        B_mm,
+        cx,
+        cy,
+        B_mm / 2,
+        roofRoot,
+        osbMat,
+        { roof: "apex", part: "osb", side: "L" }
+      );
+      left.rotation = new BABYLON.Vector3(0, 0, slopeAng);
+    }
+
+    {
+      // Right panel baseline center
+      const baseCx = halfSpan_mm + (halfSpan_mm / 2);
+      const baseCy = rise_mm / 2 + osbThk / 2;
+
+      // Offset outward
+      const cx = baseCx + (sinT) * osbOffset_mm;
+      const cy = baseCy + (cosT) * osbOffset_mm;
+
+      const right = mkBoxCenteredLocal(
+        "roof-apex-osb-R",
+        rafterLen_mm,
+        osbThk,
+        B_mm,
+        cx,
+        cy,
+        B_mm / 2,
+        roofRoot,
+        osbMat,
+        { roof: "apex", part: "osb", side: "R" }
+      );
+      right.rotation = new BABYLON.Vector3(0, 0, -slopeAng);
+    }
   }
 
   // ---- Placement in world: align plan min corner to [-l,-f], then lift to wall height ----
@@ -988,7 +1000,7 @@ function buildApex(state, ctx) {
         runB_mm: B_mm,
         rise_mm: rise_mm,
         ridgeAlongWorldX: ridgeAlongWorldX,
-        osbOffset_mm: osbOffset_mm
+        osbOffset_mm: (memberD_mm / 2) + (18 / 2)
       };
     }
   } catch (e) {}
@@ -1087,6 +1099,16 @@ function updateBOM_Apex(state, tbody) {
 }
 
 /* ------------------------------ Shared helpers ------------------------------ */
+
+function getRoofParts(state) {
+  var vis = state && state.vis ? state.vis : null;
+  var rp = vis && vis.roofParts && typeof vis.roofParts === "object" ? vis.roofParts : null;
+  return {
+    structure: rp ? (rp.structure !== false) : true,
+    osb: rp ? (rp.osb !== false) : true,
+    covering: rp ? (rp.covering !== false) : true
+  };
+}
 
 function appendRow5(tbody, cols) {
   const tr = document.createElement("tr");
