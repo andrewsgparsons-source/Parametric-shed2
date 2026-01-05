@@ -1,1711 +1,509 @@
-// FILE: docs/src/index.js
-// Orchestration only.
-// Adds stud/plate size selector (#wallSection) that updates state.walls.{insulated,basic}.section to 50×75 or 50×100.
-// Keeps all other behavior unchanged.
+<!-- FILE: docs/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Parametric Shed — Views</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="./styles.css">
+</head>
 
-window.__dbg = window.__dbg || {};
-window.__dbg.initStarted = true;
-window.__dbg.initFinished = false;
+<body data-view="3d">
+  <canvas id="renderCanvas" tabindex="0" aria-hidden="false"></canvas>
+  <div id="statusOverlay">status...</div>
 
-function dbgInitDefaults() {
-  if (window.__dbg.engine === undefined) window.__dbg.engine = null;
-  if (window.__dbg.scene === undefined) window.__dbg.scene = null;
-  if (window.__dbg.camera === undefined) window.__dbg.camera = null;
-  if (window.__dbg.frames === undefined) window.__dbg.frames = 0;
-  if (window.__dbg.buildCalls === undefined) window.__dbg.buildCalls = 0;
-  if (window.__dbg.lastError === undefined) window.__dbg.lastError = null;
-  if (window.__dbg.doorSeq === undefined) window.__dbg.doorSeq = 1;
-  if (window.__dbg.windowSeq === undefined) window.__dbg.windowSeq = 1;
-  if (window.__dbg.viewSnap === undefined) window.__dbg.viewSnap = {};
-}
-dbgInitDefaults();
+  <div id="topbar">
+    <select id="viewSelect" aria-label="Select view">
+      <option value="3d" selected>3D Scene View</option>
+      <option value="walls">Walls Cutting List</option>
+      <option value="base">Base Cutting List</option>
+      <option value="roof">Roof Cutting List</option>
+    </select>
+  </div>
 
-window.addEventListener("error", function (e) {
-  window.__dbg.lastError = (e && e.message) ? e.message : String(e);
-});
-window.addEventListener("unhandledrejection", function (e) {
-  window.__dbg.lastError = (e && e.reason) ? String(e.reason) : "unhandledrejection";
-});
+  <div id="ui-layer" aria-hidden="true"></div>
 
-import { createStateStore } from "./state.js";
-import { DEFAULTS, resolveDims } from "./params.js";
-import { boot, disposeAll } from "./renderer/babylon.js";
-import * as Base from "./elements/base.js";
-import * as Walls from "./elements/walls.js";
-import * as Roof from "./elements/roof.js";
-import { renderBOM } from "./bom/index.js";
-import { initInstancesUI } from "./instances.js";
+  <div id="controls" aria-label="Controls">
+    <aside id="controlPanel" aria-label="Controls panel">
+      <details open>
+        <summary>Controls <span style="font-weight:700;font-size:12px;color:#666;">(toggle)</span></summary>
+        <div class="inner">
+          <div class="boHeader">
+            <div class="boTitle1">Design your shed</div>
+            <div class="boTitle2">Build Options — v1.8</div>
+          </div>
 
-function $(id) { return document.getElementById(id); }
-function setDisplay(el, val) { if (el && el.style) el.style.display = val; }
-function setAriaHidden(el, hidden) { if (el) el.setAttribute("aria-hidden", String(!!hidden)); }
+          <form aria-label="Build options">
+            <details open class="boSection">
+              <summary>Size &amp; Shape</summary>
+              <div class="boBox">
+                <div class="row">
+                  <label>
+                    Unit Mode
+                    <div class="unitModeRow" role="group" aria-label="Unit Mode (Metric / Imperial)">
+                      <label class="check"><input id="unitModeMetric" type="radio" name="unitMode" value="metric" checked /> Metric</label>
+                      <label class="check"><input id="unitModeImperial" type="radio" name="unitMode" value="imperial" /> Imperial</label>
+                    </div>
+                  </label>
+                  <div></div>
+                </div>
 
-var WALL_OVERHANG_MM = 25;
-var WALL_RISE_MM = 168;
+                <div class="row">
+                  <label>
+                    Dimension Mode
+                    <select id="dimMode" aria-label="Dimension Mode (Base / Frame / Roof)">
+                      <option value="base" selected>base</option>
+                      <option value="frame">frame</option>
+                      <option value="roof">roof</option>
+                    </select>
+                  </label>
+                  <div></div>
+                </div>
 
-function shiftWallMeshes(scene, dx_mm, dy_mm, dz_mm) {
-  if (!scene || !scene.meshes) return;
-  var dx = (dx_mm || 0) / 1000;
-  var dy = (dy_mm || 0) / 1000;
-  var dz = (dz_mm || 0) / 1000;
+                <div class="row">
+                  <label>
+                    Width (mm)
+                    <input id="wInput" type="number" min="1" step="10" value="3000" />
+                  </label>
+                  <label>
+                    Depth (mm)
+                    <input id="dInput" type="number" min="1" step="10" value="4000" />
+                  </label>
+                </div>
 
-  for (var i = 0; i < scene.meshes.length; i++) {
-    var m = scene.meshes[i];
-    if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
-    if (typeof m.name !== "string" || m.name.indexOf("wall-") !== 0) continue;
-    m.position.x += dx;
-    m.position.y += dy;
-    m.position.z += dz;
-  }
-}
+                <div class="row">
+                  <label>
+                    Roof Type
+                    <select id="roofStyle" aria-label="Roof Type">
+                      <option value="apex" selected>Apex (gabled)</option>
+                      <option value="pent">Pent (single pitch)</option>
+                      <option value="hipped">Hipped</option>
+                    </select>
+                  </label>
+                  <label>
+                    Variant
+                    <select id="wallsVariant" aria-label="Variant">
+                      <option value="insulated" selected>Insulated</option>
+                      <option value="basic">Basic</option>
+                    </select>
+                  </label>
+                </div>
 
-function shiftRoofMeshes(scene, dx_mm, dy_mm, dz_mm) {
-  if (!scene || !scene.meshes) return;
-  var dx = (dx_mm || 0) / 1000;
-  var dy = (dy_mm || 0) / 1000;
-  var dz = (dz_mm || 0) / 1000;
+                <!-- NEW: Scene view snap controls (no existing IDs changed) -->
+                <div class="boSubhead" style="margin-top:10px;">Scene Views</div>
+                <div class="row">
+                  <button id="snapPlanBtn" type="button" title="Snap to plan (top/down) view">Plan</button>
+                  <button id="snapFrontBtn" type="button" title="Snap to front view">Front</button>
+                </div>
+                <div class="row">
+                  <button id="snapBackBtn" type="button" title="Snap to back view">Back</button>
+                  <button id="snapLeftBtn" type="button" title="Snap to left view">Left</button>
+                </div>
+                <div class="row">
+                  <button id="snapRightBtn" type="button" title="Snap to right view">Right</button>
+                  <div></div>
+                </div>
+              </div>
+            </details>
 
-  for (var i = 0; i < scene.meshes.length; i++) {
-    var m = scene.meshes[i];
-    if (!m || !m.metadata || m.metadata.dynamic !== true) continue;
-    if (typeof m.name !== "string" || m.name.indexOf("roof-") !== 0) continue;
-    m.position.x += dx;
-    m.position.y += dy;
-    m.position.z += dz;
-  }
-}
+            <details open class="boSection">
+              <summary>Walls &amp; Openings</summary>
+              <div class="boBox">
+                <div class="boSubhead">Wall Construction</div>
+                <div class="row">
+                  <label>
+                    Stud / Plate Size
+                    <select id="wallSection" aria-label="Stud and plate size">
+                      <option value="50x75">50×75</option>
+                      <option value="50x100" selected>50×100</option>
+                    </select>
+                  </label>
+                  <div></div>
+                </div>
 
-function ensureRequiredDomScaffolding() {
-  function ensureEl(tag, id, parent) {
-    var el = $(id);
-    if (el) return el;
-    el = document.createElement(tag);
-    el.id = id;
-    (parent || document.body).appendChild(el);
-    return el;
-  }
+                <div class="boSubhead" style="margin-top:10px;">Doors</div>
+                <div class="row">
+                  <button id="addDoorBtn" type="button">+ Add Door</button>
+                  <button id="removeAllDoorsBtn" type="button">Remove All</button>
+                </div>
+                <div id="doorsList"></div>
 
-  // Ensure core view containers exist so view switching + BOM rendering does not crash.
-  var bomPage = $("bomPage") || ensureEl("div", "bomPage", document.body);
-  var wallsPage = $("wallsBomPage") || ensureEl("div", "wallsBomPage", document.body);
-  var roofPage = $("roofBomPage") || ensureEl("div", "roofBomPage", document.body);
+                <div class="boSubhead" style="margin-top:10px;">Windows</div>
+                <div class="row">
+                  <button id="addWindowBtn" type="button">+ Add Window</button>
+                  <button id="removeAllWindowsBtn" type="button">Remove All</button>
+                </div>
+                <div id="windowsList"></div>
+              </div>
+            </details>
 
-  // Make sure they start hidden (view system will show/hide).
-  if (bomPage && bomPage.style && bomPage.style.display === "") bomPage.style.display = "none";
-  if (wallsPage && wallsPage.style && wallsPage.style.display === "") wallsPage.style.display = "none";
-  if (roofPage && roofPage.style && roofPage.style.display === "") roofPage.style.display = "none";
+            <details open class="boSection">
+              <summary>Roof</summary>
+              <div class="boBox">
+                <div class="boSubhead">Building Height Options</div>
+                <div class="hint" style="margin:0 0 10px 0;">(Shown after roof type selection)</div>
 
-  // Walls cutting list table (renderBOM targets #bomTable)
-  if (!$("bomTable")) {
-    var t = document.createElement("table");
-    t.id = "bomTable";
-    var tb = document.createElement("tbody");
-    t.appendChild(tb);
-    wallsPage.appendChild(t);
-  }
+                <div id="roofHeightOptions">
+                  <div id="roofHeightsApex" class="roofHeightsBlock" aria-hidden="false">
+                    <div class="boRuleTitle">── Apex Roof ──────────────────────────────────────────────</div>
+                    <div class="row">
+                      <label>
+                        Height to Eaves (mm)
+                        <input id="roofApexEaveHeight" type="number" min="100" step="10" value="1850" />
+                      </label>
+                      <label>
+                        Height to Crest (mm)
+                        <input id="roofApexCrestHeight" type="number" min="100" step="10" value="2200" />
+                      </label>
+                    </div>
+                    <div class="row">
+                      <label>
+                        Roof Pitch
+                        <input id="roofPitchApex" type="text" value="30°" readonly aria-readonly="true" />
+                      </label>
+                      <div class="hint" style="align-self:end;">(calculated, read-only)</div>
+                    </div>
+                  </div>
 
-  // Base cutting list common targets (Base module writes into these IDs)
-  if (!$("timberTableBody")) {
-    var timberTable = document.createElement("table");
-    timberTable.id = "timberTable";
-    var thead1 = document.createElement("thead");
-    var trh1 = document.createElement("tr");
-    trh1.innerHTML = "<th>Item</th><th>Qty</th><th>L</th><th>W</th><th>D</th><th>Notes</th>";
-    thead1.appendChild(trh1);
-    timberTable.appendChild(thead1);
-    var tbody1 = document.createElement("tbody");
-    tbody1.id = "timberTableBody";
-    timberTable.appendChild(tbody1);
-    bomPage.appendChild(timberTable);
-  }
-  if (!$("timberTotals")) {
-    var tt = document.createElement("div");
-    tt.id = "timberTotals";
-    bomPage.appendChild(tt);
-  }
-  if (!$("osbStdBody")) {
-    var osbStd = document.createElement("table");
-    osbStd.id = "osbStdTable";
-    var tbody2 = document.createElement("tbody");
-    tbody2.id = "osbStdBody";
-    osbStd.appendChild(tbody2);
-    bomPage.appendChild(osbStd);
-  }
-  if (!$("osbRipBody")) {
-    var osbRip = document.createElement("table");
-    osbRip.id = "osbRipTable";
-    var tbody3 = document.createElement("tbody");
-    tbody3.id = "osbRipBody";
-    osbRip.appendChild(tbody3);
-    bomPage.appendChild(osbRip);
-  }
-  if (!$("pirBody")) {
-    var pir = document.createElement("table");
-    pir.id = "pirTable";
-    var tbody4 = document.createElement("tbody");
-    tbody4.id = "pirBody";
-    pir.appendChild(tbody4);
-    bomPage.appendChild(pir);
-  }
-  if (!$("gridBody")) {
-    var grid = document.createElement("table");
-    grid.id = "gridTable";
-    var tbody5 = document.createElement("tbody");
-    tbody5.id = "gridBody";
-    grid.appendChild(tbody5);
-    bomPage.appendChild(grid);
-  }
+                  <div id="roofHeightsPent" class="roofHeightsBlock" aria-hidden="true">
+                    <div class="boRuleTitle">── Pent Roof ──────────────────────────────────────────────</div>
+                    <div class="row">
+                      <label>
+                        Minimum Height (mm)
+                        <input id="roofMinHeight" type="number" min="100" step="10" value="2100" />
+                      </label>
+                      <label>
+                        Maximum Height (mm)
+                        <input id="roofMaxHeight" type="number" min="100" step="10" value="2300" />
+                      </label>
+                    </div>
+                    <div class="row">
+                      <label>
+                        Roof Pitch
+                        <input id="roofPitchPent" type="text" value="7°" readonly aria-readonly="true" />
+                      </label>
+                      <div class="hint" style="align-self:end;">(calculated, read-only)</div>
+                    </div>
+                  </div>
 
-  // Roof cutting list target (roof module renders into #roofBomTable if present)
-  if (!$("roofBomTable")) {
-    var roofTable = document.createElement("table");
-    roofTable.id = "roofBomTable";
-    var roofTbody = document.createElement("tbody");
-    roofTable.appendChild(roofTbody);
-    roofPage.appendChild(roofTable);
-  }
-}
+                  <div id="roofHeightsHipped" class="roofHeightsBlock" aria-hidden="true">
+                    <div class="boRuleTitle">── Hipped Roof ────────────────────────────────────────────</div>
+                    <div class="row">
+                      <label>
+                        Height to Eaves (mm)
+                        <input id="roofHippedEaveHeight" type="number" min="100" step="10" value="2000" />
+                      </label>
+                      <label>
+                        Height to Crest (mm)
+                        <input id="roofHippedCrestHeight" type="number" min="100" step="10" value="2400" />
+                      </label>
+                    </div>
+                    <div class="row">
+                      <label>
+                        Roof Pitch
+                        <input id="roofPitchHipped" type="text" value="25°" readonly aria-readonly="true" />
+                      </label>
+                      <div class="hint" style="align-self:end;">(calculated, read-only)</div>
+                    </div>
+                    <div class="row">
+                      <button id="hippedDesignOptionsBtn" type="button" disabled aria-disabled="true">Hipped Roof Design Options</button>
+                      <div class="hint" style="align-self:end;">(disabled / coming soon)</div>
+                    </div>
+                  </div>
+                </div>
 
-function initApp() {
-  try {
-    ensureRequiredDomScaffolding();
+                <div class="boRuleTitle">───────────────────────────────────────────────────────────</div>
+                <div class="boSubhead" style="margin-top:8px;">Overhangs</div>
+                <div class="row">
+                  <label>
+                    Uniform
+                    <input id="roofOverUniform" type="number" min="0" step="1" value="0" />
+                  </label>
+                  <div></div>
+                </div>
+                <div class="row">
+                  <label>Front<input id="roofOverFront" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                  <label>Back<input id="roofOverBack" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                </div>
+                <div class="row">
+                  <label>Left<input id="roofOverLeft" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                  <label>Right<input id="roofOverRight" type="number" min="0" step="1" placeholder="(blank = uniform)" /></label>
+                </div>
+              </div>
+            </details>
 
-    var canvas = $("renderCanvas");
-    var statusOverlayEl = $("statusOverlay");
+            <details open class="boSection">
+              <summary>Appearance</summary>
+              <div class="boBox">
+                <div class="hint">(Cladding, finishes, colours — future)</div>
+              </div>
+            </details>
 
-    if (!canvas) {
-      window.__dbg.lastError = "renderCanvas not found";
-      return;
-    }
+            <details open class="boSection">
+              <summary>Visibility (Advanced)</summary>
+              <div class="boBox">
+                <div class="checks" role="group" aria-label="Visibility: Whole assemblies">
+                  <div class="hint" style="margin:0 0 6px 0;">Whole Assemblies</div>
+                  <label class="check"><input id="vBaseAll" type="checkbox" checked /> Base</label>
+                  <label class="check"><input id="vWalls" type="checkbox" checked /> Walls</label>
+                  <label class="check"><input id="vRoof" type="checkbox" checked /> Roof</label>
+                  <label class="check"><input id="vCladding" type="checkbox" /> Cladding</label>
+                </div>
 
-    var ctx = null;
-    try {
-      ctx = boot(canvas);
-    } catch (e) {
-      window.__dbg.lastError = "boot(canvas) failed: " + String(e && e.message ? e.message : e);
-      return;
-    }
+                <div class="checks" role="group" aria-label="Visibility: Base components" style="margin-top:10px;">
+                  <div class="hint" style="margin:0 0 6px 0;">Base Components</div>
+                  <label class="check"><input id="vBase" type="checkbox" checked /> Base Grid</label>
+                  <label class="check"><input id="vFrame" type="checkbox" checked /> Timber Frame</label>
+                  <label class="check"><input id="vIns" type="checkbox" checked /> Insulation</label>
+                  <label class="check"><input id="vDeck" type="checkbox" checked /> Decking</label>
+                </div>
 
-    window.__dbg.engine = (ctx && ctx.engine) ? ctx.engine : null;
-    window.__dbg.scene = (ctx && ctx.scene) ? ctx.scene : null;
-    window.__dbg.camera = (ctx && ctx.camera) ? ctx.camera : null;
+                <div class="checks" role="group" aria-label="Visibility: Wall components" style="margin-top:10px;">
+                  <div class="hint" style="margin:0 0 6px 0;">Wall Components</div>
+                  <label class="check"><input id="vWallFront" type="checkbox" checked /> Front</label>
+                  <label class="check"><input id="vWallBack" type="checkbox" checked /> Back</label>
+                  <label class="check"><input id="vWallLeft" type="checkbox" checked /> Left</label>
+                  <label class="check"><input id="vWallRight" type="checkbox" checked /> Right</label>
+                </div>
 
-    try {
-      var eng = window.__dbg.engine;
-      if (eng && eng.onEndFrameObservable && typeof eng.onEndFrameObservable.add === "function") {
-        eng.onEndFrameObservable.add(function () { window.__dbg.frames += 1; });
+                <div class="checks" role="group" aria-label="Visibility: Roof components" style="margin-top:10px;">
+                  <div class="hint" style="margin:0 0 6px 0;">Roof Components</div>
+                  <label class="check"><input id="vRoofStructure" type="checkbox" checked /> Structure (future-safe)</label>
+                  <label class="check"><input id="vRoofOsb" type="checkbox" checked /> OSB / Sheathing (future-safe)</label>
+                  <label class="check"><input id="vRoofCovering" type="checkbox" /> Roof Covering</label>
+                </div>
+              </div>
+            </details>
+
+            <details open class="boSection">
+              <summary>Save / Load Design</summary>
+              <div class="boBox">
+                <div class="boSubhead">Saved Designs</div>
+                <div class="row">
+                  <label>
+                    <span class="srOnly">Select design</span>
+                    <select id="instanceSelect" aria-label="Select design"></select>
+                  </label>
+                  <div></div>
+                </div>
+
+                <div class="row">
+                  <button id="saveInstanceBtn" type="button">Save</button>
+                  <button id="saveAsInstanceBtn" type="button">Save As</button>
+                  <button id="loadInstanceBtn" type="button">Load</button>
+                  <button id="deleteInstanceBtn" type="button">Delete</button>
+                </div>
+
+                <div class="row">
+                  <label>
+                    <span class="hint" style="display:block;margin:0 0 4px 0;">New name</span>
+                    <input id="instanceNameInput" type="text" placeholder="e.g. Client A" />
+                  </label>
+                  <div></div>
+                </div>
+
+                <p id="instancesHint" class="hint"></p>
+              </div>
+            </details>
+          </form>
+        </div>
+      </details>
+    </aside>
+  </div>
+
+  <!-- View: Base Cutting List -->
+  <div id="bomPage" class="page" aria-hidden="true">
+    <h2 tabindex="-1">Master Cutting &amp; Assembly Schedule</h2>
+
+    <div id="bomToolbar">
+      <label for="unitsSelect" style="font-size:12px;color:#555;">Units:</label>
+      <select id="unitsSelect">
+        <option value="mm">mm</option>
+        <option value="both">mm + in</option>
+      </select>
+      <button id="exportCsvBtn">Export CSV</button>
+      <button id="printBtn">Print</button>
+    </div>
+
+    <div class="schedule-section">
+      <h4>1. Timber Frame</h4>
+      <table class="sticky-table">
+        <thead><tr><th>Item</th><th>Qty</th><th>Cut Size</th><th>Notes</th></tr></thead>
+        <tbody id="timberTableBody"></tbody>
+        <tfoot><tr class="totals-row"><td colspan="4" id="timberTotals"></td></tr></tfoot>
+      </table>
+    </div>
+
+    <div class="schedule-section">
+      <h4>3. OSB Decking Cutting List (8x4 Sheets)</h4>
+      <p class="subtle">Standard Sheets are full 1220×2440 (oriented per joists). Remainders are staggered as in the 3D layout.</p>
+
+      <table class="sticky-table">
+        <thead><tr><th colspan="4">Standard Sheets</th></tr></thead>
+        <thead><tr><th>Piece</th><th>Qty</th><th>Size (L × W)</th><th>Notes</th></tr></thead>
+        <tbody id="osbStdBody"></tbody>
+        <tfoot><tr class="totals-row"><td colspan="4" id="osbStdTotals"></td></tr></tfoot>
+      </table>
+
+      <table class="sticky-table">
+        <thead><tr><th colspan="4">Rip / Trim Cuts</th></tr></thead>
+        <thead><tr><th>Piece</th><th>Qty</th><th>Size (L × W)</th><th>Notes</th></tr></thead>
+        <tbody id="osbRipBody"></tbody>
+        <tfoot><tr class="totals-row"><td colspan="4" id="osbRipTotals"></td></tr></tfoot>
+      </table>
+
+      <p id="osbSummary" class="subtle"></p>
+    </div>
+
+    <div class="schedule-section">
+      <h4>PIR Insulation — Rip Cuts Only</h4>
+      <table id="pirRipTable">
+        <thead><tr><th>Piece Ref</th><th>Qty</th><th>Cut Size (L x W)</th><th>Type</th></tr></thead>
+        <tbody id="pirRipBody"></tbody>
+      </table>
+      <p id="pirSummary" class="subtle"></p>
+    </div>
+
+    <div class="schedule-section">
+      <h4>3. Plastic Grid Tiles (Modules)</h4>
+      <table id="gridTable">
+        <thead><tr><th>Piece Ref</th><th>Qty</th><th>Cut Size (L x W)</th><th>Type</th></tr></thead>
+        <tbody id="gridBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- View: Walls Cutting List -->
+  <div id="wallsBomPage" class="page" aria-hidden="true">
+    <h2 tabindex="-1">Walls Cutting List</h2>
+    <div class="schedule-section">
+      <h4>Walls — Items</h4>
+      <table class="sticky-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Qty</th>
+            <th>L (mm)</th>
+            <th>W (mm)</th>
+            <th>D (mm)</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="bomTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="roofBomPage" class="page" aria-hidden="true">
+    <h2 tabindex="-1">Roof Cutting List</h2>
+    <div class="schedule-section">
+      <h4>Roof — Items</h4>
+      <table class="sticky-table">
+        <thead>
+          <tr>
+            <th>Item</th><th>Qty</th><th>L (mm)</th><th>W (mm)</th><th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="roofBomTable">
+          <tr><td colspan="5">Roof cutting list not yet generated.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script type="module">
+    (function () {
+      var qs = new URLSearchParams(window.location.search || "");
+      var v = qs.get("v");
+      var clean = (qs.get("clean") === "1");
+
+      window.__boot = window.__boot || {};
+      window.__boot.v = (v != null && v !== "") ? String(v) : null;
+      window.__boot.clean = clean;
+
+      function ensureDebugBootLabel() {
+        var txt = "v=" + (window.__boot.v != null ? window.__boot.v : "(none)") + (clean ? " clean=1" : "");
+        var el = document.getElementById("dbgBootLabel");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "dbgBootLabel";
+          el.setAttribute("aria-hidden", "true");
+          el.style.position = "fixed";
+          el.style.top = "6px";
+          el.style.left = "6px";
+          el.style.zIndex = "2147483647";
+          el.style.pointerEvents = "none";
+          el.style.userSelect = "none";
+          el.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+          el.style.fontSize = "12px";
+          el.style.lineHeight = "1.2";
+          el.style.padding = "2px 6px";
+          el.style.borderRadius = "4px";
+          el.style.background = "rgba(0,0,0,0.55)";
+          el.style.color = "#fff";
+          document.body.appendChild(el);
+        }
+        el.textContent = txt;
       }
-    } catch (e) {}
 
-    var store = createStateStore(DEFAULTS);
-
-    var vWallsEl = $("vWalls");
-    var vBaseEl = $("vBase");
-    var vFrameEl = $("vFrame");
-    var vInsEl = $("vIns");
-    var vDeckEl = $("vDeck");
-
-    var vWallFrontEl = $("vWallFront");
-    var vWallBackEl = $("vWallBack");
-    var vWallLeftEl = $("vWallLeft");
-    var vWallRightEl = $("vWallRight");
-
-    var dimModeEl = $("dimMode");
-    var wInputEl = $("wInput");
-    var dInputEl = $("dInput");
-
-    var roofStyleEl = $("roofStyle");
-
-    var roofMinHeightEl = $("roofMinHeight");
-    var roofMaxHeightEl = $("roofMaxHeight");
-
-    var overUniformEl = $("roofOverUniform");
-    var overFrontEl = $("roofOverFront");
-    var overBackEl = $("roofOverBack");
-    var overLeftEl = $("roofOverLeft");
-    var overRightEl = $("roofOverRight");
-
-    var wallSectionEl = $("wallSection"); // NEW
-    var wallsVariantEl = $("wallsVariant");
-    var wallHeightEl = $("wallHeight");
-
-    var addDoorBtnEl = $("addDoorBtn");
-    var removeAllDoorsBtnEl = $("removeAllDoorsBtn");
-    var doorsListEl = $("doorsList");
-
-    var addWindowBtnEl = $("addWindowBtn");
-    var removeAllWindowsBtnEl = $("removeAllWindowsBtn");
-    var windowsListEl = $("windowsList");
-
-    var instanceSelectEl = $("instanceSelect");
-    var saveInstanceBtnEl = $("saveInstanceBtn");
-    var loadInstanceBtnEl = $("loadInstanceBtn");
-    var instanceNameInputEl = $("instanceNameInput");
-    var saveAsInstanceBtnEl = $("saveAsInstanceBtn");
-    var deleteInstanceBtnEl = $("deleteInstanceBtn");
-    var instancesHintEl = $("instancesHint");
-
-    function applyWallHeightUiLock(state) {
-      if (!wallHeightEl) return;
-
-      var style = "";
-      try {
-        style = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "";
-      } catch (e0) { style = ""; }
-      if (!style && roofStyleEl) style = String(roofStyleEl.value || "");
-
-      if (style === "pent") {
-        wallHeightEl.disabled = true;
-        wallHeightEl.setAttribute("aria-disabled", "true");
-        wallHeightEl.title = "Disabled for pent roof (use Roof Min/Max Height).";
+      if (document.readyState === "loading") {
+        window.addEventListener("DOMContentLoaded", ensureDebugBootLabel, { once: true });
       } else {
-        wallHeightEl.disabled = false;
-        try { wallHeightEl.removeAttribute("aria-disabled"); } catch (e1) {}
-        try { wallHeightEl.removeAttribute("title"); } catch (e2) {}
+        try { ensureDebugBootLabel(); } catch (e0) {}
       }
-    }
 
-    var asPosInt = function (v, def) {
-      var n = Math.floor(Number(v));
-      return Number.isFinite(n) && n > 0 ? n : def;
-    };
-    var asNonNegInt = function (v, def) {
-      if (def === undefined) def = 0;
-      var n = Math.floor(Number(v));
-      return Number.isFinite(n) && n >= 0 ? n : def;
-    };
-    var asNullableInt = function (v) {
-      if (v == null || v === "") return null;
-      var n = Math.floor(Number(v));
-      return Number.isFinite(n) && n >= 0 ? n : null;
-    };
+      if (!clean) return;
 
-    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
-
-    function getWallsEnabled(state) {
-      var vis = state && state.vis ? state.vis : null;
-      if (vis && typeof vis.walls === "boolean") return vis.walls;
-      if (vis && typeof vis.wallsEnabled === "boolean") return vis.wallsEnabled;
-      return true;
-    }
-
-    function getWallParts(state) {
-      var vis = state && state.vis ? state.vis : null;
-
-      if (vis && vis.walls && typeof vis.walls === "object") {
-        return {
-          front: vis.walls.front !== false,
-          back: vis.walls.back !== false,
-          left: vis.walls.left !== false,
-          right: vis.walls.right !== false
+      try {
+        var shim = {
+          getItem: function () { return null; },
+          setItem: function () {},
+          removeItem: function () {},
+          clear: function () {},
+          key: function () { return null; },
+          get length() { return 0; }
         };
-      }
-
-      if (vis && vis.wallsParts && typeof vis.wallsParts === "object") {
-        return {
-          front: vis.wallsParts.front !== false,
-          back: vis.wallsParts.back !== false,
-          left: vis.wallsParts.left !== false,
-          right: vis.wallsParts.right !== false
-        };
-      }
-
-      return { front: true, back: true, left: true, right: true };
-    }
-
-    function resume3D() {
-      var engine = window.__dbg.engine;
-      var camera = window.__dbg.camera;
-
-      setDisplay(canvas, "block");
-      setAriaHidden(canvas, false);
-
-      var bomPage = $("bomPage");
-      var wallsPage = $("wallsBomPage");
-      var roofPage = $("roofBomPage");
-      setDisplay(bomPage, "none");
-      setDisplay(wallsPage, "none");
-      setDisplay(roofPage, "none");
-      setAriaHidden(bomPage, true);
-      setAriaHidden(wallsPage, true);
-      setAriaHidden(roofPage, true);
-
-      try { if (engine && typeof engine.resize === "function") engine.resize(); } catch (e) {}
-      try { if (camera && typeof camera.attachControl === "function") camera.attachControl(canvas, true); } catch (e) {}
-    }
-
-    function showWallsBOM() {
-      var camera = window.__dbg.camera;
-
-      setDisplay(canvas, "none");
-      setAriaHidden(canvas, true);
-
-      var bomPage = $("bomPage");
-      var wallsPage = $("wallsBomPage");
-      var roofPage = $("roofBomPage");
-      setDisplay(bomPage, "none");
-      setDisplay(wallsPage, "block");
-      setDisplay(roofPage, "none");
-      setAriaHidden(bomPage, true);
-      setAriaHidden(wallsPage, false);
-      setAriaHidden(roofPage, true);
-
-      try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
-    }
-
-    function showBaseBOM() {
-      var camera = window.__dbg.camera;
-
-      setDisplay(canvas, "none");
-      setAriaHidden(canvas, true);
-
-      var bomPage = $("bomPage");
-      var wallsPage = $("wallsBomPage");
-      var roofPage = $("roofBomPage");
-      setDisplay(bomPage, "block");
-      setDisplay(wallsPage, "none");
-      setDisplay(roofPage, "none");
-      setAriaHidden(bomPage, false);
-      setAriaHidden(wallsPage, true);
-      setAriaHidden(roofPage, true);
-
-      try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
-    }
-
-    function showRoofBOM() {
-      var camera = window.__dbg.camera;
-
-      setDisplay(canvas, "none");
-      setAriaHidden(canvas, true);
-
-      var bomPage = $("bomPage");
-      var wallsPage = $("wallsBomPage");
-      var roofPage = $("roofBomPage");
-      setDisplay(bomPage, "none");
-      setDisplay(wallsPage, "none");
-      setDisplay(roofPage, "block");
-      setAriaHidden(bomPage, true);
-      setAriaHidden(wallsPage, true);
-      setAriaHidden(roofPage, false);
-
-      try { if (camera && typeof camera.detachControl === "function") camera.detachControl(); } catch (e) {}
-    }
-
-    // ---- NEW: deterministic view snapping helpers (camera + framing) ----
-    function getActiveSceneCamera() {
-      var scene = window.__dbg && window.__dbg.scene ? window.__dbg.scene : null;
-      var camera = window.__dbg && window.__dbg.camera ? window.__dbg.camera : null;
-      return { scene: scene, camera: camera };
-    }
-
-    function isFiniteVec3(v) {
-      return !!v && isFinite(v.x) && isFinite(v.y) && isFinite(v.z);
-    }
-
-    function computeModelBoundsWorld(scene) {
-      var BAB = window.BABYLON;
-      if (!scene || !BAB) return null;
-
-      var min = new BAB.Vector3(+Infinity, +Infinity, +Infinity);
-      var max = new BAB.Vector3(-Infinity, -Infinity, -Infinity);
-      var any = false;
-
-      var meshes = scene.meshes || [];
-      for (var i = 0; i < meshes.length; i++) {
-        var m = meshes[i];
-        if (!m) continue;
-        if (m.isDisposed && m.isDisposed()) continue;
-        if (m.isVisible === false) continue;
-
-        var nm = String(m.name || "");
-        var isModel =
-          (m.metadata && m.metadata.dynamic === true) ||
-          nm.indexOf("wall-") === 0 || nm.indexOf("roof-") === 0 || nm.indexOf("base-") === 0 || nm.indexOf("clad-") === 0;
-        if (!isModel) continue;
-
-        try { m.computeWorldMatrix(true); } catch (e0) {}
-
-        var bi = null;
-        try { bi = (typeof m.getBoundingInfo === "function") ? m.getBoundingInfo() : null; } catch (e1) { bi = null; }
-        if (!bi || !bi.boundingBox) continue;
-
-        var bb = bi.boundingBox;
-        var mi = bb.minimumWorld, ma = bb.maximumWorld;
-        if (!isFiniteVec3(mi) || !isFiniteVec3(ma)) continue;
-
-        any = true;
-        min.x = Math.min(min.x, mi.x); min.y = Math.min(min.y, mi.y); min.z = Math.min(min.z, mi.z);
-        max.x = Math.max(max.x, ma.x); max.y = Math.max(max.y, ma.y); max.z = Math.max(max.z, ma.z);
-      }
-
-      if (!any) return null;
-
-      var center = min.add(max).scale(0.5);
-      var ext = max.subtract(min).scale(0.5);
-      return { min: min, max: max, center: center, extents: ext };
-    }
-
-    function setOrthoForView(camera, viewName, bounds) {
-      var BAB = window.BABYLON;
-      if (!BAB || !camera || !bounds) return;
-
-      try { camera.mode = BAB.Camera.ORTHOGRAPHIC_CAMERA; } catch (e0) {}
-
-      var ext = bounds.extents;
-      var margin = 1.10;
-
-      var halfW = 1, halfH = 1;
-
-      if (viewName === "plan") {
-        halfW = Math.max(0.01, Math.abs(ext.x));
-        halfH = Math.max(0.01, Math.abs(ext.z));
-      } else if (viewName === "front" || viewName === "back") {
-        halfW = Math.max(0.01, Math.abs(ext.x));
-        halfH = Math.max(0.01, Math.abs(ext.y));
-      } else if (viewName === "left" || viewName === "right") {
-        halfW = Math.max(0.01, Math.abs(ext.z));
-        halfH = Math.max(0.01, Math.abs(ext.y));
-      } else {
-        halfW = Math.max(0.01, Math.abs(ext.x));
-        halfH = Math.max(0.01, Math.abs(ext.y));
-      }
-
-      halfW *= margin;
-      halfH *= margin;
+        try { Object.defineProperty(window, "localStorage", { configurable: true, get: function () { return shim; } }); } catch (e1) {}
+        try { Object.defineProperty(window, "sessionStorage", { configurable: true, get: function () { return shim; } }); } catch (e2) {}
+        try {
+          var sp = window.Storage && window.Storage.prototype;
+          if (sp && !sp.__cleanBootPatched) {
+            Object.defineProperty(sp, "__cleanBootPatched", { value: true, configurable: true });
+            sp.getItem = function () { return null; };
+            sp.setItem = function () {};
+            sp.removeItem = function () {};
+            sp.clear = function () {};
+            sp.key = function () { return null; };
+          }
+        } catch (e3) {}
+      } catch (e4) {}
 
       try {
-        camera.orthoLeft = -halfW;
-        camera.orthoRight = +halfW;
-        camera.orthoBottom = -halfH;
-        camera.orthoTop = +halfH;
-      } catch (e1) {}
-    }
-
-    function setArcRotateOrientation(camera, viewName) {
-      var PI = Math.PI;
-
-      var alpha = camera.alpha != null ? camera.alpha : 0;
-      var beta = camera.beta != null ? camera.beta : (PI / 2);
-
-      if (viewName === "plan") {
-        beta = 0.0001;
-        alpha = PI / 2;
-      } else if (viewName === "front") {
-        beta = PI / 2;
-        alpha = PI / 2;
-      } else if (viewName === "back") {
-        beta = PI / 2;
-        alpha = -PI / 2;
-      } else if (viewName === "right") {
-        beta = PI / 2;
-        alpha = 0;
-      } else if (viewName === "left") {
-        beta = PI / 2;
-        alpha = PI;
-      }
-
-      try { camera.alpha = alpha; } catch (e0) {}
-      try { camera.beta = beta; } catch (e1) {}
-    }
-
-    function frameCameraToBounds(camera, bounds, viewName) {
-      var BAB = window.BABYLON;
-      if (!BAB || !camera || !bounds) return;
-
-      var c = bounds.center;
-
-      try {
-        if (typeof camera.setTarget === "function") camera.setTarget(c);
-        else if (camera.target) camera.target = c;
-      } catch (e0) {}
-
-      var ext = bounds.extents;
-      var maxDim = Math.max(Math.abs(ext.x), Math.abs(ext.y), Math.abs(ext.z));
-      var safeR = Math.max(0.5, maxDim * 4.0);
-
-      try { if (camera.radius != null) camera.radius = safeR; } catch (e1) {}
-
-      setOrthoForView(camera, viewName, bounds);
-
-      try {
-        if (camera.minZ != null) camera.minZ = 0.01;
-        if (camera.maxZ != null) camera.maxZ = Math.max(100, safeR * 50);
-      } catch (e2) {}
-    }
-
-    function snapCameraToView(viewName) {
-      var BAB = window.BABYLON;
-      var sc = getActiveSceneCamera();
-      var scene = sc.scene;
-      var camera = sc.camera;
-
-      if (!BAB || !scene || !camera) return false;
-
-      var bounds = computeModelBoundsWorld(scene);
-      if (!bounds) return false;
-
-      var isArcRotate = (camera.alpha != null && camera.beta != null && camera.radius != null);
-
-      try {
-        if (isArcRotate) {
-          setArcRotateOrientation(camera, viewName);
-          frameCameraToBounds(camera, bounds, viewName);
-        } else {
-          var c = bounds.center;
-          var ext = bounds.extents;
-          var maxDim = Math.max(Math.abs(ext.x), Math.abs(ext.y), Math.abs(ext.z));
-          var dist = Math.max(0.5, maxDim * 4.0);
-
-          var pos = null;
-          if (viewName === "plan") pos = new BAB.Vector3(c.x, c.y + dist, c.z);
-          else if (viewName === "front") pos = new BAB.Vector3(c.x, c.y, c.z + dist);
-          else if (viewName === "back") pos = new BAB.Vector3(c.x, c.y, c.z - dist);
-          else if (viewName === "right") pos = new BAB.Vector3(c.x + dist, c.y, c.z);
-          else if (viewName === "left") pos = new BAB.Vector3(c.x - dist, c.y, c.z);
-
-          if (pos) {
-            try { camera.position = pos; } catch (e0) {}
-            try { if (typeof camera.setTarget === "function") camera.setTarget(c); } catch (e1) {}
+        if ("serviceWorker" in navigator && navigator.serviceWorker) {
+          var sw = navigator.serviceWorker;
+          if (typeof sw.register === "function" && !sw.__cleanBootRegisterPatched) {
+            try { Object.defineProperty(sw, "__cleanBootRegisterPatched", { value: true, configurable: true }); } catch (e5) { sw.__cleanBootRegisterPatched = true; }
+            window.__boot._swRegister = window.__boot._swRegister || sw.register;
+            sw.register = function () { return Promise.resolve(null); };
           }
 
-          try { camera.mode = BAB.Camera.ORTHOGRAPHIC_CAMERA; } catch (e2) {}
-          setOrthoForView(camera, viewName, bounds);
+          (async function () {
+            try {
+              var regs = await navigator.serviceWorker.getRegistrations();
+              for (var i = 0; i < regs.length; i++) {
+                try { await regs[i].unregister(); } catch (e6) {}
+              }
+            } catch (e7) {}
+          })();
         }
-
-        try { window.__dbg.viewSnap.last = { view: viewName, t: Date.now() }; } catch (e3) {}
-
-        return true;
-      } catch (e) {
-        window.__dbg.lastError = "snapCameraToView failed: " + String(e && e.message ? e.message : e);
-        return false;
-      }
-    }
-    // ---- END view snapping helpers ----
-
-    // Expose hooks for views.js (no dependency/import changes).
-    window.__viewHooks = {
-      resume3D: resume3D,
-      showWallsBOM: showWallsBOM,
-      showBaseBOM: showBaseBOM,
-      showRoofBOM: showRoofBOM,
-
-      // NEW: camera snap API for views.js
-      getActiveSceneCamera: getActiveSceneCamera,
-      snapCameraToView: snapCameraToView
-    };
-
-    function getWallOuterDimsFromState(state) {
-      var R = resolveDims(state);
-      var w = Math.max(1, Math.floor(R.base.w_mm + (2 * WALL_OVERHANG_MM)));
-      var d = Math.max(1, Math.floor(R.base.d_mm + (2 * WALL_OVERHANG_MM)));
-      return { w_mm: w, d_mm: d };
-    }
-
-    function currentWallThicknessFromState(state) {
-      var v = (state && state.walls && state.walls.variant) ? String(state.walls.variant) : "insulated";
-      var sec = (state && state.walls && state.walls[v] && state.walls[v].section) ? state.walls[v].section : null;
-      var h = sec && sec.h != null ? Math.floor(Number(sec.h)) : (v === "basic" ? 75 : 100);
-      return (Number.isFinite(h) && h > 0) ? h : (v === "basic" ? 75 : 100);
-    }
-
-    function currentStudWFromState(state) {
-      var v = (state && state.walls && state.walls.variant) ? String(state.walls.variant) : "insulated";
-      var sec = (state && state.walls && state.walls[v] && state.walls[v].section) ? state.walls[v].section : null;
-      var w = sec && sec.w != null ? Math.floor(Number(sec.w)) : 50;
-      return (Number.isFinite(w) && w > 0) ? w : 50;
-    }
-
-    function currentPlateYFromState(state) {
-      return currentStudWFromState(state);
-    }
-
-    function currentStudLenFromState(state) {
-      var plateY = currentPlateYFromState(state);
-      var H = state && state.walls && state.walls.height_mm != null ? Math.max(100, Math.floor(Number(state.walls.height_mm))) : 2400;
-      return Math.max(1, H - 2 * plateY);
-    }
-
-    function getWallLengthsForOpenings(state) {
-      var dims = getWallOuterDimsFromState(state);
-      var thk = currentWallThicknessFromState(state);
-      return {
-        front: Math.max(1, Math.floor(dims.w_mm)),
-        back: Math.max(1, Math.floor(dims.w_mm)),
-        left: Math.max(1, Math.floor(dims.d_mm - 2 * thk)),
-        right: Math.max(1, Math.floor(dims.d_mm - 2 * thk)),
-        _thk: thk
-      };
-    }
-
-    function safeDispose() {
-      try {
-        try { disposeAll(ctx); return; } catch (e) {}
-        try { disposeAll(ctx && ctx.scene ? ctx.scene : null); return; } catch (e) {}
-        try { disposeAll(); } catch (e) {}
-      } catch (e) {}
-    }
-
-    function isPentRoofStyle(state) {
-      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-      return roofStyle === "pent";
-    }
-
-    function clampHeightMm(v, def) {
-      var n = Math.max(100, Math.floor(Number(v)));
-      return Number.isFinite(n) ? n : def;
-    }
-
-    function getPentMinMax(state) {
-      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
-      var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
-      var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
-      var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
-      return { minH: minH, maxH: maxH };
-    }
-
-    function computePentDisplayHeight(state) {
-      var mm = getPentMinMax(state);
-      var mid = Math.round((mm.minH + mm.maxH) / 2);
-      return Math.max(100, mid);
-    }
-
-    function getPentHeightsFromState(state) {
-      var base = (state && state.walls && state.walls.height_mm != null) ? clampHeightMm(state.walls.height_mm, 2400) : 2400;
-      var p = (state && state.roof && state.roof.pent) ? state.roof.pent : null;
-      var minH = clampHeightMm(p && p.minHeight_mm != null ? p.minHeight_mm : base, base);
-      var maxH = clampHeightMm(p && p.maxHeight_mm != null ? p.maxHeight_mm : base, base);
-      return { minH: minH, maxH: maxH, base: base };
-    }
-
-    function render(state) {
-      try {
-        window.__dbg.buildCalls += 1;
-
-        var R = resolveDims(state);
-        var baseState = Object.assign({}, state, { w: R.base.w_mm, d: R.base.d_mm });
-
-        var wallDims = getWallOuterDimsFromState(state);
-        var wallState = Object.assign({}, state, { w: wallDims.w_mm, d: wallDims.d_mm });
-
-        safeDispose();
-
-        if (Base && typeof Base.build3D === "function") Base.build3D(baseState, ctx);
-
-        if (getWallsEnabled(state)) {
-          if (Walls && typeof Walls.build3D === "function") Walls.build3D(wallState, ctx);
-          shiftWallMeshes(ctx.scene, -WALL_OVERHANG_MM, WALL_RISE_MM, -WALL_OVERHANG_MM);
-        }
-
-        var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-
-        // Build roof for supported styles (pent + apex). (No behavior change for pent.)
-        if (roofStyle === "pent" || roofStyle === "apex") {
-          var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(R.roof.w_mm)) : Math.max(1, Math.floor(R.base.w_mm));
-          var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(R.roof.d_mm)) : Math.max(1, Math.floor(R.base.d_mm));
-          var roofState = Object.assign({}, state, { w: roofW, d: roofD });
-
-          if (Roof && typeof Roof.build3D === "function") Roof.build3D(roofState, ctx);
-          shiftRoofMeshes(ctx.scene, -WALL_OVERHANG_MM, WALL_RISE_MM, -WALL_OVERHANG_MM);
-
-          if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(roofState);
-        } else {
-          try {
-            if (Roof && typeof Roof.updateBOM === "function") Roof.updateBOM(Object.assign({}, state, { roof: Object.assign({}, state.roof || {}, { style: roofStyle }) }));
-          } catch (e0) {}
-        }
-
-        if (Walls && typeof Walls.updateBOM === "function") {
-          var wallsBom = Walls.updateBOM(wallState);
-          if (wallsBom && wallsBom.sections) renderBOM(wallsBom.sections);
-        }
-
-        if (Base && typeof Base.updateBOM === "function") Base.updateBOM(baseState);
-      } catch (e) {
-        window.__dbg.lastError = "render() failed: " + String(e && e.message ? e.message : e);
-      }
-    }
-
-    function getOpeningsFromState(state) {
-      return (state && state.walls && Array.isArray(state.walls.openings)) ? state.walls.openings : [];
-    }
-
-    function setOpenings(nextOpenings) {
-      store.setState({ walls: { openings: nextOpenings } });
-    }
-
-    function getDoorsFromState(state) {
-      var openings = getOpeningsFromState(state);
-      var doors = [];
-      for (var i = 0; i < openings.length; i++) {
-        var d = openings[i];
-        if (d && d.type === "door") doors.push(d);
-      }
-      return doors;
-    }
-
-    function getWindowsFromState(state) {
-      var openings = getOpeningsFromState(state);
-      var wins = [];
-      for (var i = 0; i < openings.length; i++) {
-        var w = openings[i];
-        if (w && w.type === "window") wins.push(w);
-      }
-      return wins;
-    }
-
-    function getOpeningById(state, id) {
-      var openings = getOpeningsFromState(state);
-      for (var i = 0; i < openings.length; i++) {
-        var o = openings[i];
-        if (o && String(o.id || "") === String(id)) return o;
-      }
-      return null;
-    }
-
-    function validateDoors(state) {
-      var res = { invalidById: {}, invalidIds: [] };
-      var doors = getDoorsFromState(state);
-      var lens = getWallLengthsForOpenings(state);
-      var minGap = 50;
-
-      function wallLen(wall) {
-        return lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
-      }
-
-      for (var i = 0; i < doors.length; i++) {
-        var d = doors[i];
-        var wall = String(d.wall || "front");
-        var L = wallLen(wall);
-        var w = Math.max(1, Math.floor(Number(d.width_mm || 900)));
-        var x = Math.floor(Number(d.x_mm || 0));
-
-        var minX = minGap;
-        var maxX = Math.max(minX, L - w - minGap);
-
-        if (x < minX || x > maxX) {
-          res.invalidById[String(d.id)] =
-            "Invalid: too close to corner/end.\n" +
-            "Allowed X range: " + minX + " .. " + maxX + " (mm)";
-        }
-      }
-
-      var byWall = { front: [], back: [], left: [], right: [] };
-      for (var j = 0; j < doors.length; j++) {
-        var dd = doors[j];
-        var ww = String(dd.wall || "front");
-        if (!byWall[ww]) byWall[ww] = [];
-        byWall[ww].push(dd);
-      }
-
-      function intervalsOverlapOrTooClose(a0, a1, b0, b1, gap) {
-        if (a1 + gap <= b0) return false;
-        if (b1 + gap <= a0) return false;
-        return true;
-      }
-
-      Object.keys(byWall).forEach(function (wall) {
-        var list = byWall[wall] || [];
-        for (var a = 0; a < list.length; a++) {
-          for (var b = a + 1; b < list.length; b++) {
-            var da = list[a], db = list[b];
-            var ax = Math.floor(Number(da.x_mm || 0));
-            var aw = Math.max(1, Math.floor(Number(da.width_mm || 900)));
-            var bx = Math.floor(Number(db.x_mm || 0));
-            var bw = Math.max(1, Math.floor(Number(db.width_mm || 900)));
-
-            var a0 = ax, a1 = ax + aw;
-            var b0 = bx, b1 = bx + bw;
-
-            if (intervalsOverlapOrTooClose(a0, a1, b0, b1, minGap)) {
-              if (!res.invalidById[String(da.id)]) res.invalidById[String(da.id)] = "Invalid: overlaps or is too close (<50mm) to another door on " + wall + ".";
-              if (!res.invalidById[String(db.id)]) res.invalidById[String(db.id)] = "Invalid: overlaps or is too close (<50mm) to another door on " + wall + ".";
-            }
-          }
-        }
-      });
-
-      Object.keys(res.invalidById).forEach(function (k) { res.invalidIds.push(k); });
-      return res;
-    }
-
-    function validateWindows(state) {
-      var res = { invalidById: {}, invalidIds: [] };
-      var wins = getWindowsFromState(state);
-      var lens = getWallLengthsForOpenings(state);
-      var minGap = 50;
-
-      var studLen = currentStudLenFromState(state);
-      var thkY = currentWallThicknessFromState(state);
-
-      function wallLen(wall) {
-        return lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
-      }
-
-      for (var i = 0; i < wins.length; i++) {
-        var w0 = wins[i];
-        var wall = String(w0.wall || "front");
-        var L = wallLen(wall);
-
-        var w = Math.max(1, Math.floor(Number(w0.width_mm || 900)));
-        var x = Math.floor(Number(w0.x_mm || 0));
-
-        var y = Math.floor(Number(w0.y_mm || 0));
-        var h = Math.max(1, Math.floor(Number(w0.height_mm || 600)));
-
-        var minX = minGap;
-        var maxX = Math.max(minX, L - w - minGap);
-
-        if (x < minX || x > maxX) {
-          res.invalidById[String(w0.id)] =
-            "Invalid: too close to corner/end.\n" +
-            "Allowed X range: " + minX + " .. " + maxX + " (mm)";
-        }
-
-        if (y < 0) {
-          res.invalidById[String(w0.id)] = "Invalid: Window Y must be ≥ 0 (mm).";
-        } else if ((y + h + thkY) > studLen) {
-          res.invalidById[String(w0.id)] =
-            "Invalid: window exceeds the wall frame height.\n" +
-            "Max (Y + H) allowed: " + Math.max(0, (studLen - thkY)) + " (mm)";
-        }
-      }
-
-      var byWall = { front: [], back: [], left: [], right: [] };
-      for (var j = 0; j < wins.length; j++) {
-        var ww2 = wins[j];
-        var wl = String(ww2.wall || "front");
-        if (!byWall[wl]) byWall[wl] = [];
-        byWall[wl].push(ww2);
-      }
-
-      function intervalsOverlapOrTooClose(a0, a1, b0, b1, gap) {
-        if (a1 + gap <= b0) return false;
-        if (b1 + gap <= a0) return false;
-        return true;
-      }
-
-      Object.keys(byWall).forEach(function (wall) {
-        var list = byWall[wall] || [];
-        for (var a = 0; a < list.length; a++) {
-          for (var b = a + 1; b < list.length; b++) {
-            var da = list[a], db = list[b];
-            var ax = Math.floor(Number(da.x_mm || 0));
-            var aw = Math.max(1, Math.floor(Number(da.width_mm || 900)));
-            var bx = Math.floor(Number(db.x_mm || 0));
-            var bw = Math.max(1, Math.floor(Number(db.width_mm || 900)));
-
-            var a0 = ax, a1 = ax + aw;
-            var b0 = bx, b1 = bx + bw;
-
-            if (intervalsOverlapOrTooClose(a0, a1, b0, b1, minGap)) {
-              if (!res.invalidById[String(da.id)]) res.invalidById[String(da.id)] = "Invalid: overlaps or is too close (<50mm) to another window on " + wall + ".";
-              if (!res.invalidById[String(db.id)]) res.invalidById[String(db.id)] = "Invalid: overlaps or is too close (<50mm) to another window on " + wall + ".";
-            }
-          }
-        }
-      });
-
-      Object.keys(res.invalidById).forEach(function (k) { res.invalidIds.push(k); });
-      return res;
-    }
-
-    function subtractIntervals(base, forb) {
-      var out = base.slice();
-      forb.forEach(function (f) {
-        var next = [];
-        for (var i = 0; i < out.length; i++) {
-          var seg = out[i];
-          var a = seg[0], b = seg[1];
-          var fa = f[0], fb = f[1];
-          if (fb < a || fa > b) { next.push(seg); continue; }
-          if (fa <= a && fb >= b) { continue; }
-          if (fa > a) next.push([a, fa - 1]);
-          if (fb < b) next.push([fb + 1, b]);
-        }
-        out = next;
-      });
-      return out;
-    }
-
-    function computeSnapX_ForType(state, openingId, type) {
-      var d = getOpeningById(state, openingId);
-      if (!d || String(d.type || "") !== type) return null;
-
-      var minGap = 50;
-      var wall = String(d.wall || "front");
-      var lens = getWallLengthsForOpenings(state);
-      var L = lens[wall] != null ? Math.max(1, Math.floor(lens[wall])) : 1;
-
-      var w = Math.max(1, Math.floor(Number(d.width_mm || 900)));
-      var desired = Math.floor(Number(d.x_mm || 0));
-
-      var minX = minGap;
-      var maxX = Math.max(minX, L - w - minGap);
-
-      var base = [[minX, maxX]];
-      var openings = (type === "door" ? getDoorsFromState(state) : getWindowsFromState(state))
-        .filter(function (x) { return String(x.id || "") !== String(openingId) && String(x.wall || "front") === wall; });
-
-      var forb = [];
-      for (var i = 0; i < openings.length; i++) {
-        var o = openings[i];
-        var ox = Math.floor(Number(o.x_mm || 0));
-        var ow = Math.max(1, Math.floor(Number(o.width_mm || 900)));
-        var fa = (ox - minGap - w);
-        var fb = (ox + ow + minGap);
-        forb.push([fa, fb]);
-      }
-
-      var allowed = subtractIntervals(base, forb);
-      if (!allowed.length) return clamp(desired, minX, maxX);
-
-      var best = null;
-      var bestDist = Infinity;
-
-      for (var k = 0; k < allowed.length; k++) {
-        var seg = allowed[k];
-        var a = seg[0], b = seg[1];
-        var x = clamp(desired, a, b);
-        var dist = Math.abs(x - desired);
-        if (dist < bestDist) { bestDist = dist; best = x; }
-      }
-
-      return best == null ? clamp(desired, minX, maxX) : best;
-    }
-
-    var _invalidSyncGuard = false;
-
-    function syncInvalidOpeningsIntoState() {
-      if (_invalidSyncGuard) return;
-
-      var s = store.getState();
-      var dv = validateDoors(s);
-      var wv = validateWindows(s);
-
-      var curDoors = (s && s.walls && Array.isArray(s.walls.invalidDoorIds)) ? s.walls.invalidDoorIds.map(String) : [];
-      var curWins = (s && s.walls && Array.isArray(s.walls.invalidWindowIds)) ? s.walls.invalidWindowIds.map(String) : [];
-
-      var nextDoors = dv.invalidIds.slice().sort();
-      var nextWins = wv.invalidIds.slice().sort();
-
-      function sameArr(a, b) {
-        if (a.length !== b.length) return false;
-        for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-        return true;
-      }
-
-      var curDoorsS = curDoors.slice().sort();
-      var curWinsS = curWins.slice().sort();
-
-      var need = (!sameArr(curDoorsS, nextDoors)) || (!sameArr(curWinsS, nextWins));
-      if (need) {
-        _invalidSyncGuard = true;
-        store.setState({ walls: { invalidDoorIds: nextDoors, invalidWindowIds: nextWins } });
-        _invalidSyncGuard = false;
-      }
-
-      return { doors: dv, windows: wv };
-    }
-
-    var snapNoticeDoorById = {};
-    var snapNoticeWinById = {};
-
-    function patchOpeningById(openingId, patch) {
-      var s = store.getState();
-      var cur = getOpeningsFromState(s);
-      var next = [];
-      for (var i = 0; i < cur.length; i++) {
-        var o = cur[i];
-        if (o && String(o.id || "") === String(openingId)) next.push(Object.assign({}, o, patch));
-        else next.push(o);
-      }
-      setOpenings(next);
-    }
-
-    function wireCommitOnly(inputEl, onCommit) {
-      inputEl.addEventListener("blur", function () { onCommit(); });
-      inputEl.addEventListener("keydown", function (e) {
-        if (!e) return;
-        if (e.key === "Enter") {
-          e.preventDefault();
-          try { e.target.blur(); } catch (ex) {}
-        }
-      });
-    }
-
-    function renderDoorsUi(state, validation) {
-      if (!doorsListEl) return;
-      doorsListEl.innerHTML = "";
-
-      var doors = getDoorsFromState(state);
-
-      for (var i = 0; i < doors.length; i++) {
-        (function (door) {
-          var id = String(door.id || "");
-
-          var item = document.createElement("div");
-          item.className = "doorItem";
-
-          var top = document.createElement("div");
-          top.className = "doorTop";
-
-          var wallLabel = document.createElement("label");
-          wallLabel.textContent = "Wall";
-          var wallSel = document.createElement("select");
-          wallSel.innerHTML =
-            '<option value="front">front</option>' +
-            '<option value="back">back</option>' +
-            '<option value="left">left</option>' +
-            '<option value="right">right</option>';
-          wallSel.value = String(door.wall || "front");
-          wallLabel.appendChild(wallSel);
-
-          var actions = document.createElement("div");
-          actions.className = "doorActions";
-
-          var snapBtn = document.createElement("button");
-          snapBtn.type = "button";
-          snapBtn.className = "snapBtn";
-          snapBtn.textContent = "Snap to nearest viable position";
-
-          var rmBtn = document.createElement("button");
-          rmBtn.type = "button";
-          rmBtn.textContent = "Remove";
-
-          actions.appendChild(snapBtn);
-          actions.appendChild(rmBtn);
-
-          top.appendChild(wallLabel);
-          top.appendChild(actions);
-
-          var row = document.createElement("div");
-          row.className = "row3";
-
-          function makeNum(labelTxt, v, min, step) {
-            var lab = document.createElement("label");
-            lab.textContent = labelTxt;
-            var inp = document.createElement("input");
-            inp.type = "number";
-            inp.min = String(min);
-            inp.step = String(step);
-            inp.value = String(v == null ? "" : v);
-            lab.appendChild(inp);
-            return { lab: lab, inp: inp };
-          }
-
-          var xField = makeNum("Door X (mm)", Math.floor(Number(door.x_mm ?? 0)), 0, 10);
-          var wField = makeNum("Door W (mm)", Math.floor(Number(door.width_mm ?? 900)), 100, 10);
-          var hField = makeNum("Door H (mm)", Math.floor(Number(door.height_mm ?? 2000)), 100, 10);
-
-          row.appendChild(xField.lab);
-          row.appendChild(wField.lab);
-          row.appendChild(hField.lab);
-
-          var msg = document.createElement("div");
-          msg.className = "doorMsg";
-
-          var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
-          var notice = snapNoticeDoorById[id] ? snapNoticeDoorById[id] : null;
-
-          if (invalidMsg) {
-            msg.textContent = String(invalidMsg);
-            msg.classList.add("show");
-            snapBtn.classList.add("show");
-          } else if (notice) {
-            msg.textContent = String(notice);
-            msg.classList.add("show");
-          }
-
-          wireCommitOnly(xField.inp, function () {
-            patchOpeningById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(door.x_mm ?? 0))) });
-          });
-          wireCommitOnly(wField.inp, function () {
-            patchOpeningById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(door.width_mm ?? 900))) });
-          });
-          wireCommitOnly(hField.inp, function () {
-            patchOpeningById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(door.height_mm ?? 2000))) } );
-          });
-
-          wallSel.addEventListener("change", function () {
-            patchOpeningById(id, { wall: String(wallSel.value || "front") });
-          });
-
-          snapBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var snapped = computeSnapX_ForType(s, id, "door");
-            if (snapped == null) return;
-            patchOpeningById(id, { x_mm: snapped });
-
-            snapNoticeDoorById[id] = "Snapped to " + snapped + "mm.";
-            setTimeout(function () {
-              if (snapNoticeDoorById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeDoorById[id];
-              syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-            }, 1500);
-          });
-
-          rmBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var cur = getOpeningsFromState(s);
-            var next = [];
-            for (var k = 0; k < cur.length; k++) {
-              var o = cur[k];
-              if (o && o.type === "door" && String(o.id || "") === id) continue;
-              next.push(o);
-            }
-            delete snapNoticeDoorById[id];
-            setOpenings(next);
-          });
-
-          item.appendChild(top);
-          item.appendChild(row);
-          item.appendChild(msg);
-
-          doorsListEl.appendChild(item);
-        })(doors[i]);
-      }
-
-      if (!doors.length) {
-        var empty = document.createElement("div");
-        empty.className = "hint";
-        empty.textContent = "No doors.";
-        doorsListEl.appendChild(empty);
-      }
-    }
-
-    function renderWindowsUi(state, validation) {
-      if (!windowsListEl) return;
-      windowsListEl.innerHTML = "";
-
-      var wins = getWindowsFromState(state);
-
-      for (var i = 0; i < wins.length; i++) {
-        (function (win) {
-          var id = String(win.id || "");
-
-          var item = document.createElement("div");
-          item.className = "windowItem";
-
-          var top = document.createElement("div");
-          top.className = "windowTop";
-
-          var wallLabel = document.createElement("label");
-          wallLabel.textContent = "Wall";
-          var wallSel = document.createElement("select");
-          wallSel.innerHTML =
-            '<option value="front">front</option>' +
-            '<option value="back">back</option>' +
-            '<option value="left">left</option>' +
-            '<option value="right">right</option>';
-          wallSel.value = String(win.wall || "front");
-          wallLabel.appendChild(wallSel);
-
-          var actions = document.createElement("div");
-          actions.className = "windowActions";
-
-          var snapBtn = document.createElement("button");
-          snapBtn.type = "button";
-          snapBtn.className = "snapBtn";
-          snapBtn.textContent = "Snap to nearest viable position";
-
-          var rmBtn = document.createElement("button");
-          rmBtn.type = "button";
-          rmBtn.textContent = "Remove";
-
-          actions.appendChild(snapBtn);
-          actions.appendChild(rmBtn);
-
-          top.appendChild(wallLabel);
-          top.appendChild(actions);
-
-          var row = document.createElement("div");
-          row.className = "row4";
-
-          function makeNum(labelTxt, v, min, step) {
-            var lab = document.createElement("label");
-            lab.textContent = labelTxt;
-            var inp = document.createElement("input");
-            inp.type = "number";
-            inp.min = String(min);
-            inp.step = String(step);
-            inp.value = String(v == null ? "" : v);
-            lab.appendChild(inp);
-            return { lab: lab, inp: inp };
-          }
-
-          var xField = makeNum("Win X (mm)", Math.floor(Number(win.x_mm ?? 0)), 0, 10);
-          var yField = makeNum("Win Y (mm)", Math.floor(Number(win.y_mm ?? 0)), 0, 10);
-          var wField = makeNum("Win W (mm)", Math.floor(Number(win.width_mm ?? 900)), 100, 10);
-          var hField = makeNum("Win H (mm)", Math.floor(Number(win.height_mm ?? 600)), 100, 10);
-
-          row.appendChild(xField.lab);
-          row.appendChild(yField.lab);
-          row.appendChild(wField.lab);
-          row.appendChild(hField.lab);
-
-          var msg = document.createElement("div");
-          msg.className = "windowMsg";
-
-          var invalidMsg = validation && validation.invalidById ? validation.invalidById[id] : null;
-          var notice = snapNoticeWinById[id] ? snapNoticeWinById[id] : null;
-
-          if (invalidMsg) {
-            msg.textContent = String(invalidMsg);
-            msg.classList.add("show");
-            snapBtn.classList.add("show");
-          } else if (notice) {
-            msg.textContent = String(notice);
-            msg.classList.add("show");
-          }
-
-          wireCommitOnly(xField.inp, function () {
-            patchOpeningById(id, { x_mm: asNonNegInt(xField.inp.value, Math.floor(Number(win.x_mm ?? 0))) });
-          });
-          wireCommitOnly(yField.inp, function () {
-            patchOpeningById(id, { y_mm: asNonNegInt(yField.inp.value, Math.floor(Number(win.y_mm ?? 0))) });
-          });
-          wireCommitOnly(wField.inp, function () {
-            patchOpeningById(id, { width_mm: asPosInt(wField.inp.value, Math.floor(Number(win.width_mm ?? 900))) });
-          });
-          wireCommitOnly(hField.inp, function () {
-            patchOpeningById(id, { height_mm: asPosInt(hField.inp.value, Math.floor(Number(win.height_mm ?? 600))) });
-          });
-
-          wallSel.addEventListener("change", function () {
-            patchOpeningById(id, { wall: String(wallSel.value || "front") });
-          });
-
-          snapBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var snapped = computeSnapX_ForType(s, id, "window");
-            if (snapped == null) return;
-            patchOpeningById(id, { x_mm: snapped });
-
-            snapNoticeWinById[id] = "Snapped to " + snapped + "mm.";
-            setTimeout(function () {
-              if (snapNoticeWinById[id] === ("Snapped to " + snapped + "mm.")) delete snapNoticeWinById[id];
-              syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-            }, 1500);
-          });
-
-          rmBtn.addEventListener("click", function () {
-            var s = store.getState();
-            var cur = getOpeningsFromState(s);
-            var next = [];
-            for (var k = 0; k < cur.length; k++) {
-              var o = cur[k];
-              if (o && o.type === "window" && String(o.id || "") === id) continue;
-              next.push(o);
-            }
-            delete snapNoticeWinById[id];
-            setOpenings(next);
-          });
-
-          item.appendChild(top);
-          item.appendChild(row);
-          item.appendChild(msg);
-
-          windowsListEl.appendChild(item);
-        })(wins[i]);
-      }
-
-      if (!wins.length) {
-        var empty = document.createElement("div");
-        empty.className = "hint";
-        empty.textContent = "No windows.";
-        windowsListEl.appendChild(empty);
-      }
-    }
-
-    function syncUiFromState(state, validations) {
-      try {
-        if (dimModeEl) dimModeEl.value = (state && state.dimMode) ? state.dimMode : "base";
-
-        if (wInputEl && dInputEl) {
-          var m0 = (state && state.dimMode) ? String(state.dimMode) : "base";
-          try {
-            var R0 = resolveDims(state || {});
-            if (m0 === "frame") {
-              wInputEl.value = String(R0.frame.w_mm);
-              dInputEl.value = String(R0.frame.d_mm);
-            } else if (m0 === "roof") {
-              wInputEl.value = String(R0.roof.w_mm);
-              dInputEl.value = String(R0.roof.d_mm);
-            } else {
-              wInputEl.value = String(R0.base.w_mm);
-              dInputEl.value = String(R0.base.d_mm);
-            }
-          } catch (e0) {
-            if (wInputEl && state && state.w != null) wInputEl.value = String(state.w);
-            if (dInputEl && state && state.d != null) dInputEl.value = String(state.d);
-          }
-        }
-
-        if (roofStyleEl) {
-          roofStyleEl.value = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
-        }
-
-        var isPent = isPentRoofStyle(state);
-        if (roofMinHeightEl && roofMaxHeightEl) {
-          var ph = getPentHeightsFromState(state);
-          roofMinHeightEl.value = String(ph.minH);
-          roofMaxHeightEl.value = String(ph.maxH);
-          roofMinHeightEl.disabled = !isPent;
-          roofMaxHeightEl.disabled = !isPent;
-        }
-
-        if (state && state.overhang) {
-          if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
-          if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
-          if (overRightEl) overRightEl.value = state.overhang.right_mm == null ? "" : String(state.overhang.right_mm);
-          if (overFrontEl) overFrontEl.value = state.overhang.front_mm == null ? "" : String(state.overhang.front_mm);
-          if (overBackEl) overBackEl.value = state.overhang.back_mm == null ? "" : String(state.overhang.back_mm);
-        }
-
-        if (vBaseEl) vBaseEl.checked = !!(state && state.vis && state.vis.base);
-        if (vFrameEl) vFrameEl.checked = !!(state && state.vis && state.vis.frame);
-        if (vInsEl) vInsEl.checked = !!(state && state.vis && state.vis.ins);
-        if (vDeckEl) vDeckEl.checked = !!(state && state.vis && state.vis.deck);
-
-        if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
-
-        var parts = getWallParts(state);
-        if (vWallFrontEl) vWallFrontEl.checked = !!parts.front;
-        if (vWallBackEl) vWallBackEl.checked = !!parts.back;
-        if (vWallLeftEl) vWallLeftEl.checked = !!parts.left;
-        if (vWallRightEl) vWallRightEl.checked = !!parts.right;
-
-        if (wallsVariantEl && state && state.walls && state.walls.variant) wallsVariantEl.value = state.walls.variant;
-
-        if (wallHeightEl) {
-          if (isPent) {
-            wallHeightEl.value = String(computePentDisplayHeight(state));
-          } else if (state && state.walls && state.walls.height_mm != null) {
-            wallHeightEl.value = String(state.walls.height_mm);
-          }
-        }
-
-        if (wallSectionEl && state && state.walls) {
-          var h = null;
-          try {
-            if (state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
-            else if (state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
-          } catch (e) {}
-          wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
-        }
-
-        applyWallHeightUiLock(state);
-
-        var dv = validations && validations.doors ? validations.doors : null;
-        var wv = validations && validations.windows ? validations.windows : null;
-
-        renderDoorsUi(state, dv);
-        renderWindowsUi(state, wv);
-      } catch (e) {
-        window.__dbg.lastError = "syncUiFromState failed: " + String(e && e.message ? e.message : e);
-      }
-    }
-
-    function updateOverlay() {
-      if (!statusOverlayEl) return;
-
-      var hasBabylon = typeof window.BABYLON !== "undefined";
-      var cw = canvas ? (canvas.clientWidth || 0) : 0;
-      var ch = canvas ? (canvas.clientHeight || 0) : 0;
-
-      var engine = window.__dbg.engine;
-      var scene = window.__dbg.scene;
-      var camera = window.__dbg.camera;
-
-      var meshes = (scene && scene.meshes) ? scene.meshes.length : 0;
-      var err = String(window.__dbg.lastError || "").slice(0, 200);
-
-      statusOverlayEl.textContent =
-        "BABYLON loaded: " + hasBabylon + "\n" +
-        "Canvas: " + cw + " x " + ch + "\n" +
-        "Engine: " + (!!engine) + "\n" +
-        "Scene: " + (!!scene) + "\n" +
-        "Camera: " + (!!camera) + "\n" +
-        "Frames: " + window.__dbg.frames + "\n" +
-        "BuildCalls: " + window.__dbg.buildCalls + "\n" +
-        "Meshes: " + meshes + "\n" +
-        "LastError: " + err;
-    }
-
-    if (roofStyleEl) {
-      roofStyleEl.addEventListener("change", function () {
-        var v = String(roofStyleEl.value || "apex");
-        if (v !== "apex" && v !== "pent" && v !== "hipped") v = "apex";
-        store.setState({ roof: { style: v } });
-        applyWallHeightUiLock(store.getState());
-      });
-    }
-
-    function commitPentHeightsFromInputs() {
-      if (!roofMinHeightEl || !roofMaxHeightEl) return;
-      var s = store.getState();
-      var base = (s && s.walls && s.walls.height_mm != null) ? clampHeightMm(s.walls.height_mm, 2400) : 2400;
-      var minH = clampHeightMm(roofMinHeightEl.value, base);
-      var maxH = clampHeightMm(roofMaxHeightEl.value, base);
-      store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
-    }
-
-    if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
-      if (!isPentRoofStyle(store.getState())) return;
-      commitPentHeightsFromInputs();
-    });
-    if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
-      if (!isPentRoofStyle(store.getState())) return;
-      commitPentHeightsFromInputs();
-    });
-
-    if (vWallsEl) {
-      vWallsEl.addEventListener("change", function (e) {
-        var s = store.getState();
-        var on = !!(e && e.target && e.target.checked);
-
-        if (s && s.vis && typeof s.vis.walls === "boolean") store.setState({ vis: { walls: on } });
-        else if (s && s.vis && typeof s.vis.wallsEnabled === "boolean") store.setState({ vis: { wallsEnabled: on } });
-        else store.setState({ vis: { walls: on } });
-      });
-    }
-
-    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { store.setState({ vis: { base: !!e.target.checked } }); });
-    if (vFrameEl) vFrameEl.addEventListener("change", function (e) { store.setState({ vis: { frame: !!e.target.checked } }); });
-    if (vInsEl) vInsEl.addEventListener("change", function (e) { store.setState({ vis: { ins: !!e.target.checked } }); });
-    if (vDeckEl) vDeckEl.addEventListener("change", function (e) { store.setState({ vis: { deck: !!e.target.checked } }); });
-
-    function patchWallPart(key, value) {
-      var s = store.getState();
-      if (s && s.vis && s.vis.walls && typeof s.vis.walls === "object") {
-        store.setState({ vis: { walls: (function(){ var o={}; o[key]=value; return o; })() } });
-        return;
-      }
-      if (s && s.vis && s.vis.wallsParts && typeof s.vis.wallsParts === "object") {
-        store.setState({ vis: { wallsParts: (function(){ var o={}; o[key]=value; return o; })() } });
-        return;
-      }
-      store.setState({ _noop: Date.now() });
-    }
-
-    if (vWallFrontEl) vWallFrontEl.addEventListener("change", function (e) { patchWallPart("front", !!e.target.checked); });
-    if (vWallBackEl)  vWallBackEl.addEventListener("change",  function (e) { patchWallPart("back",  !!e.target.checked); });
-    if (vWallLeftEl)  vWallLeftEl.addEventListener("change",  function (e) { patchWallPart("left",  !!e.target.checked); });
-    if (vWallRightEl) vWallRightEl.addEventListener("change", function (e) { patchWallPart("right", !!e.target.checked); });
-
-    if (dimModeEl) {
-      dimModeEl.addEventListener("change", function () {
-        store.setState({ dimMode: dimModeEl.value });
-        syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-      });
-    }
-
-    function writeActiveDims() {
-      var s = store.getState();
-      var w = asPosInt(wInputEl ? wInputEl.value : null, 1000);
-      var d = asPosInt(dInputEl ? dInputEl.value : null, 1000);
-
-      var mode = (s && s.dimMode) ? String(s.dimMode) : "base";
-
-      var G = 50;
-      try {
-        if (s && s.dimGap_mm != null) {
-          var gg = Math.floor(Number(s.dimGap_mm));
-          if (Number.isFinite(gg) && gg >= 0) G = gg;
-        }
-      } catch (e0) {}
-
-      var ovh = null;
-      try {
-        var R = resolveDims(s);
-        ovh = R && R.overhang ? R.overhang : null;
-      } catch (e1) { ovh = null; }
-
-      var sumX = (ovh && ovh.l_mm != null ? Math.floor(Number(ovh.l_mm)) : 0) + (ovh && ovh.r_mm != null ? Math.floor(Number(ovh.r_mm)) : 0);
-      var sumZ = (ovh && ovh.f_mm != null ? Math.floor(Number(ovh.f_mm)) : 0) + (ovh && ovh.b_mm != null ? Math.floor(Number(ovh.b_mm)) : 0);
-
-      if (!Number.isFinite(sumX)) sumX = 0;
-      if (!Number.isFinite(sumZ)) sumZ = 0;
-
-      var frameW = 1;
-      var frameD = 1;
-
-      if (mode === "frame") {
-        frameW = w;
-        frameD = d;
-      } else if (mode === "roof") {
-        frameW = Math.max(1, Math.floor(w - sumX));
-        frameD = Math.max(1, Math.floor(d - sumZ));
-      } else { // base
-        frameW = Math.max(1, Math.floor(w + G));
-        frameD = Math.max(1, Math.floor(d + G));
-      }
-
-      var baseW = Math.max(1, Math.floor(frameW - G));
-      var baseD = Math.max(1, Math.floor(frameD - G));
-      var roofW = Math.max(1, Math.floor(frameW + sumX));
-      var roofD = Math.max(1, Math.floor(frameD + sumZ));
-
-      store.setState({
-        dim: { frameW_mm: frameW, frameD_mm: frameD },
-        dimInputs: {
-          baseW_mm: baseW,
-          baseD_mm: baseD,
-          frameW_mm: frameW,
-          frameD_mm: frameD,
-          roofW_mm: roofW,
-          roofD_mm: roofD
-        }
-      });
-    }
-    if (wInputEl) wInputEl.addEventListener("input", writeActiveDims);
-    if (dInputEl) dInputEl.addEventListener("input", writeActiveDims);
-
-    if (overUniformEl) {
-      overUniformEl.addEventListener("input", function () {
-        var n = Math.max(0, Math.floor(Number(overUniformEl.value || 0)));
-        store.setState({ overhang: { uniform_mm: Number.isFinite(n) ? n : 0 } });
-      });
-    }
-    if (overLeftEl)  overLeftEl.addEventListener("input",  function () { store.setState({ overhang: { left_mm:  asNullableInt(overLeftEl.value) } }); });
-    if (overRightEl) overRightEl.addEventListener("input", function () { store.setState({ overhang: { right_mm: asNullableInt(overRightEl.value) } }); });
-    if (overFrontEl) overFrontEl.addEventListener("input", function () { store.setState({ overhang: { front_mm: asNullableInt(overFrontEl.value) } }); });
-    if (overBackEl)  overBackEl.addEventListener("input",  function () { store.setState({ overhang: { back_mm:  asNullableInt(overBackEl.value) } }); });
-
-    function sectionHFromSelectValue(v) {
-      return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
-    }
-    if (wallSectionEl) {
-      wallSectionEl.addEventListener("change", function () {
-        var h = sectionHFromSelectValue(wallSectionEl.value);
-        store.setState({
-          walls: {
-            insulated: { section: { w: 50, h: h } },
-            basic: { section: { w: 50, h: h } }
-          }
-        });
-      });
-    }
-
-    if (wallsVariantEl) wallsVariantEl.addEventListener("change", function () { store.setState({ walls: { variant: wallsVariantEl.value } }); });
-    if (wallHeightEl) wallHeightEl.addEventListener("input", function () {
-      if (wallHeightEl && wallHeightEl.disabled === true) return;
-      store.setState({ walls: { height_mm: asPosInt(wallHeightEl.value, 2400) } });
-    });
-
-    if (addDoorBtnEl) {
-      addDoorBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var lens = getWallLengthsForOpenings(s);
-        var openings = getOpeningsFromState(s);
-
-        var id = "door" + String(window.__dbg.doorSeq++);
-        var wall = "front";
-        var w = 900;
-        var h = 2000;
-        var L = lens[wall] || 1000;
-        var x = Math.floor((L - w) / 2);
-
-        openings.push({ id: id, wall: wall, type: "door", enabled: true, x_mm: x, width_mm: w, height_mm: h });
-        setOpenings(openings);
-      });
-    }
-
-    if (removeAllDoorsBtnEl) {
-      removeAllDoorsBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var cur = getOpeningsFromState(s);
-        var next = [];
-        for (var i = 0; i < cur.length; i++) {
-          var o = cur[i];
-          if (o && o.type === "door") continue;
-          next.push(o);
-        }
-        snapNoticeDoorById = {};
-        setOpenings(next);
-      });
-    }
-
-    if (addWindowBtnEl) {
-      addWindowBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var lens = getWallLengthsForOpenings(s);
-        var openings = getOpeningsFromState(s);
-
-        var id = "win" + String(window.__dbg.windowSeq++);
-        var wall = "front";
-        var w = 900;
-        var h = 600;
-        var y = 900;
-        var L = lens[wall] || 1000;
-        var x = Math.floor((L - w) / 2);
-
-        openings.push({ id: id, wall: wall, type: "window", enabled: true, x_mm: x, y_mm: y, width_mm: w, height_mm: h });
-        setOpenings(openings);
-      });
-    }
-
-    if (removeAllWindowsBtnEl) {
-      removeAllWindowsBtnEl.addEventListener("click", function () {
-        var s = store.getState();
-        var cur = getOpeningsFromState(s);
-        var next = [];
-        for (var i = 0; i < cur.length; i++) {
-          var o = cur[i];
-          if (o && o.type === "window") continue;
-          next.push(o);
-        }
-        snapNoticeWinById = {};
-        setOpenings(next);
-      });
-    }
-
-    store.onChange(function (s) {
-      var v = syncInvalidOpeningsIntoState();
-      syncUiFromState(s, v);
-      applyWallHeightUiLock(s);
-      render(s);
-    });
-
-    setInterval(updateOverlay, 1000);
-    updateOverlay();
-
-    initInstancesUI({
-      store: store,
-      ids: {
-        instanceSelect: "instanceSelect",
-        saveInstanceBtn: "saveInstanceBtn",
-        loadInstanceBtn: "loadInstanceBtn",
-        instanceNameInput: "instanceNameInput",
-        saveAsInstanceBtn: "saveAsInstanceBtn",
-        deleteInstanceBtn: "deleteInstanceBtn",
-        instancesHint: "instancesHint"
-      },
-      dbg: window.__dbg
-    });
-
-    try {
-      var s0 = store.getState();
-      if (s0 && s0.roof && s0.roof.pent && s0.roof.pent.minHeight_mm != null && s0.roof.pent.maxHeight_mm != null) {
-      } else {
-        var baseH = (s0 && s0.walls && s0.walls.height_mm != null) ? clampHeightMm(s0.walls.height_mm, 2400) : 2400;
-        store.setState({ roof: { pent: { minHeight_mm: baseH, maxHeight_mm: baseH } } });
-      }
-    } catch (e0) {}
-
-    syncUiFromState(store.getState(), syncInvalidOpeningsIntoState());
-    applyWallHeightUiLock(store.getState());
-    render(store.getState());
-    resume3D();
-
-    window.__dbg.initFinished = true;
-  } catch (e) {
-    window.__dbg.lastError = "initApp() failed: " + String(e && e.message ? e.message : e);
-    window.__dbg.initFinished = false;
-  }
-}
-
-if (document.readyState === "loading") {
-  window.addEventListener("DOMContentLoaded", initApp, { once: true });
-} else {
-  initApp();
-}
+      } catch (e8) {}
+    })();
+  </script>
+  <script type="module" src="./src/index.js"></script>
+  <script type="module">
+    import { initViews } from './src/views.js';
+    initViews();
+  </script>
+</body>
+</html>
