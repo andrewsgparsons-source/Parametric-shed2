@@ -200,6 +200,7 @@ function initApp() {
     var store = createStateStore(DEFAULTS);
 
     var vWallsEl = $("vWalls");
+    var vRoofEl = $("vRoof");
     var vBaseEl = $("vBase");
     var vFrameEl = $("vFrame");
     var vInsEl = $("vIns");
@@ -288,6 +289,8 @@ function initApp() {
       if (vis && typeof vis.wallsEnabled === "boolean") return vis.wallsEnabled;
       return true;
     }
+
+    function getRoofEnabled(state) { return (state && state.vis && typeof state.vis.roof === "boolean") ? state.vis.roof : true; }
 
     function getWallParts(state) {
       var vis = state && state.vis ? state.vis : null;
@@ -699,7 +702,7 @@ function initApp() {
         var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
 
         // Build roof for supported styles (pent + apex). (No behavior change for pent.)
-        if (roofStyle === "pent" || roofStyle === "apex") {
+        if (getRoofEnabled(state) && (roofStyle === "pent" || roofStyle === "apex")) {
           var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(R.roof.w_mm)) : Math.max(1, Math.floor(R.base.w_mm));
           var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(R.roof.d_mm)) : Math.max(1, Math.floor(R.base.d_mm));
           var roofState = Object.assign({}, state, { w: roofW, d: roofD });
@@ -1367,6 +1370,7 @@ function initApp() {
         if (vDeckEl) vDeckEl.checked = !!(state && state.vis && state.vis.deck);
 
         if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
+        if (vRoofEl) vRoofEl.checked = getRoofEnabled(state);
 
         var parts = getWallParts(state);
         if (vWallFrontEl) vWallFrontEl.checked = !!parts.front;
@@ -1468,6 +1472,8 @@ function initApp() {
         else store.setState({ vis: { walls: on } });
       });
     }
+
+    if (vRoofEl) vRoofEl.addEventListener("change", function(e){ store.setState({ vis: { roof: !!e.target.checked } }); console.log("[vis] roof=", !!e.target.checked); });
 
     if (vBaseEl) vBaseEl.addEventListener("change", function (e) { store.setState({ vis: { base: !!e.target.checked } }); });
     if (vFrameEl) vFrameEl.addEventListener("change", function (e) { store.setState({ vis: { frame: !!e.target.checked } }); });
