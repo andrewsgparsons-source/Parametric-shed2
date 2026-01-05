@@ -205,17 +205,16 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  function getBoundsAlongAxisMm(mesh, isAlongX) {
+  function getBoundsAlongAxisMm(mesh, axis) {
     try {
       if (!mesh || !mesh.getBoundingInfo) return null;
-      try {
-        mesh.computeWorldMatrix(true);
-      } catch (e0) {}
+      try { mesh.computeWorldMatrix(true); } catch (e0) {}
       const bi = mesh.getBoundingInfo();
       const bb = bi && bi.boundingBox ? bi.boundingBox : null;
       if (!bb || !bb.minimumWorld || !bb.maximumWorld) return null;
-      if (isAlongX) return { min_mm: Number(bb.minimumWorld.x) * 1000, max_mm: Number(bb.maximumWorld.x) * 1000 };
-      return { min_mm: Number(bb.minimumWorld.z) * 1000, max_mm: Number(bb.maximumWorld.z) * 1000 };
+      if (axis === "x") return { min_mm: Number(bb.minimumWorld.x) * 1000, max_mm: Number(bb.maximumWorld.x) * 1000 };
+      if (axis === "z") return { min_mm: Number(bb.minimumWorld.z) * 1000, max_mm: Number(bb.maximumWorld.z) * 1000 };
+      return null;
     } catch (e) {
       return null;
     }
@@ -266,12 +265,16 @@ export function build3D(state, ctx) {
             : `wall-${wallId}-plate-bottom`;
 
         const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
-        const bb = plateMesh && plateMesh.getBoundingInfo ? plateMesh.getBoundingInfo().boundingBox : null;
+        if (plateMesh && plateMesh.computeWorldMatrix) {
+          try { plateMesh.computeWorldMatrix(true); } catch (e0) {}
+        }
+        const bi = plateMesh && plateMesh.getBoundingInfo ? plateMesh.getBoundingInfo() : null;
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
         if (bb && bb.minimumWorld && bb.maximumWorld) {
-          if (isAlongX) {
+          if (axis === "x") {
             panelMinAxis_mm = Number(bb.minimumWorld.x) * 1000;
             panelMaxAxis_mm = Number(bb.maximumWorld.x) * 1000;
-          } else {
+          } else if (axis === "z") {
             panelMinAxis_mm = Number(bb.minimumWorld.z) * 1000;
             panelMaxAxis_mm = Number(bb.maximumWorld.z) * 1000;
           }
@@ -297,7 +300,7 @@ export function build3D(state, ctx) {
       let courseMaxAxis_mm = null;
 
       const absorb = (m) => {
-        const b = getBoundsAlongAxisMm(m, isAlongX);
+        const b = getBoundsAlongAxisMm(m, axis);
         if (!b || !Number.isFinite(b.min_mm) || !Number.isFinite(b.max_mm)) return;
         courseMinAxis_mm = courseMinAxis_mm == null ? b.min_mm : Math.min(courseMinAxis_mm, b.min_mm);
         courseMaxAxis_mm = courseMaxAxis_mm == null ? b.max_mm : Math.max(courseMaxAxis_mm, b.max_mm);
