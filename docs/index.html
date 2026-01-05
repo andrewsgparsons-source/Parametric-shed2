@@ -422,8 +422,10 @@
       window.__boot.v = (v != null && v !== "") ? String(v) : null;
       window.__boot.clean = clean;
 
+      var buildSha = null;
+
       function ensureDebugBootLabel() {
-        var txt = "v=" + (window.__boot.v != null ? window.__boot.v : "(none)") + (clean ? " clean=1" : "");
+        var txt = "BUILD: " + (buildSha != null && buildSha !== "" ? buildSha : "(unavailable)") + (clean ? " clean=1" : "");
         var el = document.getElementById("dbgBootLabel");
         if (!el) {
           el = document.createElement("div");
@@ -447,10 +449,31 @@
         el.textContent = txt;
       }
 
+      function fetchBuildTxtOnce() {
+        try {
+          if (!("fetch" in window)) return;
+          fetch("build.txt", { cache: "no-store" }).then(function (r) {
+            if (!r || !r.ok) throw new Error("build.txt fetch failed");
+            return r.text();
+          }).then(function (t) {
+            var s = (t || "").trim();
+            buildSha = s ? String(s).split(/\s+/)[0] : null;
+            try { ensureDebugBootLabel(); } catch (e9) {}
+          }).catch(function () {
+            buildSha = null;
+            try { ensureDebugBootLabel(); } catch (e10) {}
+          });
+        } catch (e11) {}
+      }
+
       if (document.readyState === "loading") {
-        window.addEventListener("DOMContentLoaded", ensureDebugBootLabel, { once: true });
+        window.addEventListener("DOMContentLoaded", function () {
+          ensureDebugBootLabel();
+          fetchBuildTxtOnce();
+        }, { once: true });
       } else {
         try { ensureDebugBootLabel(); } catch (e0) {}
+        try { fetchBuildTxtOnce(); } catch (e12) {}
       }
 
       if (!clean) return;
