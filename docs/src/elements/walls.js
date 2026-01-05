@@ -584,7 +584,7 @@ export function build3D(state, ctx) {
         const boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T / 2);
         const xBottomMin = boardCenterWorldX - (CLAD_T / 2);
 
-        const zStart_mm = (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + panelStart));
+        const zStart_mm = (Number.isFinite(panelMinAxis_mm) ? panelMinAxis_mm : (origin.z + panelStart));
         const panelLenAdj = Math.max(1, panelLen);
 
         const b0 = mkBox(
