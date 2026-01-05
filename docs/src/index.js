@@ -201,7 +201,6 @@ function initApp() {
 
     var vWallsEl = $("vWalls");
     var vRoofEl = $("vRoof");
-    var vRoofStructureEl = $("vRoofStructure"), vRoofOsbEl = $("vRoofOsb"), vRoofCoveringEl = $("vRoofCovering");
     var vBaseEl = $("vBase");
     var vFrameEl = $("vFrame");
     var vInsEl = $("vIns");
@@ -291,8 +290,9 @@ function initApp() {
       return true;
     }
 
+    function getBaseEnabled(state) { return (state && state.vis && typeof state.vis.base === "boolean") ? state.vis.base : true; }
+
     function getRoofEnabled(state) { return (state && state.vis && typeof state.vis.roof === "boolean") ? state.vis.roof : true; }
-    function getRoofParts(state){var vis=state&&state.vis?state.vis:null,rp=vis&&vis.roofParts&&typeof vis.roofParts==="object"?vis.roofParts:null;return{structure:rp?(rp.structure!==false):true,osb:rp?(rp.osb!==false):true,covering:rp?(rp.covering!==false):true};}
 
     function getWallParts(state) {
       var vis = state && state.vis ? state.vis : null;
@@ -694,7 +694,9 @@ function initApp() {
 
         safeDispose();
 
-        if (Base && typeof Base.build3D === "function") Base.build3D(baseState, ctx);
+        if (getBaseEnabled(state)) {
+          if (Base && typeof Base.build3D === "function") Base.build3D(baseState, ctx);
+        }
 
         if (getWallsEnabled(state)) {
           if (Walls && typeof Walls.build3D === "function") Walls.build3D(wallState, ctx);
@@ -1373,7 +1375,6 @@ function initApp() {
 
         if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
         if (vRoofEl) vRoofEl.checked = getRoofEnabled(state);
-        var rp = getRoofParts(state); if (vRoofStructureEl) vRoofStructureEl.checked = !!rp.structure; if (vRoofOsbEl) vRoofOsbEl.checked = !!rp.osb; if (vRoofCoveringEl) vRoofCoveringEl.checked = !!rp.covering;
 
         var parts = getWallParts(state);
         if (vWallFrontEl) vWallFrontEl.checked = !!parts.front;
@@ -1477,11 +1478,8 @@ function initApp() {
     }
 
     if (vRoofEl) vRoofEl.addEventListener("change", function(e){ store.setState({ vis: { roof: !!e.target.checked } }); console.log("[vis] roof=", !!e.target.checked); });
-    if (vRoofStructureEl) vRoofStructureEl.addEventListener("change", function(e){ var on = !!(e && e.target && e.target.checked); store.setState({ vis: { roofParts: { structure: on } } }); console.log("[vis] roofParts.structure=", on ? "ON" : "OFF"); });
-    if (vRoofOsbEl) vRoofOsbEl.addEventListener("change", function(e){ var on = !!(e && e.target && e.target.checked); store.setState({ vis: { roofParts: { osb: on } } }); console.log("[vis] roofParts.osb=", on ? "ON" : "OFF"); });
-    if (vRoofCoveringEl) vRoofCoveringEl.addEventListener("change", function(e){ var on = !!(e && e.target && e.target.checked); store.setState({ vis: { roofParts: { covering: on } } }); console.log("[vis] roofParts.covering=", on ? "ON" : "OFF"); });
 
-    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { store.setState({ vis: { base: !!e.target.checked } }); });
+    if (vBaseEl) vBaseEl.addEventListener("change", function (e) { var on = !!(e && e.target && e.target.checked); store.setState({ vis: { base: on } }); console.log("[vis] base=", on ? "ON" : "OFF"); });
     if (vFrameEl) vFrameEl.addEventListener("change", function (e) { store.setState({ vis: { frame: !!e.target.checked } }); });
     if (vInsEl) vInsEl.addEventListener("change", function (e) { store.setState({ vis: { ins: !!e.target.checked } }); });
     if (vDeckEl) vDeckEl.addEventListener("change", function (e) { store.setState({ vis: { deck: !!e.target.checked } }); });
