@@ -66,17 +66,73 @@ export function build3D(state, ctx) {
   const CLAD_Rb = 5;
   const CLAD_Hb = 20;
 
+  // DIAGNOSTIC: disabled (must not restrict walls/panels/courses)
+  const __DIAG_ONE_FRONT_ONE_BOARD = false;
+
+  // DEBUG containers
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    if (!window.__dbg.cladding) window.__dbg.cladding = {};
+    if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+    window.__dbg.cladding.walls = {};
+  } catch (e) {}
+
   const dbgClad = (() => {
     try {
       const qs = new URLSearchParams(window.location.search || "");
-      return String(qs.get("dbgClad") || "") === "1";
+      return qs.get("dbgClad") === "1";
     } catch (e) {
       return false;
     }
   })();
 
-  const CLAD_FIT_EPS_MM = 0.5;
-  const cladFitAcc = dbgClad ? { ok: true, eps_mm: CLAD_FIT_EPS_MM, samplesCount: 0, worst: null } : null;
+  const cladFitAgg = dbgClad
+    ? {
+        ok: true,
+        eps_mm: 0.5,
+        worst: { side: "left", mm: 0, wallName: "", wallIndex: null, panelIndex: null, courseIndex: null },
+        samplesCount: 0,
+      }
+    : null;
+
+  function recordCladFitSample(axis, wallId, panelIndex, courseIndex, panelMin, panelMax, cladMin, cladMax) {
+    if (!cladFitAgg) return;
+    if (!Number.isFinite(panelMin) || !Number.isFinite(panelMax) || !Number.isFinite(cladMin) || !Number.isFinite(cladMax)) return;
+
+    const overhangLeft_mm = panelMin - cladMin;
+    const overhangRight_mm = cladMax - panelMax;
+
+    const eps = cladFitAgg.eps_mm;
+
+    const leftBad = overhangLeft_mm > eps;
+    const rightBad = overhangRight_mm > eps;
+
+    if (leftBad || rightBad) cladFitAgg.ok = false;
+
+    let side = null;
+    let mm = 0;
+
+    if (overhangLeft_mm >= overhangRight_mm) {
+      side = "left";
+      mm = overhangLeft_mm;
+    } else {
+      side = "right";
+      mm = overhangRight_mm;
+    }
+
+    if (mm > Number(cladFitAgg.worst.mm || 0)) {
+      cladFitAgg.worst = {
+        side: side,
+        mm: mm,
+        wallName: String(wallId || ""),
+        wallIndex: null,
+        panelIndex: panelIndex != null ? Number(panelIndex) : null,
+        courseIndex: courseIndex != null ? Number(courseIndex) : null,
+      };
+    }
+
+    cladFitAgg.samplesCount += 1;
+  }
 
   const isPent = !!(state && state.roof && String(state.roof.style || "") === "pent");
 
@@ -205,32 +261,52 @@ export function build3D(state, ctx) {
     return mesh;
   }
 
-  function getBoundsAlongAxisMm(mesh, axis) {
-    try {
-      if (!mesh || !mesh.getBoundingInfo) return null;
-      try { mesh.computeWorldMatrix(true); } catch (e0) {}
-      const bi = mesh.getBoundingInfo();
-      const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-      if (!bb || !bb.minimumWorld || !bb.maximumWorld) return null;
-      if (axis === "x") return { min_mm: Number(bb.minimumWorld.x) * 1000, max_mm: Number(bb.maximumWorld.x) * 1000 };
-      if (axis === "z") return { min_mm: Number(bb.minimumWorld.z) * 1000, max_mm: Number(bb.maximumWorld.z) * 1000 };
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
-
   // ---- Deferred cladding build (one frame later) ----
   const claddingJobs = [];
 
-  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight) {
+  // Unique per build3D invocation
+  const buildId = (() => {
+    try {
+      const n = Number(scene._claddingBuildSeq || 0) + 1;
+      scene._claddingBuildSeq = n;
+      return `${Date.now()}-${n}`;
+    } catch (e) {
+      return `${Date.now()}-0`;
+    }
+  })();
+
+  try {
+    if (!window.__dbg) window.__dbg = {};
+    window.__dbg.claddingPass = {
+      buildId,
+      timestamp: Date.now(),
+      deferredScheduled: false,
+      deferredRan: false,
+      staleSkip: false,
+      claddingMeshesCreated: 0,
+      anchorsUsed: [],
+      jobsCount: 0,
+      jobsProcessedByWallId: {},
+      meshesCreatedByWallId: {},
+      sampleOutsideByWallId: {},
+      perWall: {}
+    };
+  } catch (e) {}
+
+  function addCladdingForPanel(wallId, axis, panelIndex, panelStart, panelLen, origin, panelHeight, buildPass) {
     const isAlongX = axis === "x";
+
+    if (__DIAG_ONE_FRONT_ONE_BOARD) {
+      if (!(String(wallId) === "front" && Number(panelIndex) === 1)) {
+        return { created: 0, anchor: null, reason: "diagSkipNotFrontPanel1" };
+      }
+    }
 
     // Light cladding material (do NOT mutate shared materials) — KEEP AS-IS
     let mat = materials && materials.cladding ? materials.cladding : materials.timber;
     try {
       if (!scene._claddingMatLight) {
-        let base = materials && materials.cladding ? materials.cladding : null;
+        let base = (materials && materials.cladding) ? materials.cladding : null;
         let m = null;
         if (base && base.clone) {
           m = base.clone("claddingMatLight");
@@ -239,9 +315,7 @@ export function build3D(state, ctx) {
         }
         if (m) {
           m.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
-          try {
-            m.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
-          } catch (e) {}
+          try { m.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); } catch (e) {}
           scene._claddingMatLight = m;
         }
       }
@@ -251,180 +325,341 @@ export function build3D(state, ctx) {
     const ph = Number(panelHeight);
     const panelHeightMm = Number.isFinite(ph) ? ph : height;
 
-    const courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
-    if (courses < 1) return;
+    let courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
+    if (__DIAG_ONE_FRONT_ONE_BOARD) courses = 1;
 
-    let panelMinAxis_mm = null;
-    let panelMaxAxis_mm = null;
-
-    if (dbgClad && cladFitAcc) {
-      try {
-        const plateName =
-          variant === "basic"
-            ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
-            : `wall-${wallId}-plate-bottom`;
-
-        const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
-        if (plateMesh && plateMesh.computeWorldMatrix) {
-          try { plateMesh.computeWorldMatrix(true); } catch (e0) {}
-        }
-        const bi = plateMesh && plateMesh.getBoundingInfo ? plateMesh.getBoundingInfo() : null;
-        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
-        if (bb && bb.minimumWorld && bb.maximumWorld) {
-          if (axis === "x") {
-            panelMinAxis_mm = Number(bb.minimumWorld.x) * 1000;
-            panelMaxAxis_mm = Number(bb.maximumWorld.x) * 1000;
-          } else if (axis === "z") {
-            panelMinAxis_mm = Number(bb.minimumWorld.z) * 1000;
-            panelMaxAxis_mm = Number(bb.maximumWorld.z) * 1000;
-          }
-        }
-      } catch (e) {}
-    }
+    if (courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
 
     const parts = [];
 
+    // Anchor cladding to TOP of the wall panel's own bottom plate (world-space), not assumed y=0.
+    let wallBottomPlateBottomY_mm = 0;
+    let wallBottomPlateTopY_mm = plateY;
+    let claddingAnchorY_mm = plateY;
+    let plateParent = null;
+
+    let xMin_mm = null;
+    let xMax_mm = null;
+    let zMin_mm = null;
+    let zMax_mm = null;
+
+    try {
+      const plateName =
+        (variant === "basic")
+          ? `wall-${wallId}-panel-${panelIndex}-plate-bottom`
+          : `wall-${wallId}-plate-bottom`;
+
+      const plateMesh = scene.getMeshByName ? scene.getMeshByName(plateName) : null;
+      if (plateMesh) {
+        plateParent = plateMesh.parent || null;
+      }
+      if (plateMesh && plateMesh.getBoundingInfo) {
+        try { plateMesh.computeWorldMatrix(true); } catch (e0) {}
+        const bi = plateMesh.getBoundingInfo();
+        const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+        if (bb && bb.minimumWorld && bb.maximumWorld) {
+          wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
+          wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
+          claddingAnchorY_mm = wallBottomPlateTopY_mm;
+
+          xMin_mm = Number(bb.minimumWorld.x) * 1000;
+          xMax_mm = Number(bb.maximumWorld.x) * 1000;
+          zMin_mm = Number(bb.minimumWorld.z) * 1000;
+          zMax_mm = Number(bb.maximumWorld.z) * 1000;
+        }
+      }
+    } catch (e) {}
+
+    // Determine outside plane + outward sign per panel (bbox-derived), with deterministic fallback ONLY if bbox invalid
+    let outsidePlaneZ_mm = null;
+    let outwardSignZ = 1;
+    let outsidePlaneX_mm = null;
+    let outwardSignX = 1;
+    let bboxMissingFallbackUsed = false;
+
+    try {
+      if (isAlongX) {
+        const hasZ = Number.isFinite(zMin_mm) && Number.isFinite(zMax_mm);
+        if (hasZ) {
+          const zMid = (zMin_mm + zMax_mm) / 2;
+          const buildMidZ = Number(dims && Number.isFinite(dims.d) ? (dims.d / 2) : 0);
+          if (zMid < buildMidZ) {
+            outsidePlaneZ_mm = zMin_mm;
+            outwardSignZ = -1;
+          } else {
+            outsidePlaneZ_mm = zMax_mm;
+            outwardSignZ = 1;
+          }
+        } else {
+          bboxMissingFallbackUsed = true;
+          if (String(wallId) === "front") {
+            outwardSignZ = -1;
+            outsidePlaneZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0);
+          } else if (String(wallId) === "back") {
+            outwardSignZ = 1;
+            outsidePlaneZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0) + wallThk;
+          } else {
+            outwardSignZ = 1;
+            outsidePlaneZ_mm = Number(origin && Number.isFinite(origin.z) ? origin.z : 0) + wallThk;
+          }
+        }
+
+        try {
+          if (buildPass && buildPass.sampleOutsideByWallId) {
+            const k = String(wallId || "");
+            if (!buildPass.sampleOutsideByWallId[k]) {
+              buildPass.sampleOutsideByWallId[k] = {
+                axis,
+                outsidePlane_mm: outsidePlaneZ_mm,
+                outwardSign: outwardSignZ
+              };
+            }
+          }
+        } catch (e) {}
+      } else {
+        const hasX = Number.isFinite(xMin_mm) && Number.isFinite(xMax_mm);
+        if (hasX) {
+          const xMid = (xMin_mm + xMax_mm) / 2;
+          const buildMidX = Number(dims && Number.isFinite(dims.w) ? (dims.w / 2) : 0);
+          if (xMid < buildMidX) {
+            outsidePlaneX_mm = xMin_mm;
+            outwardSignX = -1;
+          } else {
+            outsidePlaneX_mm = xMax_mm;
+            outwardSignX = 1;
+          }
+        } else {
+          bboxMissingFallbackUsed = true;
+          if (String(wallId) === "left") {
+            outwardSignX = -1;
+            outsidePlaneX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0);
+          } else if (String(wallId) === "right") {
+            outwardSignX = 1;
+            outsidePlaneX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0) + wallThk;
+          } else {
+            outwardSignX = 1;
+            outsidePlaneX_mm = Number(origin && Number.isFinite(origin.x) ? origin.x : 0) + wallThk;
+          }
+        }
+
+        try {
+          if (buildPass && buildPass.sampleOutsideByWallId) {
+            const k = String(wallId || "");
+            if (!buildPass.sampleOutsideByWallId[k]) {
+              buildPass.sampleOutsideByWallId[k] = {
+                axis,
+                outsidePlane_mm: outsidePlaneX_mm,
+                outwardSign: outwardSignX
+              };
+            }
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+
+    // DEBUG per wall/panel anchor
+    try {
+      const firstCourseBottomY_mm = claddingAnchorY_mm - CLAD_DRIP;
+      const expectedFirstCourseBottomY_mm = claddingAnchorY_mm - 30;
+
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.cladding) window.__dbg.cladding = {};
+      if (!window.__dbg.cladding.walls) window.__dbg.cladding.walls = {};
+
+      if (!window.__dbg.cladding.walls[wallId]) window.__dbg.cladding.walls[wallId] = [];
+      window.__dbg.cladding.walls[wallId].push({
+        wallId,
+        wallBottomPlateTopY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm,
+        firstCourseBottomY_mm,
+        expectedFirstCourseBottomY_mm,
+        delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+      });
+
+      if (buildPass && buildPass.anchorsUsed) {
+        buildPass.anchorsUsed.push({
+          wallId,
+          panelIndex,
+          wallBottomPlateTopY_mm,
+          wallBottomPlateBottomY_mm,
+          claddingAnchorY_mm,
+          firstCourseBottomY_mm,
+          expectedFirstCourseBottomY_mm,
+          delta_mm: (firstCourseBottomY_mm - expectedFirstCourseBottomY_mm),
+        });
+      }
+    } catch (e) {}
+
+    const panelMinAxis_mm = (axis === "x") ? xMin_mm : zMin_mm;
+    const panelMaxAxis_mm = (axis === "x") ? xMax_mm : zMax_mm;
+
     for (let i = 0; i < courses; i++) {
       const isFirst = i === 0;
-      const firstCourseYOffsetMm = isFirst ? 125 : 0;
-      const yBase = plateY + i * CLAD_H + firstCourseYOffsetMm;
+      const firstCourseYOffsetMm = (isFirst ? 125 : 0);
+      const yBase = claddingAnchorY_mm + i * CLAD_H + firstCourseYOffsetMm;
 
-      // Drip: first course only; bottom edge at (plateY - 30mm)
+      // Drip: first course only; bottom edge at (claddingAnchorY_mm - 30mm)
+      // Implemented as bottom-only extension (no change to X/Z extents)
       const yBottomStrip = yBase - (isFirst ? CLAD_DRIP : 0);
       const hBottomStrip = CLAD_Hb + (isFirst ? CLAD_DRIP : 0);
 
       const yUpperStrip = yBase + CLAD_Hb;
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
 
-      let courseMinAxis_mm = null;
-      let courseMaxAxis_mm = null;
-
-      const absorb = (m) => {
-        const b = getBoundsAlongAxisMm(m, axis);
-        if (!b || !Number.isFinite(b.min_mm) || !Number.isFinite(b.max_mm)) return;
-        courseMinAxis_mm = courseMinAxis_mm == null ? b.min_mm : Math.min(courseMinAxis_mm, b.min_mm);
-        courseMaxAxis_mm = courseMaxAxis_mm == null ? b.max_mm : Math.max(courseMaxAxis_mm, b.max_mm);
-      };
-
       if (isAlongX) {
-        const zBottom = String(wallId) === "front" ? origin.z - CLAD_T : origin.z + wallThk;
+        const wallOutsideFaceWorld = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
+        const outwardNormalZ = outwardSignZ;
 
-        const m0 = mkBox(
+        // Solve center placement so INNER face is exactly on wallOutsideFaceWorld:
+        // boardCenterWorldZ = wallOutsideFaceWorld + outwardNormalZ * (CLAD_T/2)
+        // mkBox expects MIN corner => minZ = centerZ - CLAD_T/2
+        const boardCenterWorldZ = wallOutsideFaceWorld + outwardNormalZ * (CLAD_T / 2);
+        const zBottomMin = boardCenterWorldZ - (CLAD_T / 2);
+
+        const xShift_mm = (Number.isFinite(xMin_mm) ? Math.max(0, xMin_mm - (origin.x + panelStart)) : 0);
+        const panelLenAdj = Math.max(1, panelLen - xShift_mm);
+
+        const b0 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
-          panelLen,
+          panelLenAdj,
           hBottomStrip,
           CLAD_T,
-          { x: origin.x + panelStart, y: yBottomStrip, z: zBottom },
+          { x: origin.x + panelStart + xShift_mm, y: yBottomStrip, z: zBottomMin },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "bottom",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        parts.push(m0);
-        if (dbgClad && cladFitAcc) absorb(m0);
+        parts.push(b0);
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const zUpper = String(wallId) === "front" ? origin.z - tUpper : origin.z + wallThk;
+        const boardCenterWorldZ_upper = wallOutsideFaceWorld + outwardNormalZ * (tUpper / 2);
+        const zUpperMin = boardCenterWorldZ_upper - (tUpper / 2);
 
-        const m1 = mkBox(
+        const b1 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
-          panelLen,
+          panelLenAdj,
           hUpperStrip,
           tUpper,
-          { x: origin.x + panelStart, y: yUpperStrip, z: zUpper },
+          { x: origin.x + panelStart + xShift_mm, y: yUpperStrip, z: zUpperMin },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "upper",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        parts.push(m1);
-        if (dbgClad && cladFitAcc) absorb(m1);
+        parts.push(b1);
+
+        if (cladFitAgg && Number.isFinite(panelMinAxis_mm) && Number.isFinite(panelMaxAxis_mm)) {
+          let cladMin_mm = +Infinity;
+          let cladMax_mm = -Infinity;
+
+          const ms = [b0, b1];
+          for (let k = 0; k < ms.length; k++) {
+            const m = ms[k];
+            if (!m || !m.getBoundingInfo) continue;
+            try { m.computeWorldMatrix(true); } catch (e0) {}
+            let bi = null;
+            try { bi = m.getBoundingInfo(); } catch (e1) { bi = null; }
+            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+            if (!bb || !bb.minimumWorld || !bb.maximumWorld) continue;
+
+            const vMin = bb.minimumWorld;
+            const vMax = bb.maximumWorld;
+
+            const aMin = Number(vMin.x) * 1000;
+            const aMax = Number(vMax.x) * 1000;
+
+            if (Number.isFinite(aMin)) cladMin_mm = Math.min(cladMin_mm, aMin);
+            if (Number.isFinite(aMax)) cladMax_mm = Math.max(cladMax_mm, aMax);
+          }
+
+          if (cladMin_mm !== +Infinity && cladMax_mm !== -Infinity) {
+            recordCladFitSample(axis, wallId, panelIndex, i, panelMinAxis_mm, panelMaxAxis_mm, cladMin_mm, cladMax_mm);
+          }
+        }
       } else {
-        const xBottom = String(wallId) === "left" ? origin.x - CLAD_T : origin.x + wallThk;
+        const wallOutsideFaceWorld = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
+        const outwardNormalX = outwardSignX;
 
-        const m0 = mkBox(
+        // Solve center placement so INNER face is exactly on wallOutsideFaceWorld:
+        // boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T/2)
+        // mkBox expects MIN corner => minX = centerX - CLAD_T/2
+        const boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T / 2);
+        const xBottomMin = boardCenterWorldX - (CLAD_T / 2);
+
+        const zStart_mm = (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + panelStart));
+        const panelLenAdj = Math.max(1, panelLen);
+
+        const b0 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
           CLAD_T,
           hBottomStrip,
-          panelLen,
-          { x: xBottom, y: yBottomStrip, z: origin.z + panelStart },
+          panelLenAdj,
+          { x: xBottomMin, y: yBottomStrip, z: zStart_mm },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "bottom",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "bottom", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        parts.push(m0);
-        if (dbgClad && cladFitAcc) absorb(m0);
+        parts.push(b0);
 
         const tUpper = Math.max(1, CLAD_T - CLAD_Rb);
-        const xUpper = String(wallId) === "left" ? origin.x - tUpper : origin.x + wallThk;
+        const boardCenterWorldX_upper = wallOutsideFaceWorld + outwardNormalX * (tUpper / 2);
+        const xUpperMin = boardCenterWorldX_upper - (tUpper / 2);
 
-        const m1 = mkBox(
+        const b1 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-upper`,
           tUpper,
           hUpperStrip,
-          panelLen,
-          { x: xUpper, y: yUpperStrip, z: origin.z + panelStart },
+          panelLenAdj,
+          { x: xUpperMin, y: yUpperStrip, z: zStart_mm },
           mat,
-          {
-            wallId,
-            panelIndex,
-            course: i,
-            type: "cladding",
-            part: "upper",
-            profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb },
-          }
+          { wallId, panelIndex, course: i, type: "cladding", part: "upper", profile: { H: CLAD_H, T: CLAD_T, Rt: CLAD_Rt, Ht: CLAD_Ht, Rb: CLAD_Rb, Hb: CLAD_Hb } }
         );
-        parts.push(m1);
-        if (dbgClad && cladFitAcc) absorb(m1);
-      }
+        parts.push(b1);
 
-      if (
-        dbgClad &&
-        cladFitAcc &&
-        Number.isFinite(panelMinAxis_mm) &&
-        Number.isFinite(panelMaxAxis_mm) &&
-        Number.isFinite(courseMinAxis_mm) &&
-        Number.isFinite(courseMaxAxis_mm)
-      ) {
-        const overhangLeft_mm = Number(panelMinAxis_mm) - Number(courseMinAxis_mm);
-        const overhangRight_mm = Number(courseMaxAxis_mm) - Number(panelMaxAxis_mm);
+        if (cladFitAgg && Number.isFinite(panelMinAxis_mm) && Number.isFinite(panelMaxAxis_mm)) {
+          let cladMin_mm = +Infinity;
+          let cladMax_mm = -Infinity;
 
-        cladFitAcc.samplesCount += 1;
+          const ms = [b0, b1];
+          for (let k = 0; k < ms.length; k++) {
+            const m = ms[k];
+            if (!m || !m.getBoundingInfo) continue;
+            try { m.computeWorldMatrix(true); } catch (e0) {}
+            let bi = null;
+            try { bi = m.getBoundingInfo(); } catch (e1) { bi = null; }
+            const bb = bi && bi.boundingBox ? bi.boundingBox : null;
+            if (!bb || !bb.minimumWorld || !bb.maximumWorld) continue;
 
-        const leftBad = overhangLeft_mm > CLAD_FIT_EPS_MM;
-        const rightBad = overhangRight_mm > CLAD_FIT_EPS_MM;
+            const vMin = bb.minimumWorld;
+            const vMax = bb.maximumWorld;
 
-        if (leftBad || rightBad) cladFitAcc.ok = false;
+            const aMin = Number(vMin.z) * 1000;
+            const aMax = Number(vMax.z) * 1000;
 
-        const posL = Math.max(0, overhangLeft_mm);
-        const posR = Math.max(0, overhangRight_mm);
-        const side = posR > posL ? "right" : "left";
-        const mm = Math.max(posL, posR);
+            if (Number.isFinite(aMin)) cladMin_mm = Math.min(cladMin_mm, aMin);
+            if (Number.isFinite(aMax)) cladMax_mm = Math.max(cladMax_mm, aMax);
+          }
 
-        if ((leftBad || rightBad) && (!cladFitAcc.worst || mm > Number(cladFitAcc.worst.mm || 0))) {
-          cladFitAcc.worst = { side, mm, wall: String(wallId || ""), panel: Number(panelIndex), course: Number(i) };
+          if (cladMin_mm !== +Infinity && cladMax_mm !== -Infinity) {
+            recordCladFitSample(axis, wallId, panelIndex, i, panelMinAxis_mm, panelMaxAxis_mm, cladMin_mm, cladMax_mm);
+          }
         }
       }
     }
 
-    if (parts.length === 0) return;
+    if (parts.length === 0) {
+      return {
+        created: 0,
+        anchor: {
+          wallId,
+          panelIndex,
+          wallBottomPlateTopY_mm,
+          wallBottomPlateBottomY_mm,
+          claddingAnchorY_mm
+        },
+        reason: "parts.length==0",
+        bboxMissingFallbackUsed
+      };
+    }
 
+    // Merge into one mesh per panel
     let merged = null;
     try {
       merged = BABYLON.Mesh.MergeMeshes(parts, true, true, undefined, false, false);
@@ -432,50 +667,208 @@ export function build3D(state, ctx) {
       merged = null;
     }
 
+    let created = 0;
+
     if (merged) {
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
+
+      if (plateParent) {
+        try {
+          const absPos = merged.getAbsolutePosition ? merged.getAbsolutePosition().clone() : null;
+          merged.parent = plateParent;
+          if (absPos && merged.setAbsolutePosition) merged.setAbsolutePosition(absPos);
+        } catch (e) {
+          try { merged.parent = plateParent; } catch (e2) {}
+        }
+      }
+
+      created = 1;
+    } else {
+      // If merge failed for any reason, keep parts as-is; still bind them to the wall's parent if present.
+      if (plateParent) {
+        for (let i = 0; i < parts.length; i++) {
+          try {
+            const absPos = parts[i].getAbsolutePosition ? parts[i].getAbsolutePosition().clone() : null;
+            parts[i].parent = plateParent;
+            if (absPos && parts[i].setAbsolutePosition) parts[i].setAbsolutePosition(absPos);
+          } catch (e) {
+            try { parts[i].parent = plateParent; } catch (e2) {}
+          }
+        }
+      }
+      created = parts.length;
     }
+
+    return {
+      created,
+      anchor: {
+        wallId,
+        panelIndex,
+        wallBottomPlateTopY_mm,
+        wallBottomPlateBottomY_mm,
+        claddingAnchorY_mm
+      },
+      reason: (merged ? null : "mergeFailed"),
+      bboxMissingFallbackUsed
+    };
   }
 
   function scheduleDeferredCladdingPass() {
     try {
+      scene._pendingCladding = { buildId, jobs: claddingJobs };
+    } catch (e) {}
+
+    try {
+      if (!window.__dbg) window.__dbg = {};
+      if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+      window.__dbg.claddingPass.deferredScheduled = true;
+    } catch (e) {}
+
+    try {
       if (scene && scene.onBeforeRenderObservable && scene.onBeforeRenderObservable.addOnce) {
         scene.onBeforeRenderObservable.addOnce(() => {
-          for (let i = 0; i < claddingJobs.length; i++) {
-            const j = claddingJobs[i];
-            addCladdingForPanel(j.wallId, j.axis, j.panelIndex, j.panelStart, j.panelLen, j.origin, j.panelHeight);
+          let pending = null;
+          try { pending = scene._pendingCladding || null; } catch (e) {}
+
+          let stale = false;
+          try {
+            stale = !(pending && String(pending.buildId || "") === String(buildId));
+          } catch (e) {
+            stale = true;
           }
 
-          if (dbgClad && cladFitAcc) {
+          if (stale) {
+            try {
+              if (!window.__dbg) window.__dbg = {};
+              if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+              window.__dbg.claddingPass.deferredRan = false;
+              window.__dbg.claddingPass.staleSkip = true;
+            } catch (e) {}
+            return;
+          }
+
+          let createdCount = 0;
+
+          try {
+            if (!window.__dbg) window.__dbg = {};
+            if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+            if (!window.__dbg.claddingPass.anchorsUsed) window.__dbg.claddingPass.anchorsUsed = [];
+            window.__dbg.claddingPass.jobsCount = claddingJobs.length;
+            if (!window.__dbg.claddingPass.jobsProcessedByWallId) window.__dbg.claddingPass.jobsProcessedByWallId = {};
+            if (!window.__dbg.claddingPass.meshesCreatedByWallId) window.__dbg.claddingPass.meshesCreatedByWallId = {};
+            if (!window.__dbg.claddingPass.sampleOutsideByWallId) window.__dbg.claddingPass.sampleOutsideByWallId = {};
+            if (!window.__dbg.claddingPass.perWall) window.__dbg.claddingPass.perWall = {};
+          } catch (e) {}
+
+          const passDbg = (() => {
+            try {
+              return window.__dbg && window.__dbg.claddingPass ? window.__dbg.claddingPass : null;
+            } catch (e) {
+              return null;
+            }
+          })();
+
+          for (let i = 0; i < claddingJobs.length; i++) {
+            const j = claddingJobs[i];
+            const wk = String(j.wallId || "");
+
+            try {
+              if (passDbg && passDbg.perWall) {
+                if (!passDbg.perWall[wk]) passDbg.perWall[wk] = { jobs: 0, created: 0, reasons: [] };
+                passDbg.perWall[wk].jobs = Number(passDbg.perWall[wk].jobs || 0) + 1;
+              }
+            } catch (e) {}
+
+            try {
+              if (passDbg && passDbg.jobsProcessedByWallId) {
+                passDbg.jobsProcessedByWallId[wk] = Number(passDbg.jobsProcessedByWallId[wk] || 0) + 1;
+              }
+            } catch (e) {}
+
+            let res = null;
+            try {
+              res = addCladdingForPanel(j.wallId, j.axis, j.panelIndex, j.panelStart, j.panelLen, j.origin, j.panelHeight, passDbg);
+            } catch (e) {
+              res = null;
+            }
+
+            if (res && Number.isFinite(res.created)) {
+              createdCount += res.created;
+
+              try {
+                if (passDbg && passDbg.meshesCreatedByWallId) {
+                  passDbg.meshesCreatedByWallId[wk] = Number(passDbg.meshesCreatedByWallId[wk] || 0) + Number(res.created || 0);
+                }
+              } catch (e) {}
+
+              try {
+                if (passDbg && passDbg.perWall) {
+                  if (!passDbg.perWall[wk]) passDbg.perWall[wk] = { jobs: 0, created: 0, reasons: [] };
+                  passDbg.perWall[wk].created = Number(passDbg.perWall[wk].created || 0) + Number(res.created || 0);
+                  if (Number(res.created || 0) === 0) {
+                    const reason = String(res.reason || "");
+                    const fb = !!res.bboxMissingFallbackUsed;
+                    passDbg.perWall[wk].reasons.push({
+                      panelIndex: j.panelIndex,
+                      reason: reason || "created==0",
+                      bboxMissingFallbackUsed: fb
+                    });
+                  }
+                }
+              } catch (e) {}
+            } else {
+              try {
+                if (passDbg && passDbg.perWall) {
+                  if (!passDbg.perWall[wk]) passDbg.perWall[wk] = { jobs: 0, created: 0, reasons: [] };
+                  passDbg.perWall[wk].reasons.push({
+                    panelIndex: j.panelIndex,
+                    reason: "exceptionOrNullRes",
+                    bboxMissingFallbackUsed: false
+                  });
+                }
+              } catch (e) {}
+            }
+          }
+
+          try {
+            if (!window.__dbg) window.__dbg = {};
+            if (!window.__dbg.claddingPass) window.__dbg.claddingPass = {};
+            window.__dbg.claddingPass.deferredRan = true;
+            window.__dbg.claddingPass.staleSkip = false;
+            window.__dbg.claddingPass.claddingMeshesCreated = createdCount;
+          } catch (e) {}
+
+          if (cladFitAgg) {
             try {
               if (!window.__dbg) window.__dbg = {};
               window.__dbg.cladFit = {
-                ok: !!cladFitAcc.ok,
-                eps_mm: CLAD_FIT_EPS_MM,
-                worst: cladFitAcc.worst ? cladFitAcc.worst : { side: "left", mm: 0, wall: "", panel: null, course: null },
-                samplesCount: Number(cladFitAcc.samplesCount || 0),
+                ok: !!cladFitAgg.ok,
+                eps_mm: Number(cladFitAgg.eps_mm),
+                worst: cladFitAgg.worst,
+                samplesCount: Number(cladFitAgg.samplesCount || 0)
               };
 
               if (window.__dbg.cladFit.ok) {
-                console.log("CLAD_FIT OK eps=0.5 samples=" + window.__dbg.cladFit.samplesCount);
+                console.log("CLAD_FIT OK eps=" + Number(cladFitAgg.eps_mm) + " samples=" + Number(cladFitAgg.samplesCount || 0));
               } else {
-                const w = window.__dbg.cladFit.worst || {};
+                const w = cladFitAgg.worst || {};
                 const mm = Number(w.mm || 0);
                 const mmTxt = (mm >= 0 ? "+" : "") + mm.toFixed(1);
                 console.log(
                   "CLAD_FIT FAIL side=" +
-                    String(w.side || "left") +
+                    String(w.side || "right") +
                     " mm=" +
                     mmTxt +
                     " wall=" +
-                    String(w.wall || "") +
+                    String(w.wallName || "") +
                     " panel=" +
-                    String(w.panel != null ? w.panel : "") +
+                    String(w.panelIndex != null ? w.panelIndex : "null") +
                     " course=" +
-                    String(w.course != null ? w.course : "") +
-                    " eps=0.5"
+                    String(w.courseIndex != null ? w.courseIndex : "null") +
+                    " eps=" +
+                    Number(cladFitAgg.eps_mm)
                 );
               }
             } catch (e) {}
@@ -537,7 +930,7 @@ export function build3D(state, ctx) {
     const isSlopeWall = isPent && (wallId === "front" || wallId === "back");
     const centerX = origin.x + Math.floor((doorX0 + doorX1) / 2);
 
-    const wallTop = isSlopeWall ? heightAtX(centerX) : wallId === "left" ? minH : wallId === "right" ? maxH : height;
+    const wallTop = isSlopeWall ? heightAtX(centerX) : (wallId === "left" ? minH : wallId === "right" ? maxH : height);
     const studLenLocal = Math.max(1, wallTop - 2 * plateY);
 
     const uprightH = studLenLocal;
@@ -561,7 +954,7 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    const headerL = door.w + 2 * prof.studW;
+    const headerL = (door.w + 2 * prof.studW);
 
     const desiredHeaderY = plateY + doorH;
     const maxHeaderY = Math.max(plateY, wallTop - prof.studH);
@@ -611,7 +1004,7 @@ export function build3D(state, ctx) {
       { doorId: id }
     );
 
-    const headerL = door.w + 2 * prof.studW;
+    const headerL = (door.w + 2 * prof.studW);
 
     const desiredHeaderY = plateY + doorH;
     const maxHeaderY = Math.max(plateY, wallTop - prof.studH);
@@ -639,7 +1032,7 @@ export function build3D(state, ctx) {
 
     const isSlopeWall = isPent && (wallId === "front" || wallId === "back");
     const centerX = origin.x + Math.floor((x0 + x1) / 2);
-    const wallTop = isSlopeWall ? heightAtX(centerX) : wallId === "left" ? minH : wallId === "right" ? maxH : height;
+    const wallTop = isSlopeWall ? heightAtX(centerX) : (wallId === "left" ? minH : wallId === "right" ? maxH : height);
     const studLenLocal = Math.max(1, wallTop - 2 * plateY);
 
     const uprightH = studLenLocal;
@@ -671,7 +1064,7 @@ export function build3D(state, ctx) {
       { windowId: id }
     );
 
-    const headerL = win.w + 2 * prof.studW;
+    const headerL = (win.w + 2 * prof.studW);
     mkBox(
       `wall-${wallId}-win-${id}-header`,
       headerL,
@@ -733,7 +1126,7 @@ export function build3D(state, ctx) {
       { windowId: id }
     );
 
-    const headerL = win.w + 2 * prof.studW;
+    const headerL = (win.w + 2 * prof.studW);
     mkBox(
       `wall-${wallId}-win-${id}-header`,
       thickness,
@@ -764,17 +1157,45 @@ export function build3D(state, ctx) {
     };
 
     if (isAlongX) {
-      mkBox(wallPrefix + "plate-bottom", panelLen, plateY, wallThk, { x: origin.x + offsetAlong, y: 0, z: origin.z }, materials.plate);
+      mkBox(
+        wallPrefix + "plate-bottom",
+        panelLen,
+        plateY,
+        wallThk,
+        { x: origin.x + offsetAlong, y: 0, z: origin.z },
+        materials.plate
+      );
     } else {
-      mkBox(wallPrefix + "plate-bottom", wallThk, plateY, panelLen, { x: origin.x, y: 0, z: origin.z + offsetAlong }, materials.plate);
+      mkBox(
+        wallPrefix + "plate-bottom",
+        wallThk,
+        plateY,
+        panelLen,
+        { x: origin.x, y: 0, z: origin.z + offsetAlong },
+        materials.plate
+      );
     }
 
     const placeStud = (x, z, idx, posStartRel) => {
       const h = hForStart(posStartRel);
       if (isAlongX) {
-        mkBox(wallPrefix + "stud-" + idx, prof.studW, h, wallThk, { x, y: plateY, z }, materials.timber);
+        mkBox(
+          wallPrefix + "stud-" + idx,
+          prof.studW,
+          h,
+          wallThk,
+          { x, y: plateY, z },
+          materials.timber
+        );
       } else {
-        mkBox(wallPrefix + "stud-" + idx, wallThk, h, prof.studW, { x, y: plateY, z }, materials.timber);
+        mkBox(
+          wallPrefix + "stud-" + idx,
+          wallThk,
+          h,
+          prof.studW,
+          { x, y: plateY, z },
+          materials.timber
+        );
       }
     };
 
@@ -807,12 +1228,9 @@ export function build3D(state, ctx) {
       for (let i = 0; i < panelOpenings.length; i++) {
         const d = panelOpenings[i];
         const ms = xm - origin.x;
-        if (ms + prof.studW > d.x0 && ms < d.x1) {
-          midAllowed = false;
-          break;
-        }
+        if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
       }
-      if (midAllowed) placeStud(xm, origin.z, 2, xm - origin.x);
+      if (midAllowed) placeStud(xm, origin.z, 2, (xm - origin.x));
     } else {
       const z0 = origin.z + offsetAlong;
       const z1 = origin.z + offsetAlong + panelLen - prof.studW;
@@ -825,12 +1243,9 @@ export function build3D(state, ctx) {
       for (let i = 0; i < panelOpenings.length; i++) {
         const d = panelOpenings[i];
         const ms = zm - origin.z;
-        if (ms + prof.studW > d.x0 && ms < d.x1) {
-          midAllowed = false;
-          break;
-        }
+        if (ms + prof.studW > d.x0 && ms < d.x1) { midAllowed = false; break; }
       }
-      if (midAllowed) placeStud(origin.x, zm, 2, zm - origin.z);
+      if (midAllowed) placeStud(origin.x, zm, 2, (zm - origin.z));
     }
   }
 
@@ -844,7 +1259,10 @@ export function build3D(state, ctx) {
 
     const isSlopeWall = isPent && isAlongX && (wallId === "front" || wallId === "back");
 
-    const wallHeightFlat = isPent ? (wallId === "left" ? minH : wallId === "right" ? maxH : height) : height;
+    const wallHeightFlat = isPent
+      ? (wallId === "left" ? minH : wallId === "right" ? maxH : height)
+      : height;
+
     const studLenFlat = Math.max(1, wallHeightFlat - 2 * plateY);
 
     if (isAlongX) {
@@ -854,7 +1272,16 @@ export function build3D(state, ctx) {
       } else {
         const yTop0 = heightAtX(origin.x);
         const yTop1 = heightAtX(origin.x + length);
-        mkSlopedPlateAlongX(wallPrefix + "plate-top", length, wallThk, { x: origin.x, z: origin.z }, yTop0, yTop1, materials.plate, {});
+        mkSlopedPlateAlongX(
+          wallPrefix + "plate-top",
+          length,
+          wallThk,
+          { x: origin.x, z: origin.z },
+          yTop0,
+          yTop1,
+          materials.plate,
+          {}
+        );
       }
     } else {
       mkBox(wallPrefix + "plate-bottom", wallThk, plateY, length, { x: origin.x, y: 0, z: origin.z }, materials.plate);
@@ -874,7 +1301,15 @@ export function build3D(state, ctx) {
       for (let p = 0; p < panels.length; p++) {
         const pan = panels[p];
         const pref = wallPrefix + `panel-${p + 1}-`;
-        buildBasicPanel(pref, axis, pan.len, origin, pan.start, openingsX, isAlongX ? studLenForXStart : () => studLenFlat);
+        buildBasicPanel(
+          pref,
+          axis,
+          pan.len,
+          origin,
+          pan.start,
+          openingsX,
+          isAlongX ? studLenForXStart : (() => studLenFlat)
+        );
       }
 
       for (let i = 0; i < doors.length; i++) {
@@ -890,6 +1325,9 @@ export function build3D(state, ctx) {
       }
 
       for (let p = 0; p < panels.length; p++) {
+        if (__DIAG_ONE_FRONT_ONE_BOARD) {
+          if (!(String(wallId) === "front" && p === 0)) continue;
+        }
         const pan = panels[p];
         let panelH = wallHeightFlat;
         if (isSlopeWall) {
@@ -897,7 +1335,15 @@ export function build3D(state, ctx) {
           const h1 = heightAtX(origin.x + pan.start + pan.len);
           panelH = Math.min(h0, h1);
         }
-        claddingJobs.push({ wallId, axis, panelIndex: p + 1, panelStart: pan.start, panelLen: pan.len, origin, panelHeight: panelH });
+        claddingJobs.push({
+          wallId,
+          axis,
+          panelIndex: (p + 1),
+          panelStart: pan.start,
+          panelLen: pan.len,
+          origin,
+          panelHeight: panelH
+        });
       }
 
       return;
@@ -956,7 +1402,19 @@ export function build3D(state, ctx) {
       panelH = Math.min(h0, h1);
     }
 
-    claddingJobs.push({ wallId, axis, panelIndex: 1, panelStart: 0, panelLen: length, origin, panelHeight: panelH });
+    if (__DIAG_ONE_FRONT_ONE_BOARD) {
+      if (!(String(wallId) === "front")) return;
+    }
+
+    claddingJobs.push({
+      wallId,
+      axis,
+      panelIndex: 1,
+      panelStart: 0,
+      panelLen: length,
+      origin,
+      panelHeight: panelH
+    });
   }
 
   const sideLenZ = Math.max(1, dims.d - 2 * wallThk);
@@ -972,7 +1430,10 @@ export function build3D(state, ctx) {
 }
 
 function resolveProfile(state, variant) {
-  const defaults = variant === "insulated" ? { studW: 50, studH: 100, spacing: 400 } : { studW: 50, studH: 75, spacing: null };
+  const defaults =
+    variant === "insulated"
+      ? { studW: 50, studH: 100, spacing: 400 }
+      : { studW: 50, studH: 75, spacing: null };
 
   const cfg = state?.walls?.[variant];
   const w = Math.floor(Number(cfg?.section?.w));
@@ -1054,7 +1515,7 @@ function computeBasicPanels(length, prof, openingsX) {
       .map((o) => ({ x0: Math.floor(o.x0 ?? 0), x1: Math.floor(o.x1 ?? 0) }))
       .filter((o) => Number.isFinite(o.x0) && Number.isFinite(o.x1));
 
-    all.sort((a, b) => a.x0 - b.x0 || a.x1 - b.x1);
+    all.sort((a, b) => (a.x0 - b.x0) || (a.x1 - b.x1));
 
     const clusters = [];
     if (all.length) {
@@ -1094,7 +1555,7 @@ function computeBasicPanels(length, prof, openingsX) {
       let cur = { start: regions[0].start, end: regions[0].end };
       for (let i = 1; i < regions.length; i++) {
         const r = regions[i];
-        if (r.start <= cur.end + 1) {
+        if (r.start <= (cur.end + 1)) {
           cur.end = Math.max(cur.end, r.end);
         } else {
           merged.push(cur);
@@ -1198,7 +1659,7 @@ export function updateBOM(state) {
         if (pi < 0) continue;
 
         const id = String(d.id || "");
-        const headerL = d.w + 2 * prof.studW;
+        const headerL = (d.w + 2 * prof.studW);
 
         openingItemsByPanel[pi].push(["  Door Uprights", 2, studLen, prof.studW, wallThk, `door ${id}`]);
         openingItemsByPanel[pi].push(["  Door Header", 1, headerL, prof.studH, wallThk, `door ${id}`]);
@@ -1211,7 +1672,7 @@ export function updateBOM(state) {
         if (pi < 0) continue;
 
         const id = String(w.id || "");
-        const headerL = w.w + 2 * prof.studW;
+        const headerL = (w.w + 2 * prof.studW);
 
         openingItemsByPanel[pi].push(["  Window Uprights", 2, studLen, prof.studW, wallThk, `window ${id}`]);
         openingItemsByPanel[pi].push(["  Window Header", 1, headerL, prof.studH, wallThk, `window ${id}`]);
@@ -1268,7 +1729,7 @@ export function updateBOM(state) {
 
   function heightAtX(x_mm) {
     const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
-    const t = frameW > 0 ? x / frameW : 0;
+    const t = frameW > 0 ? (x / frameW) : 0;
     return Math.max(100, Math.floor(minH + (maxH - minH) * t));
   }
 
@@ -1294,10 +1755,10 @@ export function updateBOM(state) {
   for (const wname of walls) {
     const L = lengths[wname];
 
-    const isFrontBack = wname === "front" || wname === "back";
+    const isFrontBack = (wname === "front" || wname === "back");
     const isSlopeWall = isFrontBack;
 
-    const wallHFlat = wname === "left" ? minH : wname === "right" ? maxH : baseHeight;
+    const wallHFlat = (wname === "left") ? minH : (wname === "right") ? maxH : baseHeight;
     const studLenFlat = Math.max(1, wallHFlat - 2 * plateY);
 
     sections.push([`WALL: ${wname} (${variant})`, "", "", "", "", `pent slope X; minH=${minH}mm, maxH=${maxH}mm; L=${L}mm`]);
@@ -1324,7 +1785,7 @@ export function updateBOM(state) {
       if (pi < 0) continue;
 
       const id = String(d.id || "");
-      const headerL = d.w + 2 * prof.studW;
+      const headerL = (d.w + 2 * prof.studW);
 
       const cx = Math.floor((d.x0 + d.x1) / 2);
       const topH = isSlopeWall ? heightAtX(cx) : wallHFlat;
@@ -1340,7 +1801,7 @@ export function updateBOM(state) {
       if (pi < 0) continue;
 
       const id = String(w.id || "");
-      const headerL = w.w + 2 * prof.studW;
+      const headerL = (w.w + 2 * prof.studW);
 
       const cx = Math.floor((w.x0 + w.x1) / 2);
       const topH = isSlopeWall ? heightAtX(cx) : wallHFlat;
@@ -1373,10 +1834,7 @@ export function updateBOM(state) {
         else {
           let count = 2;
           let run = 400;
-          while (run <= pan.len - prof.studW) {
-            count += 1;
-            run += prof.spacing;
-          }
+          while (run <= pan.len - prof.studW) { count += 1; run += prof.spacing; }
           sections.push([`  Studs`, count, studLenFlat, prof.studW, wallThk, `pent; ${wname}; @400`]);
         }
       } else {
@@ -1398,7 +1856,7 @@ export function updateBOM(state) {
           const panelOpenings = openingsX.filter((d) => {
             const s = d.x0;
             const e = d.x1;
-            return e > offsetAlong && s < offsetAlong + panelLen;
+            return e > offsetAlong && s < (offsetAlong + panelLen);
           });
 
           const studAt = (posStart) => {
@@ -1421,10 +1879,7 @@ export function updateBOM(state) {
           let midAllowed = true;
           for (let i = 0; i < panelOpenings.length; i++) {
             const d = panelOpenings[i];
-            if (xm + prof.studW > d.x0 && xm < d.x1) {
-              midAllowed = false;
-              break;
-            }
+            if (xm + prof.studW > d.x0 && xm < d.x1) { midAllowed = false; break; }
           }
           if (midAllowed) {
             const cx = Math.floor(xm + prof.studW / 2);
@@ -1455,11 +1910,9 @@ export function updateBOM(state) {
           }
         }
 
-        Object.keys(studsByLen)
-          .sort((a, b) => Number(a) - Number(b))
-          .forEach((k) => {
-            sections.push([`  Studs`, studsByLen[k], Number(k), prof.studW, wallThk, `pent slope; ${wname}`]);
-          });
+        Object.keys(studsByLen).sort((a, b) => Number(a) - Number(b)).forEach((k) => {
+          sections.push([`  Studs`, studsByLen[k], Number(k), prof.studW, wallThk, `pent slope; ${wname}`]);
+        });
       }
 
       const items = openingItemsByPanel[p] || [];
