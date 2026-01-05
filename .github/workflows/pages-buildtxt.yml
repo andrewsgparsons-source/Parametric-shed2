@@ -1,4 +1,3 @@
-# FILE: .github/workflows/pages-buildtxt.yml
 name: Pages build.txt (short SHA)
 
 on:
@@ -24,17 +23,17 @@ jobs:
           mkdir -p docs
           printf '%s\n' "${short_sha}" > docs/build.txt
 
-    - name: Commit and push if changed
-  shell: bash
-  run: |
-    set -euo pipefail
+      - name: Commit and push if changed
+        shell: bash
+        run: |
+          set -euo pipefail
 
-    if [ -n "$(git status --porcelain)" ]; then
-      git config user.name "github-actions[bot]"
-      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      git add docs/build.txt
-      git commit -m "ci: update docs/build.txt"
-      git push
-    else
-      echo "No changes to commit"
-    fi
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/build.txt
+            git commit -m "ci: update docs/build.txt"
+            git push
+          else
+            echo "No changes to commit"
+          fi
