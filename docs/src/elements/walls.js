@@ -680,6 +680,125 @@ export function build3D(state, ctx) {
     let created = 0;
 
     if (merged) {
+      // ---- NEW: cut openings (doors/windows) through merged cladding panel mesh ----
+      try {
+        const hasCSG =
+          typeof BABYLON !== "undefined" &&
+          BABYLON &&
+          BABYLON.CSG &&
+          typeof BABYLON.CSG.FromMesh === "function";
+
+        if (hasCSG) {
+          const panelA0 = Math.floor(Number(panelStart || 0));
+          const panelA1 = Math.floor(Number(panelStart || 0) + Number(panelLen || 0));
+
+          const doors = doorIntervalsForWall(String(wallId || ""));
+          const wins = windowIntervalsForWall(String(wallId || ""));
+
+          const CUT_EXTRA = 80;
+          const cutDepth = Math.max(1, Math.floor(CLAD_T + 2 * CUT_EXTRA));
+
+          const wallOutsideFaceWorld = isAlongX
+            ? (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk))
+            : (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
+
+          const outwardNormal = isAlongX ? outwardSignZ : outwardSignX;
+
+          const cutMinOut_mm = (outwardNormal === 1)
+            ? Math.floor(wallOutsideFaceWorld - CUT_EXTRA)
+            : Math.floor(wallOutsideFaceWorld - (CLAD_T + CUT_EXTRA));
+
+          const cutters = [];
+
+          function addCutterSpan(a0, a1, y0, y1) {
+            const s0 = Math.max(panelA0, Math.floor(Number(a0)));
+            const s1 = Math.min(panelA1, Math.floor(Number(a1)));
+            const len = Math.max(0, s1 - s0);
+            const hh = Math.max(0, Math.floor(Number(y1)) - Math.floor(Number(y0)));
+            if (len < 1 || hh < 1) return;
+
+            const name = `cladcut-${String(wallId)}-panel-${String(panelIndex)}-${String(cutters.length)}`;
+            let m = null;
+
+            if (isAlongX) {
+              m = BABYLON.MeshBuilder.CreateBox(
+                name,
+                { width: len / 1000, height: hh / 1000, depth: cutDepth / 1000 },
+                scene
+              );
+              m.position = new BABYLON.Vector3(
+                (origin.x + s0 + len / 2) / 1000,
+                (Math.floor(Number(y0)) + hh / 2) / 1000,
+                (cutMinOut_mm + cutDepth / 2) / 1000
+              );
+            } else {
+              m = BABYLON.MeshBuilder.CreateBox(
+                name,
+                { width: cutDepth / 1000, height: hh / 1000, depth: len / 1000 },
+                scene
+              );
+              m.position = new BABYLON.Vector3(
+                (cutMinOut_mm + cutDepth / 2) / 1000,
+                (Math.floor(Number(y0)) + hh / 2) / 1000,
+                (origin.z + s0 + len / 2) / 1000
+              );
+            }
+
+            if (m) cutters.push(m);
+          }
+
+          for (let i = 0; i < doors.length; i++) {
+            const d = doors[i];
+            const y0 = plateY;
+            const y1 = plateY + Math.max(1, Math.floor(Number(d.h || 0)));
+            addCutterSpan(d.x0, d.x1, y0, y1);
+          }
+
+          for (let i = 0; i < wins.length; i++) {
+            const w = wins[i];
+            const y0 = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
+            const y1 = y0 + Math.max(1, Math.floor(Number(w.h || 0)));
+            addCutterSpan(w.x0, w.x1, y0, y1);
+          }
+
+          if (cutters.length) {
+            let cutterCSG = null;
+            try {
+              cutterCSG = BABYLON.CSG.FromMesh(cutters[0]);
+              for (let i = 1; i < cutters.length; i++) {
+                try {
+                  const c = BABYLON.CSG.FromMesh(cutters[i]);
+                  cutterCSG = cutterCSG.union(c);
+                } catch (e) {}
+              }
+            } catch (e) {
+              cutterCSG = null;
+            }
+
+            if (cutterCSG) {
+              let resMesh = null;
+              try {
+                const baseCSG = BABYLON.CSG.FromMesh(merged);
+                const resCSG = baseCSG.subtract(cutterCSG);
+                resMesh = resCSG.toMesh(`clad-${wallId}-panel-${panelIndex}`, mat, scene, false);
+              } catch (e) {
+                resMesh = null;
+              }
+
+              if (resMesh) {
+                try { if (merged && !merged.isDisposed()) merged.dispose(false, true); } catch (e) {}
+                merged = resMesh;
+              }
+            }
+
+            for (let i = 0; i < cutters.length; i++) {
+              try { if (cutters[i] && !cutters[i].isDisposed()) cutters[i].dispose(false, true); } catch (e) {}
+            }
+          }
+        }
+      } catch (e) {}
+      // ---- END openings cut-outs ----
+
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
