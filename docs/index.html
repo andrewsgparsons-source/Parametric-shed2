@@ -412,6 +412,94 @@
   </div>
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script type="module">
+    (function () {
+      var qs = new URLSearchParams(window.location.search || "");
+      var v = qs.get("v");
+      var clean = (qs.get("clean") === "1");
+
+      window.__boot = window.__boot || {};
+      window.__boot.v = (v != null && v !== "") ? String(v) : null;
+      window.__boot.clean = clean;
+
+      function ensureDebugBootLabel() {
+        var txt = "v=" + (window.__boot.v != null ? window.__boot.v : "(none)") + (clean ? " clean=1" : "");
+        var el = document.getElementById("dbgBootLabel");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "dbgBootLabel";
+          el.setAttribute("aria-hidden", "true");
+          el.style.position = "fixed";
+          el.style.top = "6px";
+          el.style.left = "6px";
+          el.style.zIndex = "2147483647";
+          el.style.pointerEvents = "none";
+          el.style.userSelect = "none";
+          el.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+          el.style.fontSize = "12px";
+          el.style.lineHeight = "1.2";
+          el.style.padding = "2px 6px";
+          el.style.borderRadius = "4px";
+          el.style.background = "rgba(0,0,0,0.55)";
+          el.style.color = "#fff";
+          document.body.appendChild(el);
+        }
+        el.textContent = txt;
+      }
+
+      if (document.readyState === "loading") {
+        window.addEventListener("DOMContentLoaded", ensureDebugBootLabel, { once: true });
+      } else {
+        try { ensureDebugBootLabel(); } catch (e0) {}
+      }
+
+      if (!clean) return;
+
+      try {
+        var shim = {
+          getItem: function () { return null; },
+          setItem: function () {},
+          removeItem: function () {},
+          clear: function () {},
+          key: function () { return null; },
+          get length() { return 0; }
+        };
+        try { Object.defineProperty(window, "localStorage", { configurable: true, get: function () { return shim; } }); } catch (e1) {}
+        try { Object.defineProperty(window, "sessionStorage", { configurable: true, get: function () { return shim; } }); } catch (e2) {}
+        try {
+          var sp = window.Storage && window.Storage.prototype;
+          if (sp && !sp.__cleanBootPatched) {
+            Object.defineProperty(sp, "__cleanBootPatched", { value: true, configurable: true });
+            sp.getItem = function () { return null; };
+            sp.setItem = function () {};
+            sp.removeItem = function () {};
+            sp.clear = function () {};
+            sp.key = function () { return null; };
+          }
+        } catch (e3) {}
+      } catch (e4) {}
+
+      try {
+        if ("serviceWorker" in navigator && navigator.serviceWorker) {
+          var sw = navigator.serviceWorker;
+          if (typeof sw.register === "function" && !sw.__cleanBootRegisterPatched) {
+            try { Object.defineProperty(sw, "__cleanBootRegisterPatched", { value: true, configurable: true }); } catch (e5) { sw.__cleanBootRegisterPatched = true; }
+            window.__boot._swRegister = window.__boot._swRegister || sw.register;
+            sw.register = function () { return Promise.resolve(null); };
+          }
+
+          (async function () {
+            try {
+              var regs = await navigator.serviceWorker.getRegistrations();
+              for (var i = 0; i < regs.length; i++) {
+                try { await regs[i].unregister(); } catch (e6) {}
+              }
+            } catch (e7) {}
+          })();
+        }
+      } catch (e8) {}
+    })();
+  </script>
   <script type="module" src="./src/index.js"></script>
   <script type="module">
     import { initViews } from './src/views.js';
