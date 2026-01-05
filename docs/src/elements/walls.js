@@ -60,6 +60,7 @@ export function build3D(state, ctx) {
   const CLAD_H = 140;
   const CLAD_T = 20;
   const CLAD_DRIP = 30;
+  const CLAD_BOTTOM_DROP_MM = 60;
 
   const CLAD_Rt = 5;
   const CLAD_Ht = 45;
@@ -360,7 +361,8 @@ export function build3D(state, ctx) {
         if (bb && bb.minimumWorld && bb.maximumWorld) {
           wallBottomPlateBottomY_mm = Number(bb.minimumWorld.y) * 1000;
           wallBottomPlateTopY_mm = Number(bb.maximumWorld.y) * 1000;
-          claddingAnchorY_mm = wallBottomPlateTopY_mm;
+          const desiredFirstBottomY_mm = wallBottomPlateBottomY_mm - CLAD_BOTTOM_DROP_MM;
+          claddingAnchorY_mm = desiredFirstBottomY_mm - 95;
 
           xMin_mm = Number(bb.minimumWorld.x) * 1000;
           xMax_mm = Number(bb.maximumWorld.x) * 1000;
@@ -506,6 +508,14 @@ export function build3D(state, ctx) {
 
       const yUpperStrip = yBase + CLAD_Hb;
       const hUpperStrip = Math.max(1, CLAD_H - CLAD_Hb);
+
+      if (isFirst) {
+        const panelFrameBottomY_mm = wallBottomPlateBottomY_mm;
+        const claddingBottomY_mm = yBottomStrip;
+        const diff_mm = claddingBottomY_mm - panelFrameBottomY_mm;
+        const pass = Math.abs(diff_mm + 60) <= 2;
+        console.log("CLAD_Y_CHECK wall=" + String(wallId) + " panel=" + String(panelIndex) + " panelFrameBottomY_mm=" + Math.round(panelFrameBottomY_mm) + " claddingBottomY_mm=" + Math.round(claddingBottomY_mm) + " diff_mm=" + Math.round(diff_mm) + " " + (pass ? "PASS" : "FAIL"));
+      }
 
       if (isAlongX) {
         const wallOutsideFaceWorld = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
