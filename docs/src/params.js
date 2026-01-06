@@ -60,6 +60,9 @@ export const DEFAULTS = {
 
   roof: {
     style: "apex",
+    apex: {
+      trussCount: null
+    },
     pent: {
       minHeight_mm: 2400,
       maxHeight_mm: 2400
