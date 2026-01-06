@@ -227,9 +227,9 @@ function initApp() {
     // Apex roof absolute heights (mm). IDs may vary across UI versions; accept common fallbacks.
     // These map to state.roof.apex.heightToEaves_mm / heightToCrest_mm (see wiring below).
     var roofApexEavesHeightEl =
-      $("roofApexEavesHeight") || $("roofHeightToEaves") || $("roofEavesHeight") || $("apexEavesHeight") || $("apexHeightToEaves") || $("roofApexHeightToEaves");
+      $("roofApexEaveHeight");
     var roofApexCrestHeightEl =
-      $("roofApexCrestHeight") || $("roofHeightToCrest") || $("roofCrestHeight") || $("apexCrestHeight") || $("apexHeightToCrest") || $("roofApexHeightToCrest");
+      $("roofApexCrestHeight");
 
     // Apex roof: truss count + spacing readout (mm only)
     var roofApexTrussCountEl = $("roofApexTrussCount");
