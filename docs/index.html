@@ -537,9 +537,6 @@
     })();
   </script>
   <script type="module" src="./src/index.js"></script>
-  <script type="module">
-    import { initViews } from './src/views.js';
-    initViews();
-  </script>
+  <!-- initViews() is called from ./src/index.js to ensure single initialization. -->
 </body>
 </html>
