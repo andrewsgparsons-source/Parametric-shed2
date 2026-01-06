@@ -224,6 +224,13 @@ function initApp() {
     var roofMinHeightEl = $("roofMinHeight");
     var roofMaxHeightEl = $("roofMaxHeight");
 
+    // Apex roof absolute heights (mm). IDs may vary across UI versions; accept common fallbacks.
+    // These map to state.roof.apex.heightToEaves_mm / heightToCrest_mm (see wiring below).
+    var roofApexEavesHeightEl =
+      $("roofApexEavesHeight") || $("roofHeightToEaves") || $("roofEavesHeight") || $("apexEavesHeight");
+    var roofApexCrestHeightEl =
+      $("roofApexCrestHeight") || $("roofHeightToCrest") || $("roofCrestHeight") || $("apexCrestHeight");
+
     // Apex roof: truss count + spacing readout (mm only)
     var roofApexTrussCountEl = $("roofApexTrussCount");
     var roofApexTrussSpacingEl = $("roofApexTrussSpacing");
@@ -785,9 +792,36 @@ function initApp() {
       return roofStyle === "pent";
     }
 
+    function isApexRoofStyle(state) {
+      var roofStyle = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
+      return roofStyle === "apex";
+    }
+
     function clampHeightMm(v, def) {
       var n = Math.max(100, Math.floor(Number(v)));
       return Number.isFinite(n) ? n : def;
+    }
+
+    // Read apex absolute height fields with backwards-compatible key fallbacks.
+    // NOTE: Geometry/derived wall height is handled in params.js / roof.js; this is UI/state wiring only.
+    function getApexHeightsFromState(state) {
+      var a = (state && state.roof && state.roof.apex) ? state.roof.apex : null;
+
+      function pick(obj, keys) {
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          if (obj && obj[k] != null) {
+            var n = Math.floor(Number(obj[k]));
+            if (Number.isFinite(n) && n > 0) return n;
+          }
+        }
+        return null;
+      }
+
+      var eaves = pick(a, ["heightToEaves_mm", "eavesHeight_mm", "eaves_mm", "heightEaves_mm"]);
+      var crest = pick(a, ["heightToCrest_mm", "crestHeight_mm", "crest_mm", "heightCrest_mm"]);
+
+      return { eaves: eaves, crest: crest };
     }
 
     function getPentMinMax(state) {
@@ -821,6 +855,18 @@ function initApp() {
 
         var wallDims = getWallOuterDimsFromState(state);
         var wallState = Object.assign({}, state, { w: wallDims.w_mm, d: wallDims.d_mm });
+
+        // Apex only: allow params.resolveDims(...) to provide a derived wall height that satisfies
+        // absolute "Height to Eaves" (ground->underside at wall line) once that logic is implemented there.
+        // No effect unless R.walls.height_mm is populated by params.js, and does NOT change pent behavior.
+        try {
+          var roofStyleNow = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
+          if (roofStyleNow === "apex" && R && R.walls && R.walls.height_mm != null) {
+            wallState = Object.assign({}, wallState, {
+              walls: Object.assign({}, wallState.walls || {}, { height_mm: Math.floor(Number(R.walls.height_mm)) })
+            });
+          }
+        } catch (eWallDerive) {}
 
         safeDispose();
 
@@ -1514,6 +1560,24 @@ function initApp() {
           roofMaxHeightEl.disabled = !isPent;
         }
 
+        // Apex absolute eaves/crest heights (mm)
+        try {
+          var isApex = isApexRoofStyle(state);
+          var ah = getApexHeightsFromState(state);
+
+          if (roofApexEavesHeightEl) {
+            roofApexEavesHeightEl.disabled = !isApex;
+            roofApexEavesHeightEl.setAttribute("aria-disabled", String(!isApex));
+            if (isApex && ah.eaves != null) roofApexEavesHeightEl.value = String(ah.eaves);
+          }
+
+          if (roofApexCrestHeightEl) {
+            roofApexCrestHeightEl.disabled = !isApex;
+            roofApexCrestHeightEl.setAttribute("aria-disabled", String(!isApex));
+            if (isApex && ah.crest != null) roofApexCrestHeightEl.value = String(ah.crest);
+          }
+        } catch (eApexSync) {}
+
         if (state && state.overhang) {
           if (overUniformEl) overUniformEl.value = String(state.overhang.uniform_mm != null ? state.overhang.uniform_mm : 0);
           if (overLeftEl) overLeftEl.value = state.overhang.left_mm == null ? "" : String(state.overhang.left_mm);
@@ -1618,6 +1682,26 @@ function initApp() {
       store.setState({ roof: { pent: { minHeight_mm: minH, maxHeight_mm: maxH } } });
     }
 
+    // Apex: absolute heights from ground (mm)
+    function commitApexHeightsFromInputs() {
+      if (!roofApexEavesHeightEl || !roofApexCrestHeightEl) return;
+
+      var s = store.getState();
+      if (!isApexRoofStyle(s)) return;
+
+      var eaves = clampHeightMm(roofApexEavesHeightEl.value, 2400);
+      var crest = clampHeightMm(roofApexCrestHeightEl.value, eaves);
+
+      // Deterministic validity rule:
+      // If crest < eaves, clamp crest UP to eaves (never invert the roof).
+      if (crest < eaves) crest = eaves;
+
+      // Reflect clamp immediately in UI so the user sees the correction.
+      try { roofApexCrestHeightEl.value = String(crest); } catch (e0) {}
+
+      store.setState({ roof: { apex: { heightToEaves_mm: eaves, heightToCrest_mm: crest } } });
+    }
+
     if (roofMinHeightEl) roofMinHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
@@ -1625,6 +1709,14 @@ function initApp() {
     if (roofMaxHeightEl) roofMaxHeightEl.addEventListener("input", function () {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
+    });
+
+    if (roofApexEavesHeightEl) roofApexEavesHeightEl.addEventListener("input", function () {
+      // If user raises eaves above crest, crest will be clamped up to eaves in commitApexHeightsFromInputs().
+      commitApexHeightsFromInputs();
+    });
+    if (roofApexCrestHeightEl) roofApexCrestHeightEl.addEventListener("input", function () {
+      commitApexHeightsFromInputs();
     });
 
     // Apex trusses (incl. gable ends): user-selected count
