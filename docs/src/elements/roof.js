@@ -721,8 +721,106 @@ function buildApex(state, ctx) {
   // Ridge runs along B. If ROOF width is the long axis (incl. overhang), ridge should run along world X; otherwise along world Z.
   const ridgeAlongWorldX = roofW_mm >= roofD_mm;
 
-  // Rise: deterministic from span (no new UI constants). Only affects apex style.
-  const rise_mm = clamp(Math.floor(A_mm * 0.20), 200, 900);
+  // --- APEX HEIGHT CONTROLS (ground-referenced, mm) ---
+  // UI intent:
+  // - "Height to Eaves"  => ground -> UNDERSIDE of eaves at the wall line (mm)
+  // - "Height to Crest"  => ground -> HIGHEST roof point (top of OSB at ridge/crest) (mm)
+  //
+  // Deterministic correction:
+  // - If crest < eaves, we clamp crest := eaves (prevents inverted roof).
+  // - Additionally, because eaves is an UNDERSIDE reference and crest is a TOP reference,
+  //   we enforce crest >= eaves + OSB_THK_MM. If violated, clamp crest := eaves + OSB_THK_MM.
+  //
+  // NOTE: If either control is missing/unset, we keep legacy behavior (rise derived from span).
+  const OSB_THK_MM = 18;
+
+  function _numOrNull(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function _firstFinite(/*...vals*/) {
+    for (let i = 0; i < arguments.length; i++) {
+      const n = _numOrNull(arguments[i]);
+      if (n != null) return n;
+    }
+    return null;
+  }
+
+  const apex = (state && state.roof && state.roof.apex) ? state.roof.apex : null;
+
+  // Support a few likely key names without renaming state keys.
+  const eavesCtl_mm = _firstFinite(
+    apex && apex.eavesHeight_mm,
+    apex && apex.heightToEaves_mm,
+    apex && apex.eaves_mm,
+    apex && apex.minHeight_mm,
+    apex && apex.heightEaves_mm
+  );
+
+  const crestCtl_mm = _firstFinite(
+    apex && apex.crestHeight_mm,
+    apex && apex.heightToCrest_mm,
+    apex && apex.crest_mm,
+    apex && apex.maxHeight_mm,
+    apex && apex.ridgeHeight_mm,
+    apex && apex.heightCrest_mm
+  );
+
+  // Legacy rise (used when controls are absent)
+  let rise_mm = clamp(Math.floor(A_mm * 0.20), 200, 900);
+
+  // Resolved targets (used only when BOTH are present)
+  let eavesTargetAbs_mm = null;
+  let crestTargetAbs_mm = null;
+
+  if (eavesCtl_mm != null && crestCtl_mm != null) {
+    const e0 = Math.max(0, Math.floor(eavesCtl_mm));
+    let c0 = Math.max(0, Math.floor(crestCtl_mm));
+
+    // Clamp crest >= eaves (deterministic)
+    if (c0 < e0) c0 = e0;
+
+    // Enforce crest >= eaves + OSB thickness (top vs underside reference)
+    if (c0 < (e0 + OSB_THK_MM)) c0 = (e0 + OSB_THK_MM);
+
+    eavesTargetAbs_mm = e0;
+    crestTargetAbs_mm = c0;
+
+    // Solve rise so that:
+    // (crestTop - eavesUnderside) == rise + cos(theta)*OSB_THK_MM,
+    // where theta is the roof pitch angle and cos(theta) depends on rise and half-span.
+    const halfSpan_mm = Math.max(1, Math.floor(A_mm / 2));
+    const delta_mm = Math.max(0, Math.floor(crestTargetAbs_mm - eavesTargetAbs_mm));
+
+    const solveRiseFromDelta = (delta, halfSpan, osbThk) => {
+      // If delta is smaller than OSB thickness, the best we can do is a "flat" roof (rise ~ 0),
+      // but crest is still a TOP reference and eaves is an UNDERSIDE reference.
+      // We deterministically treat delta := max(delta, osbThk).
+      const target = Math.max(osbThk, Math.floor(delta));
+
+      // f(rise) = rise + cos(theta(rise))*osbThk, monotonic increasing in rise.
+      const f = (r) => {
+        const rr = Math.max(0, Number(r));
+        const den = Math.sqrt(halfSpan * halfSpan + rr * rr);
+        const cosT = den > 1e-6 ? (halfSpan / den) : 1;
+        return rr + (cosT * osbThk);
+      };
+
+      // Binary search (deterministic) on [0 .. hi]
+      let lo = 0;
+      let hi = Math.max(target + 2000, 1); // generous upper bound; avoids accidental clipping
+      for (let it = 0; it < 32; it++) {
+        const mid = (lo + hi) / 2;
+        if (f(mid) >= target) hi = mid;
+        else lo = mid;
+      }
+      return Math.max(0, Math.floor(hi));
+    };
+
+    rise_mm = solveRiseFromDelta(delta_mm, halfSpan_mm, OSB_THK_MM);
+  }
+  // --- END APEX HEIGHT CONTROLS ---
 
   // Timber section (matches existing roof timber orientation policy: uses thickness/depth swapped)
   const g = getRoofFrameGauge(state);
@@ -918,7 +1016,7 @@ function buildApex(state, ctx) {
       post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
       post.parent = tr;
 
-      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng))));
+      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng)))));
       const cap = BABYLON.MeshBuilder.ExtrudeShape(
         `roof-truss-${idx}-kingpost-cap`,
         {
@@ -1054,7 +1152,7 @@ function buildApex(state, ctx) {
     // Simple sheathing as two sloped OSB "panels" (visual)
     // Panel thickness = 18mm, depth = B, length along slope = rafterLen
     // IMPORTANT: panels are offset to the OTHER SIDE of the purlins (outside of the roof plane).
-    const osbThk = 18;
+    const osbThk = OSB_THK_MM;
 
     // Place OSB so its UNDERSIDE sits on the OUTER face of the purlins (plus tiny clearance),
     // measured along the same roof-normal direction used by purlins.
@@ -1163,7 +1261,29 @@ function buildApex(state, ctx) {
   roofRoot.position.z += (targetMinZ_m - minCornerZ);
 
   const wallH_mm = Math.max(100, Math.floor(Number(state && state.walls && state.walls.height_mm != null ? state.walls.height_mm : 2400)));
-  roofRoot.position.y = wallH_mm / 1000;
+
+  // APEX height positioning:
+  // - If Height-to-Eaves + Height-to-Crest are provided, we position the roof in world-Y so that the
+  //   OSB UNDERSIDE at the wall line lands exactly on Height-to-Eaves (ground-referenced, mm).
+  // - Otherwise, keep legacy behavior: roof sits on top of the walls (roofRoot.y = wallH).
+  if (Number.isFinite(eavesTargetAbs_mm) && Number.isFinite(crestTargetAbs_mm)) {
+    // The roof plane used by purlins/OSB has baseline y = memberD_mm at the wall line (tie top).
+    // OSB underside sits outward along the roof normal by (memberD_mm + OSB_CLEAR_MM).
+    const OSB_CLEAR_MM = 1;
+
+    const halfSpan_mm = Math.max(1, Math.floor(A_mm / 2));
+    const den = Math.sqrt(halfSpan_mm * halfSpan_mm + rise_mm * rise_mm);
+    const cosT = den > 1e-6 ? (halfSpan_mm / den) : 1;
+
+    // Local Y of OSB underside at the wall line (before roofRoot world translation)
+    const eavesUnderLocalY_mm = memberD_mm + cosT * (memberD_mm + OSB_CLEAR_MM);
+
+    // Solve roofRoot world-Y so that:
+    // roofRootY + eavesUnderLocalY == eavesTargetAbs
+    roofRoot.position.y = (Number(eavesTargetAbs_mm) - eavesUnderLocalY_mm) / 1000;
+  } else {
+    roofRoot.position.y = wallH_mm / 1000;
+  }
 
   // ---- Debug ----
   try {
