@@ -1905,4 +1905,4 @@ if (document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", initApp, { once: true });
 } else {
   initApp();
-} Please wait for snippets
+}
