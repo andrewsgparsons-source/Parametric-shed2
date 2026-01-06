@@ -305,24 +305,37 @@ function initApp() {
     }
 
     function computeLegacyApexTrussCount(state) {
-      // Mirrors prior roof.js apex truss position generation (spacing=600, last forced to maxP).
+      // Mirrors roof.js apex truss position generation (spacing=600, last forced to maxP), but on FRAME ridge span.
       var spacing = 600;
       var R = resolveDims(state || {});
+
       var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(Number(R.roof.w_mm))) : 1;
       var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(Number(R.roof.d_mm))) : 1;
 
-      var B_mm = Math.max(roofW, roofD);
+      var frameW = (R && R.frame && R.frame.w_mm != null) ? Math.max(1, Math.floor(Number(R.frame.w_mm))) : 1;
+      var frameD = (R && R.frame && R.frame.d_mm != null) ? Math.max(1, Math.floor(Number(R.frame.d_mm))) : 1;
+
+      var ovh = (R && R.overhang) ? R.overhang : null;
+      var l_mm = (ovh && ovh.l_mm != null) ? Math.max(0, Math.floor(Number(ovh.l_mm))) : 0;
+      var f_mm = (ovh && ovh.f_mm != null) ? Math.max(0, Math.floor(Number(ovh.f_mm))) : 0;
+
+      var ridgeAlongWorldX = (roofW >= roofD);
+      var ridgeFrameLen_mm = ridgeAlongWorldX ? frameW : frameD;
+      var ridgeStart_mm = ridgeAlongWorldX ? l_mm : f_mm;
+
       var memberW = apexMemberW_mm();
-      var maxP = Math.max(0, B_mm - memberW);
+
+      var minP = Math.max(0, Math.floor(ridgeStart_mm));
+      var maxP = Math.max(minP, Math.floor(ridgeStart_mm + ridgeFrameLen_mm - memberW));
 
       var pos = [];
-      var p = 0;
+      var p = minP;
       while (p <= maxP) { pos.push(Math.floor(p)); p += spacing; }
       if (pos.length) {
         var last = pos[pos.length - 1];
         if (Math.abs(last - maxP) > 0) pos.push(Math.floor(maxP));
       } else {
-        pos.push(0);
+        pos.push(minP);
       }
 
       // Count includes both gable ends.
@@ -331,14 +344,20 @@ function initApp() {
     }
 
     function getApexTrussRunMm(state) {
-      // Must match roof.js apex run basis used for left-edge z0_mm placement: run = B_mm - memberW_mm
+      // Must match roof.js apex run basis used for left-edge z0_mm placement: run = ridgeFrameLen_mm - memberW_mm
       var R = resolveDims(state || {});
+
       var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(Number(R.roof.w_mm))) : 1;
       var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(Number(R.roof.d_mm))) : 1;
 
-      var B_mm = Math.max(roofW, roofD);
+      var frameW = (R && R.frame && R.frame.w_mm != null) ? Math.max(1, Math.floor(Number(R.frame.w_mm))) : 1;
+      var frameD = (R && R.frame && R.frame.d_mm != null) ? Math.max(1, Math.floor(Number(R.frame.d_mm))) : 1;
+
+      var ridgeAlongWorldX = (roofW >= roofD);
+      var ridgeFrameLen_mm = ridgeAlongWorldX ? frameW : frameD;
+
       var memberW = apexMemberW_mm();
-      return Math.max(0, Math.floor(B_mm - memberW));
+      return Math.max(0, Math.floor(ridgeFrameLen_mm - memberW));
     }
 
     function computeApexTrussSpacingText(state) {
