@@ -1042,9 +1042,9 @@ function buildApex(state, ctx) {
     // IMPORTANT: panels are offset to the OTHER SIDE of the purlins (outside of the roof plane).
     const osbThk = 18;
 
-    // Offset distance from the (rough) truss/purlin center plane to the outside face:
-    // move along the roof normal by (purlin depth/2 + osb thickness/2)
-    const osbOffset_mm = (memberD_mm / 2) + (osbThk / 2);
+    // Place OSB so its UNDERSIDE sits on the OUTER face of the purlins (plus tiny clearance),
+    // measured along the same roof-normal direction used by purlins.
+    const OSB_CLEAR_MM = 1;
 
     // For a slope angle theta, a unit normal (pointing "outwards") in local XY:
     // left slope (+theta): n = (-sin(theta), +cos(theta))
@@ -1052,14 +1052,20 @@ function buildApex(state, ctx) {
     const sinT = Math.sin(slopeAng);
     const cosT = Math.cos(slopeAng);
 
-    {
-      // Left panel baseline center
-      const baseCx = halfSpan_mm / 2;
-      const baseCy = rise_mm / 2 + osbThk / 2;
+    // Mid-slope sample on the roof plane used by purlins (top of tie baseline at memberD_mm).
+    const sMid_mm = rafterLen_mm / 2;
+    const runMid_mm = Math.round(sMid_mm * cosT);
+    const dropMid_mm = Math.round(sMid_mm * sinT);
+    const ySurfMid_mm = memberD_mm + (rise_mm - dropMid_mm);
 
-      // Offset outward
-      const cx = baseCx + (-sinT) * osbOffset_mm;
-      const cy = baseCy + (cosT) * osbOffset_mm;
+    // Offset from roof plane -> purlin outer face -> OSB center
+    const osbOutOffset_mm = memberD_mm + OSB_CLEAR_MM + (osbThk / 2);
+
+    {
+      // Left panel: center aligned to mid-slope surface point, then pushed outward above purlins
+      const xSurf_mm = (halfSpan_mm - runMid_mm);
+      const cx = xSurf_mm + (-sinT) * osbOutOffset_mm;
+      const cy = ySurfMid_mm + (cosT) * osbOutOffset_mm;
 
       const left = mkBoxCenteredLocal(
         "roof-apex-osb-L",
@@ -1077,13 +1083,10 @@ function buildApex(state, ctx) {
     }
 
     {
-      // Right panel baseline center
-      const baseCx = halfSpan_mm + (halfSpan_mm / 2);
-      const baseCy = rise_mm / 2 + osbThk / 2;
-
-      // Offset outward
-      const cx = baseCx + (sinT) * osbOffset_mm;
-      const cy = baseCy + (cosT) * osbOffset_mm;
+      // Right panel: center aligned to mid-slope surface point, then pushed outward above purlins
+      const xSurf_mm = (halfSpan_mm + runMid_mm);
+      const cx = xSurf_mm + (sinT) * osbOutOffset_mm;
+      const cy = ySurfMid_mm + (cosT) * osbOutOffset_mm;
 
       const right = mkBoxCenteredLocal(
         "roof-apex-osb-R",
