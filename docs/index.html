@@ -537,6 +537,9 @@
       } catch (e8) {}
     })();
   </script>
+  <script type="importmap">
+    { "scopes": { "./src/elements/": { "./instances.js": "../instances.js" }, "./src/": { "./elements/instances.js": "./instances.js" } } }
+  </script>
   <script type="module" src="./src/index.js"></script>
   <!-- initViews() is called from ./src/index.js to ensure single initialization. -->
 </body>
