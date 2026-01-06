@@ -28,7 +28,7 @@ window.addEventListener("unhandledrejection", function (e) {
 });
 
 import { createStateStore } from "./state.js";
-import { DEFAULTS, resolveDims } from "./params.js";
+import { DEFAULTS, resolveDims, CONFIG } from "./params.js";
 import { boot, disposeAll } from "./renderer/babylon.js";
 import * as Base from "./elements/base.js";
 import * as Walls from "./elements/walls.js";
@@ -223,6 +223,10 @@ function initApp() {
     var roofMinHeightEl = $("roofMinHeight");
     var roofMaxHeightEl = $("roofMaxHeight");
 
+    // Apex roof: truss count + spacing readout (mm only)
+    var roofApexTrussCountEl = $("roofApexTrussCount");
+    var roofApexTrussSpacingEl = $("roofApexTrussSpacing");
+
     var overUniformEl = $("roofOverUniform");
     var overFrontEl = $("roofOverFront");
     var overBackEl = $("roofOverBack");
@@ -285,6 +289,82 @@ function initApp() {
     };
 
     function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+    // Apex trusses: run length + deterministic spacing (must match roof.js placement basis)
+    function apexMemberW_mm() {
+      // Must match docs/src/elements/roof.js apex: memberW_mm = CONFIG.timber.d
+      var mw = Math.floor(Number(CONFIG && CONFIG.timber ? CONFIG.timber.d : 100));
+      return (Number.isFinite(mw) && mw > 0) ? mw : 100;
+    }
+
+    function getApexTrussCountFromState(state) {
+      var n = null;
+      try { n = state && state.roof && state.roof.apex && state.roof.apex.trussCount != null ? Math.floor(Number(state.roof.apex.trussCount)) : null; } catch (e) { n = null; }
+      return (Number.isFinite(n) && n >= 2) ? n : null;
+    }
+
+    function computeLegacyApexTrussCount(state) {
+      // Mirrors prior roof.js apex truss position generation (spacing=600, last forced to maxP).
+      var spacing = 600;
+      var R = resolveDims(state || {});
+      var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(Number(R.roof.w_mm))) : 1;
+      var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(Number(R.roof.d_mm))) : 1;
+
+      var B_mm = Math.max(roofW, roofD);
+      var memberW = apexMemberW_mm();
+      var maxP = Math.max(0, B_mm - memberW);
+
+      var pos = [];
+      var p = 0;
+      while (p <= maxP) { pos.push(Math.floor(p)); p += spacing; }
+      if (pos.length) {
+        var last = pos[pos.length - 1];
+        if (Math.abs(last - maxP) > 0) pos.push(Math.floor(maxP));
+      } else {
+        pos.push(0);
+      }
+
+      // Count includes both gable ends.
+      var n = pos.length;
+      return (Number.isFinite(n) && n >= 2) ? n : 2;
+    }
+
+    function getApexTrussRunMm(state) {
+      // Must match roof.js apex run basis used for left-edge z0_mm placement: run = B_mm - memberW_mm
+      var R = resolveDims(state || {});
+      var roofW = (R && R.roof && R.roof.w_mm != null) ? Math.max(1, Math.floor(Number(R.roof.w_mm))) : 1;
+      var roofD = (R && R.roof && R.roof.d_mm != null) ? Math.max(1, Math.floor(Number(R.roof.d_mm))) : 1;
+
+      var B_mm = Math.max(roofW, roofD);
+      var memberW = apexMemberW_mm();
+      return Math.max(0, Math.floor(B_mm - memberW));
+    }
+
+    function computeApexTrussSpacingText(state) {
+      var style = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "apex";
+      if (style !== "apex") return "—";
+
+      var n = getApexTrussCountFromState(state);
+      if (n == null) n = computeLegacyApexTrussCount(state);
+
+      var run_mm = getApexTrussRunMm(state);
+      var denom = (n - 1);
+      if (denom <= 0) return "—";
+
+      var spacing = run_mm / denom;
+      if (!isFinite(spacing)) return "—";
+
+      return String(Math.round(spacing));
+    }
+
+    // Ensure deterministic default truss count (so UI + geometry have a stable baseline).
+    try {
+      var sInitApex = store.getState();
+      var hasApexCount = !!(sInitApex && sInitApex.roof && sInitApex.roof.apex && sInitApex.roof.apex.trussCount != null);
+      if (!hasApexCount) {
+        store.setState({ roof: { apex: { trussCount: computeLegacyApexTrussCount(sInitApex) } } });
+      }
+    } catch (eInitApex) {}
 
     function getWallsEnabled(state) {
       var vis = state && state.vis ? state.vis : null;
@@ -1353,6 +1433,22 @@ function initApp() {
           roofStyleEl.value = (state && state.roof && state.roof.style) ? String(state.roof.style) : "apex";
         }
 
+        // Apex trusses UI (mm only): count + computed spacing readout
+        try {
+          var _roofStyleNow = (state && state.roof && state.roof.style != null) ? String(state.roof.style) : "apex";
+          if (roofApexTrussCountEl) {
+            var n0 = getApexTrussCountFromState(state);
+            if (n0 == null) n0 = computeLegacyApexTrussCount(state);
+            roofApexTrussCountEl.value = String(n0);
+            // Keep usable even if hidden by CSS/layout; but disable when not apex to avoid accidental edits.
+            roofApexTrussCountEl.disabled = (_roofStyleNow !== "apex");
+            roofApexTrussCountEl.setAttribute("aria-disabled", String(_roofStyleNow !== "apex"));
+          }
+          if (roofApexTrussSpacingEl) {
+            roofApexTrussSpacingEl.textContent = computeApexTrussSpacingText(state);
+          }
+        } catch (eApexUi) {}
+
         var isPent = isPentRoofStyle(state);
         if (roofMinHeightEl && roofMaxHeightEl) {
           var ph = getPentHeightsFromState(state);
@@ -1472,6 +1568,21 @@ function initApp() {
       if (!isPentRoofStyle(store.getState())) return;
       commitPentHeightsFromInputs();
     });
+
+    // Apex trusses (incl. gable ends): user-selected count
+    if (roofApexTrussCountEl) {
+      roofApexTrussCountEl.addEventListener("input", function () {
+        var s = store.getState();
+        var style = (s && s.roof && s.roof.style != null) ? String(s.roof.style) : "apex";
+        if (style !== "apex") return;
+
+        var n = Math.floor(Number(roofApexTrussCountEl.value));
+        if (!Number.isFinite(n)) n = computeLegacyApexTrussCount(s);
+        n = clamp(n, 2, 200);
+
+        store.setState({ roof: { apex: { trussCount: n } } });
+      });
+    }
 
     if (vWallsEl) {
       vWallsEl.addEventListener("change", function (e) {
