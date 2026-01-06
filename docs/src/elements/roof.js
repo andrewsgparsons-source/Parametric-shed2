@@ -699,8 +699,8 @@ function buildApex(state, ctx) {
   const A_mm = Math.min(roofW_mm, roofD_mm);
   const B_mm = Math.max(roofW_mm, roofD_mm);
 
-  // Ridge runs along B. If width is the long axis, ridge should run along world X; otherwise along world Z.
-  const ridgeAlongWorldX = frameW_mm >= frameD_mm;
+  // Ridge runs along B. If ROOF width is the long axis (incl. overhang), ridge should run along world X; otherwise along world Z.
+  const ridgeAlongWorldX = roofW_mm >= roofD_mm;
 
   // Rise: deterministic from span (no new UI constants). Only affects apex style.
   const rise_mm = clamp(Math.floor(A_mm * 0.20), 200, 900);
@@ -934,35 +934,88 @@ function buildApex(state, ctx) {
       { roof: "apex", part: "ridge" }
     );
 
-    // Two purlins along B (one each slope) at ~half rise
-    const purlY_mm = Math.floor(rise_mm * 0.5);
-    const purlX1_mm = Math.max(0, Math.floor(A_mm * 0.25 - memberW_mm / 2));
-    const purlX2_mm = Math.max(0, Math.floor(A_mm * 0.75 - memberW_mm / 2));
+    // Purlins (apex):
+    // - Exactly TWO at the ridge zone (one per slope).
+    // - Then continue down each slope at 609mm centres measured ALONG SLOPE.
+    // - Bottom purlin aligns to the overhang-defined eaves edge (outer roof edge), and final gap never exceeds 609mm.
+    // - Cross-section matches rafters (memberW_mm x memberD_mm).
+    const PURLIN_STEP_MM = 609;
+    const PURLIN_CLEAR_MM = 1;
 
-    mkBoxBottomLocal(
-      "roof-purlin-L",
-      memberW_mm,
-      memberD_mm,
-      B_mm,
-      purlX1_mm,
-      purlY_mm / 1000,
+    const sinT = Math.sin(slopeAng);
+    const cosT = Math.cos(slopeAng);
+
+    // Offset outward from the roof surface so purlins sit on top of rafters (no visible embedding).
+    // When rotated about Z by slopeAng, local +Y points outward normal for each slope.
+    const purlinOutOffset_mm = (memberD_mm / 2) + PURLIN_CLEAR_MM;
+
+    function mkPurlin(side, idx, cx_mm, cy_mm) {
+      const name = `roof-purlin-${side}-${idx}`;
+      const m = mkBoxCenteredLocal(
+        name,
+        memberW_mm,
+        memberD_mm,
+        B_mm,
+        cx_mm,
+        cy_mm,
+        B_mm / 2,
+        roofRoot,
+        joistMat,
+        { roof: "apex", part: "purlin", side: side }
+      );
+      m.rotation = new BABYLON.Vector3(0, 0, side === "L" ? slopeAng : -slopeAng);
+      return m;
+    }
+
+    // Compute slope-distance for the bottom-edge purlin using outer-edge alignment in X.
+    // For a box rotated about Z, half-width projects to X by cosT; outward normal contributes X by ±sinT.
+    // Left slope: outer edge at x=0. Right slope: outer edge at x=A_mm.
+    const xSurfBottomL_mm = Math.max(
       0,
-      roofRoot,
-      joistMat,
-      { roof: "apex", part: "purlin", side: "L" }
+      Math.min(
+        halfSpan_mm,
+        Math.round((memberW_mm / 2) * cosT + (sinT * purlinOutOffset_mm))
+      )
     );
-    mkBoxBottomLocal(
-      "roof-purlin-R",
-      memberW_mm,
-      memberD_mm,
-      B_mm,
-      purlX2_mm,
-      purlY_mm / 1000,
-      0,
-      roofRoot,
-      joistMat,
-      { roof: "apex", part: "purlin", side: "R" }
-    );
+    const runBottom_mm = Math.max(0, Math.round(halfSpan_mm - xSurfBottomL_mm));
+    const sBottom_mm = cosT > 1e-6 ? (runBottom_mm / cosT) : rafterLen_mm;
+
+    // Generate slope stations: start at ridge (0), step 609, and ALWAYS include bottom station.
+    const sList = [0];
+    let sNext = PURLIN_STEP_MM;
+    while (sNext < sBottom_mm) {
+      sList.push(Math.round(sNext));
+      sNext += PURLIN_STEP_MM;
+    }
+    const sBottomRounded = Math.round(sBottom_mm);
+    if (sList[sList.length - 1] !== sBottomRounded) sList.push(sBottomRounded);
+
+    for (let i = 0; i < sList.length; i++) {
+      const s_mm = Math.max(0, Math.floor(Number(sList[i] || 0)));
+
+      // Clamp within usable slope length
+      const run_mm = Math.min(halfSpan_mm, Math.max(0, Math.round(s_mm * cosT)));
+      const drop_mm = Math.min(rise_mm, Math.max(0, Math.round(s_mm * sinT)));
+
+      // Roof surface (top of tie baseline at memberD_mm) in local XY:
+      const ySurf_mm = memberD_mm + (rise_mm - drop_mm);
+
+      // LEFT slope purlin
+      {
+        const xSurf_mm = Math.max(0, Math.min(halfSpan_mm, Math.round(halfSpan_mm - run_mm)));
+        const cx_mm = xSurf_mm + (-sinT) * purlinOutOffset_mm;
+        const cy_mm = ySurf_mm + (cosT) * purlinOutOffset_mm;
+        mkPurlin("L", i, cx_mm, cy_mm);
+      }
+
+      // RIGHT slope purlin
+      {
+        const xSurf_mm = Math.max(halfSpan_mm, Math.min(A_mm, Math.round(halfSpan_mm + run_mm)));
+        const cx_mm = xSurf_mm + (sinT) * purlinOutOffset_mm;
+        const cy_mm = ySurf_mm + (cosT) * purlinOutOffset_mm;
+        mkPurlin("R", i, cx_mm, cy_mm);
+      }
+    }
   }
 
   if (roofParts.osb) {
@@ -1112,19 +1165,34 @@ function updateBOM_Apex(state, tbody) {
   const halfSpan_mm = A_mm / 2;
   const rafterLen_mm = Math.round(Math.sqrt(halfSpan_mm * halfSpan_mm + rise_mm * rise_mm));
 
-  // Truss count @600 along B
-  const spacing = 600;
-  const pos = [];
-  const maxP = Math.max(0, B_mm - memberW_mm);
-  let p = 0;
-  while (p <= maxP) { pos.push(Math.floor(p)); p += spacing; }
-  if (pos.length) {
-    const last = pos[pos.length - 1];
-    if (Math.abs(last - maxP) > 0) pos.push(Math.floor(maxP));
+  // Truss quantity must match 3D logic:
+  // - If trussCount >= 2 => use that exact count
+  // - Else => fallback to legacy @600 spacing logic
+  let desiredCount = null;
+  try {
+    desiredCount = state && state.roof && state.roof.apex && state.roof.apex.trussCount != null
+      ? Math.floor(Number(state.roof.apex.trussCount))
+      : null;
+  } catch (e) { desiredCount = null; }
+
+  let trussQty = null;
+
+  if (Number.isFinite(desiredCount) && desiredCount >= 2) {
+    trussQty = desiredCount;
   } else {
-    pos.push(0);
+    const spacing = 600;
+    const pos = [];
+    const maxP = Math.max(0, B_mm - memberW_mm);
+    let p = 0;
+    while (p <= maxP) { pos.push(Math.floor(p)); p += spacing; }
+    if (pos.length) {
+      const last = pos[pos.length - 1];
+      if (Math.abs(last - maxP) > 0) pos.push(Math.floor(maxP));
+    } else {
+      pos.push(0);
+    }
+    trussQty = pos.length;
   }
-  const trussQty = pos.length;
 
   const rows = [];
 
