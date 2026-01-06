@@ -429,9 +429,19 @@ function updateBOM_Pent(state, tbody) {
 
   const data = computeRoofData_Pent(state);
 
+  // ---- NEW: match buildPent() slope-stretch so BOM matches 3D geometry ----
+  // buildPent() scales the physical sloped axis by slopeScale to preserve plan projection after pitching.
+  const rise_mm = Math.max(0, Math.floor((data.maxH_mm - data.minH_mm)));
+  const run_mm = Math.max(1, Math.floor(data.isWShort ? data.frameW_mm : data.frameD_mm));
+  const slopeLen_mm = Math.max(1, Math.round(Math.sqrt(run_mm * run_mm + rise_mm * rise_mm)));
+  const slopeScale = run_mm > 0 ? (slopeLen_mm / run_mm) : 1;
+
+  const rafterLenPhys_mm = Math.max(1, Math.round(Number(data.rafterLen_mm || 0) * slopeScale));
+  // ---- END slope-scale for BOM ----
+
   const rows = [];
 
-  // Rim joists (2x)
+  // Rim joists (2x) (run along B, not slope-stretched)
   rows.push({
     item: "Roof Rim Joist",
     qty: 2,
@@ -440,22 +450,30 @@ function updateBOM_Pent(state, tbody) {
     notes: "D (mm): " + String(data.rafterD_mm),
   });
 
-  // Rafters
+  // Rafters (physical length along sloped axis)
   rows.push({
     item: "Roof Rafter",
     qty: data.rafters.length,
-    L: data.rafterLen_mm,
+    L: rafterLenPhys_mm,
     W: data.rafterW_mm,
-    notes: "D (mm): " + String(data.rafterD_mm) + "; spacing @600mm; pent roof",
+    notes:
+      "D (mm): " +
+      String(data.rafterD_mm) +
+      "; spacing @600mm; pent roof; slopeLen_mm=" +
+      String(slopeLen_mm),
   });
 
   // OSB pieces (group identical cut sizes)
+  // buildPent() scales ONLY the sloped axis (A), which corresponds to p.W_mm in our AB piece representation.
   const osbPieces = [];
   for (let i = 0; i < data.osb.all.length; i++) {
     const p = data.osb.all[i];
+    const Wplan = Math.max(1, Math.floor(p.W_mm));
+    const Lplan = Math.max(1, Math.floor(p.L_mm));
+
     osbPieces.push({
-      L: Math.max(1, Math.floor(p.L_mm)),
-      W: Math.max(1, Math.floor(p.W_mm)),
+      L: Lplan,
+      W: Math.max(1, Math.round(Wplan * slopeScale)),
       notes: "18mm OSB; " + (p.kind === "std" ? "standard sheet" : "rip/trim"),
     });
   }
@@ -1228,12 +1246,44 @@ function updateBOM_Apex(state, tbody) {
     notes: "D (mm): " + String(memberD_mm),
   });
 
+  // Purlin quantity must match buildApex():
+  // - stations along slope: start at ridge (0), step 609mm along slope, always include bottom station
+  // - TWO purlins per station (L + R)
+  const slopeAng = Math.atan2(rise_mm, halfSpan_mm);
+  const sinT = Math.sin(slopeAng);
+  const cosT = Math.cos(slopeAng);
+
+  const PURLIN_STEP_MM = 609;
+  const PURLIN_CLEAR_MM = 1;
+  const purlinOutOffset_mm = (memberD_mm / 2) + PURLIN_CLEAR_MM;
+
+  const xSurfBottomL_mm = Math.max(
+    0,
+    Math.min(
+      halfSpan_mm,
+      Math.round((memberW_mm / 2) * cosT + (sinT * purlinOutOffset_mm))
+    )
+  );
+  const runBottom_mm = Math.max(0, Math.round(halfSpan_mm - xSurfBottomL_mm));
+  const sBottom_mm = cosT > 1e-6 ? (runBottom_mm / cosT) : rafterLen_mm;
+
+  const sList = [0];
+  let sNext = PURLIN_STEP_MM;
+  while (sNext < sBottom_mm) {
+    sList.push(Math.round(sNext));
+    sNext += PURLIN_STEP_MM;
+  }
+  const sBottomRounded = Math.round(sBottom_mm);
+  if (sList[sList.length - 1] !== sBottomRounded) sList.push(sBottomRounded);
+
+  const purlinQty = 2 * sList.length;
+
   rows.push({
     item: "Purlin",
-    qty: 2,
+    qty: purlinQty,
     L: B_mm,
     W: memberW_mm,
-    notes: "D (mm): " + String(memberD_mm),
+    notes: "D (mm): " + String(memberD_mm) + "; stations=" + String(sList.length) + "; step=609mm",
   });
 
   rows.push({
