@@ -862,28 +862,31 @@ function buildApex(state, ctx) {
       r.rotation = new BABYLON.Vector3(0, 0, -slopeAng);
     }
 
-    // Simple web(s) for visual truss (non-structural; deterministic)
+    // King post: single vertical strut from tie midpoint to apex, tapered to a point.
     {
-      const webH = Math.max(1, Math.floor(rise_mm * 0.55));
-      const webLen = Math.sqrt((halfSpan_mm / 2) * (halfSpan_mm / 2) + (webH) * (webH));
-      const webAng = Math.atan2(webH, (halfSpan_mm / 2));
+      const bottomY_mm = memberD_mm; // top of tie beam (tie bottom at 0, height memberD_mm)
+      const postH_mm = Math.max(1, Math.floor(rise_mm - bottomY_mm));
 
-      const cx = halfSpan_mm / 2;
-      const cy = webH / 2 + memberD_mm / 2;
-
-      const w = mkBoxCenteredLocal(
-        `roof-truss-${idx}-web-1`,
-        webLen,
-        memberD_mm,
-        memberW_mm,
-        cx,
-        cy,
-        memberW_mm / 2,
-        tr,
-        joistMat,
-        { roof: "apex", part: "truss", member: "web" }
+      const post = BABYLON.MeshBuilder.CreateCylinder(
+        `roof-truss-${idx}-kingpost`,
+        {
+          height: postH_mm / 1000,
+          diameterBottom: memberW_mm / 1000,
+          diameterTop: 0.0005,
+          tessellation: 4
+        },
+        scene
       );
-      w.rotation = new BABYLON.Vector3(0, 0, webAng);
+
+      post.position = new BABYLON.Vector3(
+        halfSpan_mm / 1000,
+        (bottomY_mm + (postH_mm / 2)) / 1000,
+        (memberW_mm / 2) / 1000
+      );
+
+      post.material = joistMat;
+      post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
+      post.parent = tr;
     }
   }
 
