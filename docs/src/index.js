@@ -1498,7 +1498,8 @@ function initApp() {
         if (wallSectionEl && state && state.walls) {
           var h = null;
           try {
-            if (state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
+            if (state.frame && state.frame.depth_mm != null) h = state.frame.depth_mm;
+            else if (state.walls.insulated && state.walls.insulated.section && state.walls.insulated.section.h != null) h = state.walls.insulated.section.h;
             else if (state.walls.basic && state.walls.basic.section && state.walls.basic.section.h != null) h = state.walls.basic.section.h;
           } catch (e) {}
           wallSectionEl.value = (Math.floor(Number(h)) === 75) ? "50x75" : "50x100";
@@ -1720,13 +1721,18 @@ function initApp() {
     function sectionHFromSelectValue(v) {
       return (String(v || "").toLowerCase() === "50x75") ? 75 : 100;
     }
+    function frameGaugeFromSelectValue(v) {
+      var depth = sectionHFromSelectValue(v);
+      return { thickness_mm: 50, depth_mm: depth };
+    }
     if (wallSectionEl) {
       wallSectionEl.addEventListener("change", function () {
-        var h = sectionHFromSelectValue(wallSectionEl.value);
+        var g = frameGaugeFromSelectValue(wallSectionEl.value);
         store.setState({
+          frame: { thickness_mm: g.thickness_mm, depth_mm: g.depth_mm },
           walls: {
-            insulated: { section: { w: 50, h: h } },
-            basic: { section: { w: 50, h: h } }
+            insulated: { section: { w: g.thickness_mm, h: g.depth_mm } },
+            basic: { section: { w: g.thickness_mm, h: g.depth_mm } }
           }
         });
       });
