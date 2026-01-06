@@ -762,17 +762,41 @@ function buildApex(state, ctx) {
   roofRoot.position = new BABYLON.Vector3(0, 0, 0);
   roofRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
 
-  // Truss spacing along B @600 (matches project roof policy)
+  // Truss spacing along B:
+  // - Legacy (default): @600 with last forced to maxP (exact prior behavior)
+  // - New (when state.roof.apex.trussCount >= 2): evenly spaced CENTRES incl. both ends (gable ends included)
+  //   NOTE: buildTruss uses z0_mm as the "left edge" of a truss with depth memberW_mm, so evenly-spaced centres
+  //   correspond to evenly-spaced z0_mm across [0..maxP], where maxP = B_mm - memberW_mm.
   const spacing = 600;
   const trussPos = [];
   const maxP = Math.max(0, B_mm - memberW_mm);
-  let p = 0;
-  while (p <= maxP) { trussPos.push(Math.floor(p)); p += spacing; }
-  if (trussPos.length) {
-    const last = trussPos[trussPos.length - 1];
-    if (Math.abs(last - maxP) > 0) trussPos.push(Math.floor(maxP));
+
+  let desiredCount = null;
+  try {
+    desiredCount = state && state.roof && state.roof.apex && state.roof.apex.trussCount != null
+      ? Math.floor(Number(state.roof.apex.trussCount))
+      : null;
+  } catch (e) { desiredCount = null; }
+
+  if (Number.isFinite(desiredCount) && desiredCount >= 2) {
+    const n = desiredCount;
+    const denom = (n - 1);
+    for (let i = 0; i < n; i++) {
+      let z0 = 0;
+      if (i === 0) z0 = 0;
+      else if (i === (n - 1)) z0 = maxP;
+      else z0 = Math.round((maxP * i) / denom);
+      trussPos.push(Math.max(0, Math.min(maxP, Math.floor(z0))));
+    }
   } else {
-    trussPos.push(0);
+    let p = 0;
+    while (p <= maxP) { trussPos.push(Math.floor(p)); p += spacing; }
+    if (trussPos.length) {
+      const last = trussPos[trussPos.length - 1];
+      if (Math.abs(last - maxP) > 0) trussPos.push(Math.floor(maxP));
+    } else {
+      trussPos.push(0);
+    }
   }
 
   // Geometry helpers for sloped rafters in local X-Y plane (depth extrudes along Z by memberW)
