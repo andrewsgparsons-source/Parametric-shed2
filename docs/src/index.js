@@ -201,6 +201,8 @@ function initApp() {
 
     var vWallsEl = $("vWalls");
     var vRoofEl = $("vRoof");
+    var vRoofStructureEl = $("vRoofStructure");
+    var vRoofOsbEl = $("vRoofOsb");
     var vBaseAllEl = $("vBaseAll");
     var vBaseEl = $("vBase");
     var vFrameEl = $("vFrame");
@@ -1377,6 +1379,10 @@ function initApp() {
         if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
         if (vRoofEl) vRoofEl.checked = getRoofEnabled(state);
 
+        var rp = (state && state.vis && state.vis.roofParts && typeof state.vis.roofParts === "object") ? state.vis.roofParts : null;
+        if (vRoofStructureEl) vRoofStructureEl.checked = rp ? (rp.structure !== false) : true;
+        if (vRoofOsbEl) vRoofOsbEl.checked = rp ? (rp.osb !== false) : true;
+
         var parts = getWallParts(state);
         if (vWallFrontEl) vWallFrontEl.checked = !!parts.front;
         if (vWallBackEl) vWallBackEl.checked = !!parts.back;
@@ -1479,6 +1485,22 @@ function initApp() {
     }
 
     if (vRoofEl) vRoofEl.addEventListener("change", function(e){ store.setState({ vis: { roof: !!e.target.checked } }); console.log("[vis] roof=", !!e.target.checked); });
+
+    if (vRoofStructureEl) vRoofStructureEl.addEventListener("change", function (e) {
+      var s = store.getState();
+      var cur = (s && s.vis && s.vis.roofParts && typeof s.vis.roofParts === "object") ? s.vis.roofParts : null;
+      var next = cur ? Object.assign({}, cur) : {};
+      next.structure = !!(e && e.target && e.target.checked);
+      store.setState({ vis: { roofParts: next } });
+    });
+
+    if (vRoofOsbEl) vRoofOsbEl.addEventListener("change", function (e) {
+      var s = store.getState();
+      var cur = (s && s.vis && s.vis.roofParts && typeof s.vis.roofParts === "object") ? s.vis.roofParts : null;
+      var next = cur ? Object.assign({}, cur) : {};
+      next.osb = !!(e && e.target && e.target.checked);
+      store.setState({ vis: { roofParts: next } });
+    });
 
     if (vBaseAllEl) vBaseAllEl.addEventListener("change", function(e){ var on = !!(e && e.target && e.target.checked); store.setState({ vis: { baseAll: on } }); console.log("[vis] base=", on ? "ON" : "OFF"); });
 
