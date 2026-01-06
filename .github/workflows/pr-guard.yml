@@ -1,0 +1,35 @@
+name: PR Guard (no-drift)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: List changed files (PR)
+        run: |
+          git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > changed_files.txt
+          echo "Changed files:"
+          cat changed_files.txt
+
+      - name: Enforce one-file-only
+        run: |
+          COUNT=$(wc -l < changed_files.txt | tr -d ' ')
+          if [ "$COUNT" -ne 1 ]; then
+            echo "❌ PR must change exactly 1 file. Found: $COUNT"
+            exit 1
+          fi
+
+      - name: Enforce allowed paths
+        run: |
+          FILE=$(cat changed_files.txt)
+          case "$FILE" in
+            docs/src/*) echo "✅ Allowed: $FILE" ;;
+            *) echo "❌ Not allowed path: $FILE (only docs/src/* allowed)"; exit 1 ;;
+          esac
