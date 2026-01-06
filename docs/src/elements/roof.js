@@ -872,7 +872,7 @@ function buildApex(state, ctx) {
 
       const post = BABYLON.MeshBuilder.CreateBox(
         `roof-truss-${idx}-kingpost`,
-        { width: memberW_mm / 1000, height: bodyH_mm / 1000, depth: memberW_mm / 1000 },
+        { width: memberW_mm / 1000, height: bodyH_mm / 1000, depth: memberD_mm / 1000 },
         scene
       );
 
