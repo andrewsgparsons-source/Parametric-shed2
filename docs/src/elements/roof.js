@@ -862,7 +862,7 @@ function buildApex(state, ctx) {
       r.rotation = new BABYLON.Vector3(0, 0, -slopeAng);
     }
 
-    // King post: single vertical strut from tie midpoint to apex; only the very top is tapered.
+    // King post: single vertical strut from tie midpoint to apex; top cap has two planar faces matching slopeAng.
     {
       const bottomY_mm = memberD_mm; // top of tie beam (tie bottom at 0, height memberD_mm)
       const postH_mm = Math.max(1, Math.floor(rise_mm - bottomY_mm));
@@ -886,20 +886,28 @@ function buildApex(state, ctx) {
       post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
       post.parent = tr;
 
-      const cap = BABYLON.MeshBuilder.CreateCylinder(
+      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng))));
+      const cap = BABYLON.MeshBuilder.ExtrudeShape(
         `roof-truss-${idx}-kingpost-cap`,
         {
-          height: capH_mm / 1000,
-          diameterBottom: memberW_mm / 1000,
-          diameterTop: 0.0005,
-          tessellation: 4
+          shape: [
+            new BABYLON.Vector3(-halfRun_mm / 1000, 0, 0),
+            new BABYLON.Vector3(0, capH_mm / 1000, 0),
+            new BABYLON.Vector3(halfRun_mm / 1000, 0, 0),
+            new BABYLON.Vector3(-halfRun_mm / 1000, 0, 0)
+          ],
+          path: [
+            new BABYLON.Vector3(0, 0, -memberW_mm / 2000),
+            new BABYLON.Vector3(0, 0, memberW_mm / 2000)
+          ],
+          cap: BABYLON.Mesh.CAP_ALL
         },
         scene
       );
 
       cap.position = new BABYLON.Vector3(
         halfSpan_mm / 1000,
-        (bottomY_mm + bodyH_mm + (capH_mm / 2)) / 1000,
+        (bottomY_mm + bodyH_mm) / 1000,
         (memberW_mm / 2) / 1000
       );
 
