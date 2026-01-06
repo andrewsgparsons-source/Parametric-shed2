@@ -783,13 +783,22 @@ function buildApex(state, ctx) {
   roofRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
 
   // Truss spacing along B:
-  // - Legacy (default): @600 with last forced to maxP (exact prior behavior)
-  // - New (when state.roof.apex.trussCount >= 2): evenly spaced CENTRES incl. both ends (gable ends included)
-  //   NOTE: buildTruss uses z0_mm as the "left edge" of a truss with depth memberW_mm, so evenly-spaced centres
-  //   correspond to evenly-spaced z0_mm across [0..maxP], where maxP = B_mm - memberW_mm.
+  // RULE: gable-end trusses must align flush with WALL frame ends (no overhang from trusses).
+  // Overhang at gable ends is expressed by purlins/OSB spanning the full roof plan.
+  //
+  // Trusses are placed along the ridge axis (local Z), but their usable range is the FRAME ridge length,
+  // offset inward from the roof plan by the overhang on the ridge-min side.
+  //
+  // - Legacy (default): @600 with last forced to maxP (prior behavior, but on FRAME ridge span)
+  // - New (when state.roof.apex.trussCount >= 2): evenly spaced across FRAME ridge span incl. both ends
   const spacing = 600;
   const trussPos = [];
-  const maxP = Math.max(0, B_mm - memberW_mm);
+
+  const ridgeFrameLen_mm = ridgeAlongWorldX ? frameW_mm : frameD_mm;
+  const ridgeStart_mm = ridgeAlongWorldX ? l_mm : f_mm;
+
+  const minP = Math.max(0, Math.floor(ridgeStart_mm));
+  const maxP = Math.max(minP, Math.floor(ridgeStart_mm + ridgeFrameLen_mm - memberW_mm));
 
   let desiredCount = null;
   try {
@@ -801,21 +810,24 @@ function buildApex(state, ctx) {
   if (Number.isFinite(desiredCount) && desiredCount >= 2) {
     const n = desiredCount;
     const denom = (n - 1);
+    const span = Math.max(0, Math.floor(maxP - minP));
+
     for (let i = 0; i < n; i++) {
-      let z0 = 0;
-      if (i === 0) z0 = 0;
+      let z0 = minP;
+      if (i === 0) z0 = minP;
       else if (i === (n - 1)) z0 = maxP;
-      else z0 = Math.round((maxP * i) / denom);
-      trussPos.push(Math.max(0, Math.min(maxP, Math.floor(z0))));
+      else z0 = Math.round(minP + (span * i) / denom);
+
+      trussPos.push(Math.max(minP, Math.min(maxP, Math.floor(z0))));
     }
   } else {
-    let p = 0;
+    let p = minP;
     while (p <= maxP) { trussPos.push(Math.floor(p)); p += spacing; }
     if (trussPos.length) {
       const last = trussPos[trussPos.length - 1];
       if (Math.abs(last - maxP) > 0) trussPos.push(Math.floor(maxP));
     } else {
-      trussPos.push(0);
+      trussPos.push(minP);
     }
   }
 
@@ -1191,7 +1203,7 @@ function updateBOM_Apex(state, tbody) {
 
   // Truss quantity must match 3D logic:
   // - If trussCount >= 2 => use that exact count
-  // - Else => fallback to legacy @600 spacing logic
+  // - Else => fallback to legacy @600 spacing logic (but on FRAME ridge span, not roof overhang span)
   let desiredCount = null;
   try {
     desiredCount = state && state.roof && state.roof.apex && state.roof.apex.trussCount != null
@@ -1204,17 +1216,34 @@ function updateBOM_Apex(state, tbody) {
   if (Number.isFinite(desiredCount) && desiredCount >= 2) {
     trussQty = desiredCount;
   } else {
+    const frameW_mm = Math.max(1, Math.floor(Number(dims?.frame?.w_mm ?? roofW_mm)));
+    const frameD_mm = Math.max(1, Math.floor(Number(dims?.frame?.d_mm ?? roofD_mm)));
+
+    const ovh = (dims && dims.overhang) ? dims.overhang : { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
+    const l_mm = Math.max(0, Math.floor(Number(ovh.l_mm || 0)));
+    const r_mm = Math.max(0, Math.floor(Number(ovh.r_mm || 0)));
+    const f_mm = Math.max(0, Math.floor(Number(ovh.f_mm || 0)));
+    const b_mm = Math.max(0, Math.floor(Number(ovh.b_mm || 0)));
+
+    const ridgeAlongWorldX = roofW_mm >= roofD_mm;
+    const ridgeFrameLen_mm = ridgeAlongWorldX ? frameW_mm : frameD_mm;
+    const ridgeStart_mm = ridgeAlongWorldX ? l_mm : f_mm;
+
     const spacing = 600;
     const pos = [];
-    const maxP = Math.max(0, B_mm - memberW_mm);
-    let p = 0;
+
+    const minP = Math.max(0, Math.floor(ridgeStart_mm));
+    const maxP = Math.max(minP, Math.floor(ridgeStart_mm + ridgeFrameLen_mm - memberW_mm));
+
+    let p = minP;
     while (p <= maxP) { pos.push(Math.floor(p)); p += spacing; }
     if (pos.length) {
       const last = pos[pos.length - 1];
       if (Math.abs(last - maxP) > 0) pos.push(Math.floor(maxP));
     } else {
-      pos.push(0);
+      pos.push(minP);
     }
+
     trussQty = pos.length;
   }
 
