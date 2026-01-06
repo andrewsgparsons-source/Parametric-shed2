@@ -535,8 +535,9 @@ function computeRoofData_Pent(state) {
 
   const spacing = 600;
 
-  const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w)));
-  const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d)));
+  const g = getRoofFrameGauge(state);
+  const baseW = Math.max(1, Math.floor(Number(g.thickness_mm)));
+  const baseD = Math.max(1, Math.floor(Number(g.depth_mm)));
 
   const rafterW_mm = baseD;
   const rafterD_mm = baseW;
@@ -723,9 +724,10 @@ function buildApex(state, ctx) {
   // Rise: deterministic from span (no new UI constants). Only affects apex style.
   const rise_mm = clamp(Math.floor(A_mm * 0.20), 200, 900);
 
-  // Timber section (matches existing roof timber orientation policy: uses CONFIG.timber.w / CONFIG.timber.d swapped)
-  const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w)));
-  const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d)));
+  // Timber section (matches existing roof timber orientation policy: uses thickness/depth swapped)
+  const g = getRoofFrameGauge(state);
+  const baseW = Math.max(1, Math.floor(Number(g.thickness_mm)));
+  const baseD = Math.max(1, Math.floor(Number(g.depth_mm)));
   const memberW_mm = baseD; // width in plan
   const memberD_mm = baseW; // vertical depth
 
@@ -1177,8 +1179,9 @@ function updateBOM_Apex(state, tbody) {
   const A_mm = Math.min(roofW_mm, roofD_mm);
   const B_mm = Math.max(roofW_mm, roofD_mm);
 
-  const baseW = Math.max(1, Math.floor(Number(CONFIG.timber.w)));
-  const baseD = Math.max(1, Math.floor(Number(CONFIG.timber.d)));
+  const g = getRoofFrameGauge(state);
+  const baseW = Math.max(1, Math.floor(Number(g.thickness_mm)));
+  const baseD = Math.max(1, Math.floor(Number(g.depth_mm)));
   const memberW_mm = baseD;
   const memberD_mm = baseW;
 
@@ -1308,6 +1311,27 @@ function updateBOM_Apex(state, tbody) {
 }
 
 /* ------------------------------ Shared helpers ------------------------------ */
+
+function getRoofFrameGauge(state) {
+  var cfgW = Math.floor(Number(CONFIG && CONFIG.timber ? CONFIG.timber.w : 50));
+  var cfgD = Math.floor(Number(CONFIG && CONFIG.timber ? CONFIG.timber.d : 100));
+
+  var t = null;
+  var d = null;
+
+  try {
+    t = (state && state.frame && state.frame.thickness_mm != null) ? Math.floor(Number(state.frame.thickness_mm)) : null;
+  } catch (e0) { t = null; }
+
+  try {
+    d = (state && state.frame && state.frame.depth_mm != null) ? Math.floor(Number(state.frame.depth_mm)) : null;
+  } catch (e1) { d = null; }
+
+  var thickness_mm = (Number.isFinite(t) && t > 0) ? t : ((Number.isFinite(cfgW) && cfgW > 0) ? cfgW : 50);
+  var depth_mm = (Number.isFinite(d) && d > 0) ? d : ((Number.isFinite(cfgD) && cfgD > 0) ? cfgD : 100);
+
+  return { thickness_mm: thickness_mm, depth_mm: depth_mm };
+}
 
 function getRoofParts(state) {
   var vis = state && state.vis ? state.vis : null;
