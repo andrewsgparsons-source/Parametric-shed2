@@ -162,9 +162,21 @@ function buildPent(state, ctx) {
   roofRoot.position = new BABYLON.Vector3(0, 0, 0);
   roofRoot.rotationQuaternion = BABYLON.Quaternion.Identity();
 
+  // ---- NEW: slope (hypotenuse) correction so roof reaches high wall (pent only) ----
+  // Keep the pitch angle consistent with current logic (rise/run over the frame span),
+  // but extend the physical sloped span so its horizontal projection still matches plan.
+  const rise_mm = Math.max(0, Math.floor((maxH_mm - minH_mm)));
+  const slopeAlongWorldX = !!data.isWShort;
+  const run_mm = Math.max(1, Math.floor(slopeAlongWorldX ? frameW_mm : frameD_mm));
+  const slopeLen_mm = Math.max(1, Math.round(Math.sqrt(run_mm * run_mm + rise_mm * rise_mm)));
+  const slopeScale = run_mm > 0 ? (slopeLen_mm / run_mm) : 1;
+
+  const A_phys_mm = Math.max(1, Math.round(data.A_mm * slopeScale));
+  // ---- END slope correction inputs ----
+
   const rimThkA_mm = data.rafterW_mm;
   const rimRunB_mm = data.B_mm;
-  const rimBackA0_mm = Math.max(0, data.A_mm - rimThkA_mm);
+  const rimBackA0_mm = Math.max(0, A_phys_mm - rimThkA_mm);
 
   function mapABtoLocalXZ(a0, b0, aLen, bLen, isWShort) {
     if (isWShort) return { x0: a0, z0: b0, lenX: aLen, lenZ: bLen }; // A->X, B->Z
@@ -207,7 +219,7 @@ function buildPent(state, ctx) {
     // Rafters (span A, placed along B @600)
     for (let i = 0; i < data.rafters.length; i++) {
       const r = data.rafters[i];
-      const mapped = mapABtoLocalXZ(0, r.b0_mm, data.rafterLen_mm, data.rafterW_mm, data.isWShort);
+      const mapped = mapABtoLocalXZ(0, r.b0_mm, A_phys_mm, data.rafterW_mm, data.isWShort);
 
       mkBoxBottomLocal(
         `roof-rafter-${i}`,
@@ -229,14 +241,29 @@ function buildPent(state, ctx) {
     const osbBottomY_m_local = data.rafterD_mm / 1000;
     for (let i = 0; i < data.osb.all.length; i++) {
       const p = data.osb.all[i];
+
+      let x0_mm = p.x0_mm;
+      let z0_mm = p.z0_mm;
+      let xLen_mm = p.xLen_mm;
+      let zLen_mm = p.zLen_mm;
+
+      // Scale only along the sloped span axis so plan projection remains unchanged after pitch
+      if (data.isWShort) {
+        x0_mm = Math.round(Number(x0_mm) * slopeScale);
+        xLen_mm = Math.max(1, Math.round(Number(xLen_mm) * slopeScale));
+      } else {
+        z0_mm = Math.round(Number(z0_mm) * slopeScale);
+        zLen_mm = Math.max(1, Math.round(Number(zLen_mm) * slopeScale));
+      }
+
       mkBoxBottomLocal(
         `roof-osb-${i}`,
-        p.xLen_mm,
+        xLen_mm,
         data.osbThickness_mm,
-        p.zLen_mm,
-        p.x0_mm,
+        zLen_mm,
+        x0_mm,
         osbBottomY_m_local,
-        p.z0_mm,
+        z0_mm,
         roofRoot,
         osbMat,
         { roof: "pent", part: "osb", kind: p.kind }
@@ -255,7 +282,6 @@ function buildPent(state, ctx) {
   // - Pent slope follows the shortest plan dimension:
   //   - If roofW <= roofD: slope along WORLD +X (span width)
   //   - If roofW >  roofD: slope along WORLD +Z (span depth)
-  const slopeAlongWorldX = !!data.isWShort;
   const slopeAxisWorld = slopeAlongWorldX ? new BABYLON.Vector3(1, 0, 0) : new BABYLON.Vector3(0, 0, 1);
   const pitchAxisWorld = slopeAlongWorldX ? new BABYLON.Vector3(0, 0, 1) : new BABYLON.Vector3(1, 0, 0);
 
@@ -282,11 +308,16 @@ function buildPent(state, ctx) {
   const roofW_mm = Math.max(1, Math.floor(Number(dims?.roof?.w_mm ?? data.roofW_mm ?? 1)));
   const roofD_mm = Math.max(1, Math.floor(Number(dims?.roof?.d_mm ?? data.roofD_mm ?? 1)));
 
+  let roofW_phys_mm = roofW_mm;
+  let roofD_phys_mm = roofD_mm;
+  if (slopeAlongWorldX) roofW_phys_mm = Math.max(1, Math.round(roofW_mm * slopeScale));
+  else roofD_phys_mm = Math.max(1, Math.round(roofD_mm * slopeScale));
+
   const cornersLocal = [
     new BABYLON.Vector3(0 / 1000, 0, 0 / 1000),
-    new BABYLON.Vector3(roofW_mm / 1000, 0, 0 / 1000),
-    new BABYLON.Vector3(0 / 1000, 0, roofD_mm / 1000),
-    new BABYLON.Vector3(roofW_mm / 1000, 0, roofD_mm / 1000),
+    new BABYLON.Vector3(roofW_phys_mm / 1000, 0, 0 / 1000),
+    new BABYLON.Vector3(0 / 1000, 0, roofD_phys_mm / 1000),
+    new BABYLON.Vector3(roofW_phys_mm / 1000, 0, roofD_phys_mm / 1000),
   ];
 
   function worldOfLocal(pLocal) {
@@ -321,12 +352,12 @@ function buildPent(state, ctx) {
 
   if (slopeAlongWorldX) {
     const midFrameZ_mm = Math.floor(frameD_mm / 2);
-    pLowLocal = new BABYLON.Vector3((l_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
-    pHighLocal = new BABYLON.Vector3((l_mm + frameW_mm) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
+    pLowLocal = new BABYLON.Vector3((Math.round((l_mm) * slopeScale)) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
+    pHighLocal = new BABYLON.Vector3((Math.round((l_mm + frameW_mm) * slopeScale)) / 1000, 0, (f_mm + midFrameZ_mm) / 1000);
   } else {
     const midFrameX_mm = Math.floor(frameW_mm / 2);
-    pLowLocal = new BABYLON.Vector3((l_mm + midFrameX_mm) / 1000, 0, (f_mm) / 1000);
-    pHighLocal = new BABYLON.Vector3((l_mm + midFrameX_mm) / 1000, 0, (f_mm + frameD_mm) / 1000);
+    pLowLocal = new BABYLON.Vector3((l_mm + midFrameX_mm) / 1000, 0, (Math.round((f_mm) * slopeScale)) / 1000);
+    pHighLocal = new BABYLON.Vector3((l_mm + midFrameX_mm) / 1000, 0, (Math.round((f_mm + frameD_mm) * slopeScale)) / 1000);
   }
 
   const worldLow = worldOfLocal(pLowLocal);
@@ -378,6 +409,9 @@ function buildPent(state, ctx) {
         run_m: run_m,
         angle: angle,
         highError_mm: highError_m == null ? null : (highError_m * 1000),
+        run_mm: run_mm,
+        rise_mm: rise_mm,
+        slopeLen_mm: slopeLen_mm
       };
 
       // Visualize analytic bearing samples
