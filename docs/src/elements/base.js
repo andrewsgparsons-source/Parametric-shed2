@@ -13,8 +13,12 @@ export function build3D(state, ctx) {
   meshes.ins = [];
   meshes.deck = [];
 
-  const L = getLayout(state);
-  const yB = 25, yF = 100, yI = 125, yD = 159;
+  const gauge = getFrameGauge(state);
+  const frameT = gauge.thickness_mm;
+  const frameH = gauge.depth_mm;
+
+  const L = getLayout(state, gauge);
+  const yB = 25, yF = 50 + (frameH / 2), yI = 50 + frameH - 25, yD = 50 + frameH + 9;
 
   if (state.vis.base) {
     const mat = new BABYLON.StandardMaterial('m', scene);
@@ -48,15 +52,15 @@ export function build3D(state, ctx) {
   if (state.vis.frame) {
     const mat = new BABYLON.StandardMaterial('m', scene);
     mat.diffuseColor = new BABYLON.Color3(0.5, 0.4, 0.3);
-    [0, L.joistSpan - 50].forEach(o => {
+    [0, L.joistSpan - frameT].forEach(o => {
       const r = BABYLON.MeshBuilder.CreateBox('r', {
-        width: (L.isWShort ? 50 : L.rimLen) * 0.001,
-        height: 100 * 0.001,
-        depth: (L.isWShort ? L.rimLen : 50) * 0.001
+        width: (L.isWShort ? frameT : L.rimLen) * 0.001,
+        height: frameH * 0.001,
+        depth: (L.isWShort ? L.rimLen : frameT) * 0.001
       }, scene);
       r.position = L.isWShort
-        ? new BABYLON.Vector3((o + 25) * 0.001, yF * 0.001, (L.rimLen / 2) * 0.001)
-        : new BABYLON.Vector3((L.rimLen / 2) * 0.001, yF * 0.001, (o + 25) * 0.001);
+        ? new BABYLON.Vector3((o + (frameT / 2)) * 0.001, yF * 0.001, (L.rimLen / 2) * 0.001)
+        : new BABYLON.Vector3((L.rimLen / 2) * 0.001, yF * 0.001, (o + (frameT / 2)) * 0.001);
       r.material = mat;
       r.parent = shedRoot;
       r.metadata = { dynamic: true };
@@ -65,11 +69,11 @@ export function build3D(state, ctx) {
 
     L.positions.forEach(p => {
       const j = BABYLON.MeshBuilder.CreateBox('j', {
-        width: (L.isWShort ? L.innerJoistLen : 50) * 0.001,
-        height: 100 * 0.001,
-        depth: (L.isWShort ? 50 : L.innerJoistLen) * 0.001
+        width: (L.isWShort ? L.innerJoistLen : frameT) * 0.001,
+        height: frameH * 0.001,
+        depth: (L.isWShort ? frameT : L.innerJoistLen) * 0.001
       }, scene);
-      const mid = (L.innerJoistLen / 2 + 50) * 0.001;
+      const mid = (L.innerJoistLen / 2 + frameT) * 0.001;
       j.position = L.isWShort
         ? new BABYLON.Vector3(mid, yF * 0.001, p * 0.001)
         : new BABYLON.Vector3(p * 0.001, yF * 0.001, mid);
@@ -84,8 +88,8 @@ export function build3D(state, ctx) {
     const mat = new BABYLON.StandardMaterial('m', scene);
     mat.diffuseColor = new BABYLON.Color3(0.9, 0.85, 0.7);
     for (let i = 0; i < L.positions.length - 1; i++) {
-      const start = L.positions[i] + 25;
-      const currentBayW = (L.positions[i + 1] - 25) - start;
+      const start = L.positions[i] + (frameT / 2);
+      const currentBayW = (L.positions[i + 1] - (frameT / 2)) - start;
       for (let z = 0; z < L.innerJoistLen; z += 2400) {
         const zL = Math.min(2400, L.innerJoistLen - z);
         const ins = BABYLON.MeshBuilder.CreateBox('i', {
@@ -94,7 +98,7 @@ export function build3D(state, ctx) {
           depth: (L.isWShort ? currentBayW : zL) * 0.001
         }, scene);
         const mB = (start + currentBayW / 2) * 0.001;
-        const mS = (z + zL / 2 + 50) * 0.001;
+        const mS = (z + zL / 2 + frameT) * 0.001;
         ins.position = L.isWShort
           ? new BABYLON.Vector3(mS, yI * 0.001, mB)
           : new BABYLON.Vector3(mB, yI * 0.001, mS);
@@ -148,7 +152,8 @@ export function build3D(state, ctx) {
 
 export function updateBOM(state) {
   const unitsMode = (document.getElementById('unitsSelect')?.value) || 'mm';
-  const L = getLayout(state);
+  const gauge = getFrameGauge(state);
+  const L = getLayout(state, gauge);
 
   function mmToInFracStr(mm) {
     const inches = mm / 25.4;
@@ -180,12 +185,14 @@ export function updateBOM(state) {
   let timberHtml = '';
   let timberCount = 0;
 
-  timberHtml += `<tr><td>Rim Joists</td><td>2</td><td class="highlight">${fmtLenOnly(L.rimLen)}</td><td>Section 50×100</td></tr>`;
-  pushCsv('Timber Frame', 'Rim Joist', 2, L.rimLen, '', '50×100 section');
+  const secTxt = `Section ${gauge.thickness_mm}×${gauge.depth_mm}`;
+
+  timberHtml += `<tr><td>Rim Joists</td><td>2</td><td class="highlight">${fmtLenOnly(L.rimLen)}</td><td>${secTxt}</td></tr>`;
+  pushCsv('Timber Frame', 'Rim Joist', 2, L.rimLen, '', `${gauge.thickness_mm}×${gauge.depth_mm} section`);
   timberCount += 2;
 
-  timberHtml += `<tr><td>Inner Joists</td><td>${L.positions.length}</td><td class="highlight">${fmtLenOnly(L.innerJoistLen)}</td><td>Section 50×100</td></tr>`;
-  pushCsv('Timber Frame', 'Inner Joist', L.positions.length, L.innerJoistLen, '', '50×100 section');
+  timberHtml += `<tr><td>Inner Joists</td><td>${L.positions.length}</td><td class="highlight">${fmtLenOnly(L.innerJoistLen)}</td><td>${secTxt}</td></tr>`;
+  pushCsv('Timber Frame', 'Inner Joist', L.positions.length, L.innerJoistLen, '', `${gauge.thickness_mm}×${gauge.depth_mm} section`);
   timberCount += L.positions.length;
 
   document.getElementById('timberTableBody').innerHTML = timberHtml;
@@ -405,18 +412,46 @@ function mapABtoXZ(p, isWShort) {
   return { x0: p.b0, z0: p.a0, wX: p.bLen, dZ: p.aLen };
 }
 
-function getLayout(state) {
+function getFrameGauge(state) {
+  let thk = 50;
+  let dep = 100;
+
+  try {
+    if (state && state.frameGauge && state.frameGauge.thickness_mm != null) thk = Math.floor(Number(state.frameGauge.thickness_mm));
+  } catch (e) {}
+  if (!(Number.isFinite(thk) && thk > 0)) thk = 50;
+
+  try {
+    if (state && state.frameGauge && state.frameGauge.depth_mm != null) dep = Math.floor(Number(state.frameGauge.depth_mm));
+  } catch (e) {}
+  if (!(dep === 75 || dep === 100)) {
+    try {
+      const v = (state && state.walls && state.walls.variant) ? String(state.walls.variant) : "insulated";
+      const h = state && state.walls && state.walls[v] && state.walls[v].section ? state.walls[v].section.h : null;
+      const hh = Math.floor(Number(h));
+      if (hh === 75 || hh === 100) dep = hh;
+    } catch (e2) {}
+  }
+  if (!(dep === 75 || dep === 100)) dep = 100;
+
+  return { thickness_mm: thk, depth_mm: dep };
+}
+
+function getLayout(state, gauge) {
   const isWShort = state.w < state.d;
   const rimLen = isWShort ? state.d : state.w;
   const joistSpan = isWShort ? state.w : state.d;
-  const innerJoistLen = joistSpan - (CONFIG.timber.w * 2);
-  const positions = [CONFIG.timber.w / 2];
+
+  const thk = Math.max(1, Math.floor(Number(gauge && gauge.thickness_mm != null ? gauge.thickness_mm : CONFIG.timber.w)));
+
+  const innerJoistLen = joistSpan - (thk * 2);
+  const positions = [thk / 2];
   let cursor = CONFIG.spacing;
-  while (cursor < rimLen - CONFIG.timber.w) {
+  while (cursor < rimLen - thk) {
     positions.push(cursor);
     cursor += CONFIG.spacing;
   }
-  positions.push(rimLen - CONFIG.timber.w / 2);
+  positions.push(rimLen - thk / 2);
   return { isWShort, rimLen, joistSpan, innerJoistLen, positions };
 }
 
