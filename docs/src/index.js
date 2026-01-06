@@ -227,9 +227,9 @@ function initApp() {
     // Apex roof absolute heights (mm). IDs may vary across UI versions; accept common fallbacks.
     // These map to state.roof.apex.heightToEaves_mm / heightToCrest_mm (see wiring below).
     var roofApexEavesHeightEl =
-      $("roofApexEavesHeight") || $("roofHeightToEaves") || $("roofEavesHeight") || $("apexEavesHeight");
+      $("roofApexEavesHeight") || $("roofHeightToEaves") || $("roofEavesHeight") || $("apexEavesHeight") || $("apexHeightToEaves") || $("roofApexHeightToEaves");
     var roofApexCrestHeightEl =
-      $("roofApexCrestHeight") || $("roofHeightToCrest") || $("roofCrestHeight") || $("apexCrestHeight");
+      $("roofApexCrestHeight") || $("roofHeightToCrest") || $("roofCrestHeight") || $("apexCrestHeight") || $("apexHeightToCrest") || $("roofApexHeightToCrest");
 
     // Apex roof: truss count + spacing readout (mm only)
     var roofApexTrussCountEl = $("roofApexTrussCount");
@@ -1711,13 +1711,9 @@ function initApp() {
       commitPentHeightsFromInputs();
     });
 
-    if (roofApexEavesHeightEl) roofApexEavesHeightEl.addEventListener("input", function () {
-      // If user raises eaves above crest, crest will be clamped up to eaves in commitApexHeightsFromInputs().
-      commitApexHeightsFromInputs();
-    });
-    if (roofApexCrestHeightEl) roofApexCrestHeightEl.addEventListener("input", function () {
-      commitApexHeightsFromInputs();
-    });
+    // Commit-only (blur/Enter) so changes deterministically trigger state->rebuild in the same pathway as other controls.
+    if (roofApexEavesHeightEl) wireCommitOnly(roofApexEavesHeightEl, commitApexHeightsFromInputs);
+    if (roofApexCrestHeightEl) wireCommitOnly(roofApexCrestHeightEl, commitApexHeightsFromInputs);
 
     // Apex trusses (incl. gable ends): user-selected count
     if (roofApexTrussCountEl) {
