@@ -32,7 +32,26 @@
 export function build3D(state, ctx) {
   const { scene, materials } = ctx;
   const variant = state.walls?.variant || "insulated";
-  const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
+
+  // Wall height is normally driven by state.walls.height_mm.
+  // APEX ONLY: "Height to Eaves" is a ground-referenced target for the roof eaves UNDERSIDE at the wall line.
+  // To make that control drive the building, we implicitly drive the wall frame height here.
+  // Base-aware: if the building has a raised base/plinth, we subtract that rise so the final eaves underside
+  // remains at the requested ground-referenced height.
+  //
+  // NOTE: deterministic correction (shared with roof logic):
+  // - If crest < eaves, crest is clamped up to eaves (no inverted roof).
+  let height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
+  if (state && state.roof && String(state.roof.style || "") === "apex") {
+    const baseRise_mm = resolveBaseRiseMm(state);
+    const apexH = resolveApexHeightsMm(state);
+    if (apexH && Number.isFinite(apexH.eaves_mm)) {
+      // Wall frame height is measured from the local "ground" used by walls (world Y=0).
+      // We clamp to a sane minimum so plates can exist.
+      const minWallH_mm = Math.max(100, 2 * 50 + 1); // 2 plates (approx) + 1mm
+      height = Math.max(minWallH_mm, Math.floor(apexH.eaves_mm - baseRise_mm));
+    }
+  }
 
   scene.meshes
     .filter((m) => m.metadata && m.metadata.dynamic === true && m.name.startsWith("wall-"))
@@ -1744,7 +1763,18 @@ export function updateBOM(state) {
   if (!isPent) {
     const sections = [];
     const variant = state.walls?.variant || "insulated";
-    const height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
+
+    // Keep BOM consistent with build3D():
+    // APEX ONLY: "Height to Eaves" implicitly drives the wall frame height (base-aware).
+    let height = Math.max(100, Math.floor(state.walls?.height_mm || 2400));
+    if (state && state.roof && String(state.roof.style || "") === "apex") {
+      const baseRise_mm = resolveBaseRiseMm(state);
+      const apexH = resolveApexHeightsMm(state);
+      if (apexH && Number.isFinite(apexH.eaves_mm)) {
+        const minWallH_mm = Math.max(100, 2 * 50 + 1);
+        height = Math.max(minWallH_mm, Math.floor(apexH.eaves_mm - baseRise_mm));
+      }
+    }
 
     const prof = resolveProfile(state, variant);
 
@@ -2057,6 +2087,69 @@ export function updateBOM(state) {
   }
 
   return { sections };
+}
+
+function resolveBaseRiseMm(state) {
+  // Base/plinth rise above world ground (Y=0), in mm.
+  // We intentionally support multiple legacy key shapes; first finite wins.
+  // If no base exists, returns 0.
+  const base = state && state.base ? state.base : null;
+
+  const candidates = [
+    base && base.height_mm,
+    base && base.raise_mm,
+    base && base.plinthHeight_mm,
+    base && base.plinth_mm,
+    state && state.baseHeight_mm,
+    state && state.plinthHeight_mm,
+    state && state.platformHeight_mm,
+  ];
+
+  for (let i = 0; i < candidates.length; i++) {
+    const n = Number(candidates[i]);
+    if (Number.isFinite(n)) return Math.max(0, Math.floor(n));
+  }
+  return 0;
+}
+
+function resolveApexHeightsMm(state) {
+  // APEX roof height controls are ground-referenced absolute heights in mm:
+  // - eaves_mm: ground -> underside of eaves at wall line
+  // - crest_mm: ground -> highest roof point (ridge/crest)
+  //
+  // Deterministic correction:
+  // - If crest < eaves, crest is clamped UP to eaves (prevents inverted roof).
+  const apex = state && state.roof && state.roof.apex ? state.roof.apex : null;
+
+  function pickMm() {
+    for (let i = 0; i < arguments.length; i++) {
+      const n = Number(arguments[i]);
+      if (Number.isFinite(n)) return Math.floor(n);
+    }
+    return null;
+  }
+
+  // Support a few likely legacy key names without renaming state keys.
+  const e = pickMm(
+    apex && apex.eavesHeight_mm,
+    apex && apex.heightToEaves_mm,
+    apex && apex.eaves_mm,
+    apex && apex.heightEaves_mm
+  );
+
+  const c = pickMm(
+    apex && apex.crestHeight_mm,
+    apex && apex.heightToCrest_mm,
+    apex && apex.crest_mm,
+    apex && apex.heightCrest_mm
+  );
+
+  let eaves_mm = (e == null) ? null : Math.max(0, e);
+  let crest_mm = (c == null) ? null : Math.max(0, c);
+
+  if (eaves_mm != null && crest_mm != null && crest_mm < eaves_mm) crest_mm = eaves_mm;
+
+  return { eaves_mm, crest_mm };
 }
 
 function clamp(n, a, b) {
