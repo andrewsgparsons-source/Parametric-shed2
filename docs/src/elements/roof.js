@@ -862,15 +862,34 @@ function buildApex(state, ctx) {
       r.rotation = new BABYLON.Vector3(0, 0, -slopeAng);
     }
 
-    // King post: single vertical strut from tie midpoint to apex, tapered to a point.
+    // King post: single vertical strut from tie midpoint to apex; only the very top is tapered.
     {
       const bottomY_mm = memberD_mm; // top of tie beam (tie bottom at 0, height memberD_mm)
       const postH_mm = Math.max(1, Math.floor(rise_mm - bottomY_mm));
 
-      const post = BABYLON.MeshBuilder.CreateCylinder(
+      const capH_mm = Math.max(20, Math.min(Math.floor(postH_mm * 0.35), Math.floor(memberW_mm * 0.9)));
+      const bodyH_mm = Math.max(1, postH_mm - capH_mm);
+
+      const post = BABYLON.MeshBuilder.CreateBox(
         `roof-truss-${idx}-kingpost`,
+        { width: memberW_mm / 1000, height: bodyH_mm / 1000, depth: memberW_mm / 1000 },
+        scene
+      );
+
+      post.position = new BABYLON.Vector3(
+        halfSpan_mm / 1000,
+        (bottomY_mm + (bodyH_mm / 2)) / 1000,
+        (memberW_mm / 2) / 1000
+      );
+
+      post.material = joistMat;
+      post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
+      post.parent = tr;
+
+      const cap = BABYLON.MeshBuilder.CreateCylinder(
+        `roof-truss-${idx}-kingpost-cap`,
         {
-          height: postH_mm / 1000,
+          height: capH_mm / 1000,
           diameterBottom: memberW_mm / 1000,
           diameterTop: 0.0005,
           tessellation: 4
@@ -878,15 +897,15 @@ function buildApex(state, ctx) {
         scene
       );
 
-      post.position = new BABYLON.Vector3(
+      cap.position = new BABYLON.Vector3(
         halfSpan_mm / 1000,
-        (bottomY_mm + (postH_mm / 2)) / 1000,
+        (bottomY_mm + bodyH_mm + (capH_mm / 2)) / 1000,
         (memberW_mm / 2) / 1000
       );
 
-      post.material = joistMat;
-      post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
-      post.parent = tr;
+      cap.material = joistMat;
+      cap.metadata = post.metadata;
+      cap.parent = tr;
     }
   }
 
