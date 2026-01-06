@@ -1564,12 +1564,19 @@ function resolveProfile(state, variant) {
       ? { studW: 50, studH: 100, spacing: 400 }
       : { studW: 50, studH: 75, spacing: null };
 
+  const fg = state?.frameGauge;
+  const fgW = Math.floor(Number(fg?.thickness_mm));
+  const fgH = Math.floor(Number(fg?.depth_mm));
+
   const cfg = state?.walls?.[variant];
   const w = Math.floor(Number(cfg?.section?.w));
   const h = Math.floor(Number(cfg?.section?.h));
 
-  const studW = Number.isFinite(w) && w > 0 ? w : defaults.studW;
-  const studH = Number.isFinite(h) && h > 0 ? h : defaults.studH;
+  let studW = Number.isFinite(w) && w > 0 ? w : defaults.studW;
+  let studH = Number.isFinite(h) && h > 0 ? h : defaults.studH;
+
+  if (Number.isFinite(fgW) && fgW > 0) studW = fgW;
+  if (Number.isFinite(fgH) && fgH > 0) studH = fgH;
 
   return { studW, studH, spacing: defaults.spacing };
 }
