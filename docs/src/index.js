@@ -208,6 +208,7 @@ function initApp() {
     var vFrameEl = $("vFrame");
     var vInsEl = $("vIns");
     var vDeckEl = $("vDeck");
+    var vCladdingEl = $("vCladding");
 
     var vWallFrontEl = $("vWallFront");
     var vWallBackEl = $("vWallBack");
@@ -366,6 +367,15 @@ function initApp() {
       }
     } catch (eInitApex) {}
 
+    // Ensure cladding toggle has a deterministic default (matches current checkbox if state missing).
+    try {
+      var sInitClad = store.getState();
+      var hasClad = !!(sInitClad && sInitClad.vis && typeof sInitClad.vis.cladding === "boolean");
+      if (!hasClad && vCladdingEl) {
+        store.setState({ vis: { cladding: !!vCladdingEl.checked } });
+      }
+    } catch (eInitClad) {}
+
     function getWallsEnabled(state) {
       var vis = state && state.vis ? state.vis : null;
       if (vis && typeof vis.walls === "boolean") return vis.walls;
@@ -375,6 +385,25 @@ function initApp() {
 
     function getRoofEnabled(state) { return (state && state.vis && typeof state.vis.roof === "boolean") ? state.vis.roof : true; }
     function getBaseEnabled(state) { return (state && state.vis && typeof state.vis.baseAll === "boolean") ? state.vis.baseAll : true; }
+    function getCladdingEnabled(state) { return (state && state.vis && typeof state.vis.cladding === "boolean") ? state.vis.cladding : true; }
+
+    function applyCladdingVisibility(scene, on) {
+      if (!scene || !scene.meshes) return;
+
+      var visible = (on !== false);
+
+      for (var i = 0; i < scene.meshes.length; i++) {
+        var m = scene.meshes[i];
+        if (!m) continue;
+
+        var nm = String(m.name || "");
+        var isClad = (nm.indexOf("clad-") === 0) || (m.metadata && m.metadata.cladding === true);
+        if (!isClad) continue;
+
+        try { m.isVisible = visible; } catch (e0) {}
+        try { if (typeof m.setEnabled === "function") m.setEnabled(visible); } catch (e1) {}
+      }
+    }
 
     function getWallParts(state) {
       var vis = state && state.vis ? state.vis : null;
@@ -809,6 +838,14 @@ function initApp() {
         }
 
         if (Base && typeof Base.updateBOM === "function") Base.updateBOM(baseState);
+
+        try {
+          var _cladOn = getCladdingEnabled(state);
+          applyCladdingVisibility(ctx.scene, _cladOn);
+          requestAnimationFrame(function () {
+            try { applyCladdingVisibility(ctx.scene, _cladOn); } catch (e0) {}
+          });
+        } catch (e1) {}
       } catch (e) {
         window.__dbg.lastError = "render() failed: " + String(e && e.message ? e.message : e);
       }
@@ -1474,6 +1511,7 @@ function initApp() {
 
         if (vWallsEl) vWallsEl.checked = getWallsEnabled(state);
         if (vRoofEl) vRoofEl.checked = getRoofEnabled(state);
+        if (vCladdingEl) vCladdingEl.checked = getCladdingEnabled(state);
 
         var rp = (state && state.vis && state.vis.roofParts && typeof state.vis.roofParts === "object") ? state.vis.roofParts : null;
         if (vRoofStructureEl) vRoofStructureEl.checked = rp ? (rp.structure !== false) : true;
@@ -1597,6 +1635,13 @@ function initApp() {
     }
 
     if (vRoofEl) vRoofEl.addEventListener("change", function(e){ store.setState({ vis: { roof: !!e.target.checked } }); console.log("[vis] roof=", !!e.target.checked); });
+
+    if (vCladdingEl) vCladdingEl.addEventListener("change", function (e) {
+      var on = !!(e && e.target && e.target.checked);
+      try { applyCladdingVisibility(window.__dbg && window.__dbg.scene ? window.__dbg.scene : null, on); } catch (e0) {}
+      store.setState({ vis: { cladding: on } });
+      console.log("[vis] cladding=", on ? "ON" : "OFF");
+    });
 
     if (vRoofStructureEl) vRoofStructureEl.addEventListener("change", function (e) {
       var s = store.getState();
@@ -1860,4 +1905,4 @@ if (document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", initApp, { once: true });
 } else {
   initApp();
-}
+} Please wait for snippets
