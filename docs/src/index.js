@@ -1,7 +1,4 @@
 // FILE: docs/src/index.js
-// Orchestration only.
-// Adds stud/plate size selector (#wallSection) that updates state.walls.{insulated,basic}.section to 50×75 or 50×100.
-// Keeps all other behavior unchanged.
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;
