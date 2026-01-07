@@ -352,7 +352,8 @@ export function build3D(state, ctx) {
     const ph = Number(panelHeight);
     const panelHeightMm = Number.isFinite(ph) ? ph : height;
 
-    let courses = Math.max(0, Math.floor(panelHeightMm / CLAD_H));
+    // FIX: Use Math.ceil to ensure we have enough courses to cover the full height
+    let courses = Math.max(1, Math.ceil(panelHeightMm / CLAD_H));
     if (__DIAG_ONE_FRONT_ONE_BOARD) courses = 1;
 
     if (courses < 1) return { created: 0, anchor: null, reason: "courses<1" };
