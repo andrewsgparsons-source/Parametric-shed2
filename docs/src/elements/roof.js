@@ -15,6 +15,19 @@ export function build3D(state, ctx) {
   const { scene, materials } = ctx || {};
   if (!scene) return;
 
+  // ---- Remove any prior APEX cladding-trim hooks/cutters (order-independent rebuild safety) ----
+  try {
+    if (scene._apexCladdingTrimObserver) {
+      scene.onNewMeshAddedObservable.remove(scene._apexCladdingTrimObserver);
+      scene._apexCladdingTrimObserver = null;
+    }
+    if (scene._apexCladdingTrimCutter && !scene._apexCladdingTrimCutter.isDisposed()) {
+      scene._apexCladdingTrimCutter.dispose(false, true);
+    }
+    scene._apexCladdingTrimCutter = null;
+    scene._apexRoofUnderside = null;
+  } catch (e) {}
+
   // ---- HARD DISPOSAL (meshes + transform nodes), children before parents ----
   const roofMeshes = [];
   const roofNodes = new Set();
@@ -1013,7 +1026,7 @@ function buildApex(state, ctx) {
       post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
       post.parent = tr;
 
-      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng))));
+      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng)))));
       const cap = BABYLON.MeshBuilder.ExtrudeShape(
         `roof-truss-${idx}-kingpost-cap`,
         {
@@ -1296,6 +1309,17 @@ function buildApex(state, ctx) {
       };
     }
   } catch (e) {}
+
+  // ---- APEX ONLY: deterministically trim wall cladding to roof UNDERSIDE (no roof geometry edits) ----
+  // Uses analytic underside planes (function of X only) + CSG subtract (no rendering hacks).
+  try {
+    installApexCladdingTrim(scene, roofRoot, {
+      A_mm: A_mm,
+      B_mm: B_mm,
+      rise_mm: rise_mm,
+      memberD_mm: memberD_mm
+    });
+  } catch (e) {}
 }
 
 function updateBOM_Apex(state, tbody) {
@@ -1522,4 +1546,213 @@ function groupByLWN(pieces) {
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
+}
+
+/* ------------------------------ APEX: cladding trim (CSG) ------------------------------ */
+
+function installApexCladdingTrim(scene, roofRoot, params) {
+  if (!scene || !roofRoot || !params) return;
+  if (typeof BABYLON === "undefined" || !BABYLON.CSG) return;
+
+  const A_mm = Math.max(1, Math.floor(Number(params.A_mm || 1)));
+  const B_mm = Math.max(1, Math.floor(Number(params.B_mm || 1)));
+  const rise_mm = Math.max(0, Math.floor(Number(params.rise_mm || 0)));
+  const memberD_mm = Math.max(1, Math.floor(Number(params.memberD_mm || 1)));
+
+  const halfSpan_mm = Math.max(1, Math.floor(A_mm / 2));
+  const den = Math.sqrt(halfSpan_mm * halfSpan_mm + rise_mm * rise_mm);
+  const cosT = den > 1e-6 ? (halfSpan_mm / den) : 1;
+  const tanT = halfSpan_mm > 1e-6 ? (rise_mm / halfSpan_mm) : 0;
+  const slopeAng = Math.atan2(rise_mm, halfSpan_mm);
+  const sinT = Math.sin(slopeAng);
+
+  // IMPORTANT: match buildApex() OSB underside reference used in placement logic.
+  // OSB underside plane is offset from the tie-top roof plane along the roof normal.
+  const OSB_CLEAR_MM = 1;
+  const dNormal_mm = memberD_mm + OSB_CLEAR_MM;
+  const offsetAlongY_atFixedX_mm = dNormal_mm / Math.max(1e-6, cosT);
+
+  function yUnderLocal_mm(xLocal_mm) {
+    const x = Math.max(0, Math.min(A_mm, Number(xLocal_mm)));
+    if (x <= halfSpan_mm) return memberD_mm + tanT * x + offsetAlongY_atFixedX_mm;
+    return memberD_mm + tanT * (A_mm - x) + offsetAlongY_atFixedX_mm;
+  }
+
+  function yUnderWorld_mm(xWorld_mm) {
+    const xLocal_mm = (Number(xWorld_mm) / 1) - (roofRoot.position.x * 1000);
+    return (roofRoot.position.y * 1000) + yUnderLocal_mm(xLocal_mm);
+  }
+
+  scene._apexRoofUnderside = {
+    roof: "apex",
+    A_mm,
+    B_mm,
+    rise_mm,
+    memberD_mm,
+    osbClear_mm: OSB_CLEAR_MM,
+    yUnderAtXWorld_mm: yUnderWorld_mm
+  };
+
+  // Build one reusable cutter representing ALL space above the roof underside (union of both slopes).
+  const cutter = buildApexUndersideCutter(scene, roofRoot, {
+    A_mm,
+    B_mm,
+    slopeAng,
+    sinT,
+    cosT,
+    yUnderLocal_mm
+  });
+
+  scene._apexCladdingTrimCutter = cutter;
+
+  // Trim any existing cladding meshes now (in case walls were built before roof).
+  const meshes = (scene.meshes || []).slice();
+  for (let i = 0; i < meshes.length; i++) {
+    const m = meshes[i];
+    if (!m || m.isDisposed()) continue;
+    if (!isLikelyWallCladdingMesh(m)) continue;
+    if (m.metadata && m.metadata.trimmedToRoofApex === true) continue;
+    trimMeshByApexCutter(scene, m, cutter);
+  }
+
+  // Order-independent: trim future cladding meshes as they are created.
+  scene._apexCladdingTrimObserver = scene.onNewMeshAddedObservable.add((m) => {
+    try {
+      if (!m || m.isDisposed()) return;
+      if (!isLikelyWallCladdingMesh(m)) return;
+      if (m.metadata && m.metadata.trimmedToRoofApex === true) return;
+      if (!scene._apexCladdingTrimCutter || scene._apexCladdingTrimCutter.isDisposed()) return;
+      trimMeshByApexCutter(scene, m, scene._apexCladdingTrimCutter);
+    } catch (e) {}
+  });
+}
+
+function isLikelyWallCladdingMesh(mesh) {
+  try {
+    const nm = String(mesh && mesh.name ? mesh.name : "");
+    if (!nm) return false;
+    if (nm.startsWith("roof-")) return false;
+    const md = mesh.metadata && typeof mesh.metadata === "object" ? mesh.metadata : null;
+
+    // Conservative defaults: adjust once you confirm the repo’s real cladding tags.
+    const mdHit =
+      !!(md && (md.part === "cladding" || md.kind === "cladding" || md.element === "cladding" || md.isCladding === true));
+    const nameHit =
+      nm.includes("cladding") || nm.includes("clad") || nm.includes("wall-cladding") || nm.startsWith("cladding-");
+
+    if (!(mdHit || nameHit)) return false;
+
+    // CSG needs real geometry (skip instances/empties).
+    if (typeof mesh.getTotalVertices === "function" && mesh.getTotalVertices() <= 0) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function buildApexUndersideCutter(scene, roofRoot, p) {
+  const A_mm = Math.max(1, Math.floor(Number(p.A_mm || 1)));
+  const B_mm = Math.max(1, Math.floor(Number(p.B_mm || 1)));
+  const slopeAng = Number(p.slopeAng || 0);
+  const sinT = Number(p.sinT || 0);
+  const cosT = Number(p.cosT || 1);
+  const yUnderLocal_mm = typeof p.yUnderLocal_mm === "function" ? p.yUnderLocal_mm : (() => 0);
+
+  // Oversize cutter so it fully covers any cladding extents (walls + gable triangles).
+  const PAD_MM = 4000;
+  const W_mm = A_mm + PAD_MM;
+  const D_mm = B_mm + PAD_MM;
+  const H_mm = Math.max(6000, Math.floor((yUnderLocal_mm(A_mm / 2) + 4000)));
+
+  const mk = (name, rotZ, nx, ny, anchorX_mm) => {
+    const box = BABYLON.MeshBuilder.CreateBox(
+      name,
+      { width: W_mm / 1000, height: H_mm / 1000, depth: D_mm / 1000 },
+      scene
+    );
+    box.rotation = new BABYLON.Vector3(0, 0, rotZ);
+    box.isVisible = false;
+    box.setEnabled(false);
+    box.metadata = { dynamic: true, roof: "apex", part: "cladding-cutter" };
+
+    // Anchor point on underside plane at mid-ridge (z=B/2). Use eaves x for each slope.
+    const yAnchor_mm = yUnderLocal_mm(anchorX_mm);
+    const pLocal = new BABYLON.Vector3(anchorX_mm / 1000, yAnchor_mm / 1000, (B_mm / 2) / 1000);
+
+    // Move box center so its "bottom" face sits on the plane and it extends outward (above plane).
+    const n = new BABYLON.Vector3(nx, ny, 0); // unit normal
+    const center = pLocal.add(n.scale((H_mm / 2) / 1000));
+
+    box.position = new BABYLON.Vector3(
+      roofRoot.position.x + center.x,
+      roofRoot.position.y + center.y,
+      roofRoot.position.z + center.z
+    );
+
+    return box;
+  };
+
+  // Left slope normal after +slopeAng rotation: (-sinT, +cosT)
+  const left = mk("roof-apex-cutter-L", slopeAng, -sinT, cosT, 0);
+  // Right slope normal after -slopeAng rotation: (+sinT, +cosT)
+  const right = mk("roof-apex-cutter-R", -slopeAng, sinT, cosT, A_mm);
+
+  const csg = BABYLON.CSG.FromMesh(left).union(BABYLON.CSG.FromMesh(right));
+  const cutter = csg.toMesh("roof-apex-cladding-cutter", null, scene, true);
+  cutter.isVisible = false;
+  cutter.setEnabled(false);
+  cutter.metadata = { dynamic: true, roof: "apex", part: "cladding-cutter" };
+
+  try { left.dispose(false, true); } catch (e) {}
+  try { right.dispose(false, true); } catch (e) {}
+
+  return cutter;
+}
+
+function trimMeshByApexCutter(scene, mesh, cutter) {
+  if (!scene || !mesh || !cutter) return;
+  if (mesh.isDisposed() || cutter.isDisposed()) return;
+  if (!BABYLON.CSG) return;
+
+  // If your cladding is parented and expected to follow parent transforms, tell me;
+  // we’ll switch to a parent-space trim. For now, we avoid silently breaking parenting.
+  if (mesh.parent) return;
+
+  let src = null;
+  try {
+    src = mesh.clone(mesh.name + "__trimSrc", null, false, true);
+  } catch (e) {
+    src = null;
+  }
+  if (!src) return;
+
+  src.isVisible = false;
+  src.setEnabled(false);
+
+  try {
+    src.bakeCurrentTransformIntoVertices();
+    src.position = new BABYLON.Vector3(0, 0, 0);
+    src.rotation = new BABYLON.Vector3(0, 0, 0);
+    src.scaling = new BABYLON.Vector3(1, 1, 1);
+    src.rotationQuaternion = null;
+  } catch (e) {}
+
+  let out = null;
+  try {
+    const res = BABYLON.CSG.FromMesh(src).subtract(BABYLON.CSG.FromMesh(cutter));
+    out = res.toMesh(mesh.name, mesh.material || null, scene, true);
+  } catch (e) {
+    out = null;
+  }
+
+  try { src.dispose(false, true); } catch (e) {}
+  if (!out) return;
+
+  out.material = mesh.material || null;
+  out.metadata = Object.assign({}, (mesh.metadata || {}), { trimmedToRoofApex: true });
+  out.isVisible = mesh.isVisible;
+  out.setEnabled(mesh.isEnabled());
+  out.renderingGroupId = mesh.renderingGroupId;
+
+  try { mesh.dispose(false, true); } catch (e) {}
 }
