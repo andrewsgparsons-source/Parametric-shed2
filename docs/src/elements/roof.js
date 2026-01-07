@@ -1026,7 +1026,7 @@ function buildApex(state, ctx) {
       post.metadata = Object.assign({ dynamic: true }, { roof: "apex", part: "truss", member: "kingpost" });
       post.parent = tr;
 
-      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng)))));
+      const halfRun_mm = Math.max(1, Math.round(capH_mm / Math.max(1e-6, Math.tan(slopeAng))));
       const cap = BABYLON.MeshBuilder.ExtrudeShape(
         `roof-truss-${idx}-kingpost-cap`,
         {
