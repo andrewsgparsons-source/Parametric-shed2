@@ -870,149 +870,191 @@ export function build3D(state, ctx) {
           BABYLON.CSG &&
           typeof BABYLON.CSG.FromMesh === "function";
 
-        if (hasCSG && merged && isAlongX && (String(wallId) === "front" || String(wallId) === "back")) {
+        if (hasCSG && merged) {
           const roofStyle = state && state.roof ? String(state.roof.style || "") : "";
 
-          const CUT_EXTRA_ROOF = 120;
-          const cutDepthRoof = Math.max(1, Math.floor(CLAD_T + 2 * CUT_EXTRA_ROOF));
+          // Only proceed if we have a roof style that needs clipping
+          if (roofStyle === "pent" || roofStyle === "apex") {
+            const CUT_EXTRA_ROOF = 120;
+            const cutDepthRoof = Math.max(1, Math.floor(CLAD_T + 2 * CUT_EXTRA_ROOF));
 
-          const wallOutsideFaceWorldZ = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
-          const outwardNormalZ = outwardSignZ;
+            let cutterCSG = null;
 
-          const cutMinOutRoof_mm = (outwardNormalZ === 1)
-            ? Math.floor(wallOutsideFaceWorldZ - CUT_EXTRA_ROOF)
-            : Math.floor(wallOutsideFaceWorldZ - (CLAD_T + CUT_EXTRA_ROOF));
+            if (isAlongX && (String(wallId) === "front" || String(wallId) === "back")) {
+              // Front/back walls - sloped cut for pent, gable cut for apex
+              const wallOutsideFaceWorldZ = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
+              const outwardNormalZ = outwardSignZ;
 
-          const z0r = cutMinOutRoof_mm;
-          const z1r = cutMinOutRoof_mm + cutDepthRoof;
+              // FIX: Position the cutter to fully encompass the cladding regardless of outward direction
+              const cutMinZ_mm = Math.floor(wallOutsideFaceWorldZ - CUT_EXTRA_ROOF);
+              const cutMaxZ_mm = Math.floor(wallOutsideFaceWorldZ + CLAD_T + CUT_EXTRA_ROOF);
 
-          function mkWedgeAboveLineX(name, xa0_mm, xa1_mm, yLine0_mm, yLine1_mm) {
-            const x0 = Math.floor(Number(xa0_mm));
-            const x1 = Math.floor(Number(xa1_mm));
-            const y0 = Math.floor(Number(yLine0_mm));
-            const y1 = Math.floor(Number(yLine1_mm));
+              const z0r = cutMinZ_mm;
+              const z1r = cutMaxZ_mm;
 
-            const yTop = Math.max(y0, y1) + 20000;
+              function mkWedgeAboveLineX_Fixed(name, xa0_mm, xa1_mm, yLine0_mm, yLine1_mm) {
+                const x0 = Math.floor(Number(xa0_mm));
+                const x1 = Math.floor(Number(xa1_mm));
+                const y0 = Math.floor(Number(yLine0_mm));
+                const y1 = Math.floor(Number(yLine1_mm));
 
-            const positions = [
-              x0, y0, z0r,
-              x1, y1, z0r,
-              x1, y1, z1r,
-              x0, y0, z1r,
+                const yTop = Math.max(y0, y1) + 20000;
 
-              x0, yTop, z0r,
-              x1, yTop, z0r,
-              x1, yTop, z1r,
-              x0, yTop, z1r,
-            ].map((v) => v / 1000);
+                const positions = [
+                  x0, y0, z0r,
+                  x1, y1, z0r,
+                  x1, y1, z1r,
+                  x0, y0, z1r,
 
-            const indices = [
-              0, 1, 2, 0, 2, 3,
-              4, 6, 5, 4, 7, 6,
-              0, 4, 5, 0, 5, 1,
-              3, 2, 6, 3, 6, 7,
-              0, 3, 7, 0, 7, 4,
-              1, 5, 6, 1, 6, 2
-            ];
+                  x0, yTop, z0r,
+                  x1, yTop, z0r,
+                  x1, yTop, z1r,
+                  x0, yTop, z1r,
+                ].map((v) => v / 1000);
 
-            const normals = [];
-            BABYLON.VertexData.ComputeNormals(positions, indices, normals);
+                const indices = [
+                  0, 1, 2, 0, 2, 3,
+                  4, 6, 5, 4, 7, 6,
+                  0, 4, 5, 0, 5, 1,
+                  3, 2, 6, 3, 6, 7,
+                  0, 3, 7, 0, 7, 4,
+                  1, 5, 6, 1, 6, 2
+                ];
 
-            const vd = new BABYLON.VertexData();
-            vd.positions = positions;
-            vd.indices = indices;
-            vd.normals = normals;
+                const normals = [];
+                BABYLON.VertexData.ComputeNormals(positions, indices, normals);
 
-            const m = new BABYLON.Mesh(name, scene);
-            vd.applyToMesh(m, true);
-            return m;
-          }
+                const vd = new BABYLON.VertexData();
+                vd.positions = positions;
+                vd.indices = indices;
+                vd.normals = normals;
 
-          let cutterCSG = null;
-
-          if (roofStyle === "pent") {
-            const xA0 = origin.x + Math.floor(Number(panelStart || 0));
-            const xA1 = xA0 + Math.floor(Number(panelLen || 0));
-
-            const yA0 = heightAtX(xA0);
-            const yA1 = heightAtX(xA1);
-
-            const wedge = mkWedgeAboveLineX(
-              `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-pent`,
-              xA0,
-              xA1,
-              yA0,
-              yA1
-            );
-
-            try { cutterCSG = BABYLON.CSG.FromMesh(wedge); } catch (e) { cutterCSG = null; }
-            try { if (wedge && !wedge.isDisposed()) wedge.dispose(false, true); } catch (e) {}
-          } else if (roofStyle === "apex") {
-            // APEX gable trim:
-            // Use the same rise + underside profile as roof.js so the gable triangle is filled and matches the roof.
-            if (apexRoofModel) {
-              const xA0 = origin.x + Math.floor(Number(panelStart || 0));
-              const xA1 = xA0 + Math.floor(Number(panelLen || 0));
-
-              const wedges = [];
-              const ridgeX = Number(apexRoofModel.ridgeWorldX_mm);
-
-              const yAt = (x_mm) => Math.floor(apexRoofModel.yUnderAtWorldX_mm(x_mm));
-
-              // Piecewise-linear: split at ridge if the span crosses it (slope flips).
-              if (Number.isFinite(ridgeX) && ridgeX > xA0 && ridgeX < xA1) {
-                wedges.push(
-                  mkWedgeAboveLineX(
-                    `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexL`,
-                    xA0, ridgeX,
-                    yAt(xA0), yAt(ridgeX)
-                  )
-                );
-                wedges.push(
-                  mkWedgeAboveLineX(
-                    `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexR`,
-                    ridgeX, xA1,
-                    yAt(ridgeX), yAt(xA1)
-                  )
-                );
-              } else {
-                wedges.push(
-                  mkWedgeAboveLineX(
-                    `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apex`,
-                    xA0, xA1,
-                    yAt(xA0), yAt(xA1)
-                  )
-                );
+                const m = new BABYLON.Mesh(name, scene);
+                vd.applyToMesh(m, true);
+                return m;
               }
 
-              if (wedges.length) {
-                try {
-                  cutterCSG = BABYLON.CSG.FromMesh(wedges[0]);
-                  for (let wi = 1; wi < wedges.length; wi++) {
-                    try { cutterCSG = cutterCSG.union(BABYLON.CSG.FromMesh(wedges[wi])); } catch (e) {}
+              if (roofStyle === "pent") {
+                const xA0 = origin.x + Math.floor(Number(panelStart || 0));
+                const xA1 = xA0 + Math.floor(Number(panelLen || 0));
+
+                const yA0 = heightAtX(xA0);
+                const yA1 = heightAtX(xA1);
+
+                const wedge = mkWedgeAboveLineX_Fixed(
+                  `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-pent`,
+                  xA0,
+                  xA1,
+                  yA0,
+                  yA1
+                );
+
+                try { cutterCSG = BABYLON.CSG.FromMesh(wedge); } catch (e) { cutterCSG = null; }
+                try { if (wedge && !wedge.isDisposed()) wedge.dispose(false, true); } catch (e) {}
+              } else if (roofStyle === "apex") {
+                // APEX gable trim:
+                // Use the same rise + underside profile as roof.js so the gable triangle is filled and matches the roof.
+                if (apexRoofModel) {
+                  const xA0 = origin.x + Math.floor(Number(panelStart || 0));
+                  const xA1 = xA0 + Math.floor(Number(panelLen || 0));
+
+                  const wedges = [];
+                  const ridgeX = Number(apexRoofModel.ridgeWorldX_mm);
+
+                  const yAt = (x_mm) => Math.floor(apexRoofModel.yUnderAtWorldX_mm(x_mm));
+
+                  // Piecewise-linear: split at ridge if the span crosses it (slope flips).
+                  if (Number.isFinite(ridgeX) && ridgeX > xA0 && ridgeX < xA1) {
+                    wedges.push(
+                      mkWedgeAboveLineX_Fixed(
+                        `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexL`,
+                        xA0, ridgeX,
+                        yAt(xA0), yAt(ridgeX)
+                      )
+                    );
+                    wedges.push(
+                      mkWedgeAboveLineX_Fixed(
+                        `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexR`,
+                        ridgeX, xA1,
+                        yAt(ridgeX), yAt(xA1)
+                      )
+                    );
+                  } else {
+                    wedges.push(
+                      mkWedgeAboveLineX_Fixed(
+                        `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apex`,
+                        xA0, xA1,
+                        yAt(xA0), yAt(xA1)
+                      )
+                    );
                   }
-                } catch (e) { cutterCSG = null; }
+
+                  if (wedges.length) {
+                    try {
+                      cutterCSG = BABYLON.CSG.FromMesh(wedges[0]);
+                      for (let wi = 1; wi < wedges.length; wi++) {
+                        try { cutterCSG = cutterCSG.union(BABYLON.CSG.FromMesh(wedges[wi])); } catch (e) {}
+                      }
+                    } catch (e) { cutterCSG = null; }
+                  }
+
+                  for (let wi = 0; wi < wedges.length; wi++) {
+                    try { if (wedges[wi] && !wedges[wi].isDisposed()) wedges[wi].dispose(false, true); } catch (e) {}
+                  }
+                }
+              }
+            } else if (!isAlongX && (String(wallId) === "left" || String(wallId) === "right")) {
+              // Left/right walls - horizontal cut at constant height for pent roofs
+              if (roofStyle === "pent") {
+                const wallOutsideFaceWorldX = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
+
+                // FIX: Position the cutter to fully encompass the cladding regardless of outward direction
+                const cutMinX_mm = Math.floor(wallOutsideFaceWorldX - CUT_EXTRA_ROOF);
+                const cutMaxX_mm = Math.floor(wallOutsideFaceWorldX + CLAD_T + CUT_EXTRA_ROOF);
+
+                // Left wall cuts at minH, right wall cuts at maxH
+                const cutHeight = (String(wallId) === "left") ? minH : maxH;
+
+                const zA0 = origin.z + Math.floor(Number(panelStart || 0));
+                const zA1 = zA0 + Math.floor(Number(panelLen || 0));
+
+                // Create a box cutter above the cut height
+                const cutterHeight = 20000; // Tall enough to cut everything above
+                const cutterBox = BABYLON.MeshBuilder.CreateBox(
+                  `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-pent`,
+                  {
+                    width: (cutMaxX_mm - cutMinX_mm) / 1000,
+                    height: cutterHeight / 1000,
+                    depth: (zA1 - zA0) / 1000
+                  },
+                  scene
+                );
+                cutterBox.position = new BABYLON.Vector3(
+                  (cutMinX_mm + (cutMaxX_mm - cutMinX_mm) / 2) / 1000,
+                  (cutHeight + cutterHeight / 2) / 1000,
+                  (zA0 + (zA1 - zA0) / 2) / 1000
+                );
+
+                try { cutterCSG = BABYLON.CSG.FromMesh(cutterBox); } catch (e) { cutterCSG = null; }
+                try { if (cutterBox && !cutterBox.isDisposed()) cutterBox.dispose(false, true); } catch (e) {}
+              }
+              // Note: apex roofs don't need left/right wall trimming as they have constant eaves height
+            }
+
+            if (cutterCSG) {
+              let resMesh = null;
+              try {
+                const baseCSG = BABYLON.CSG.FromMesh(merged);
+                const resCSG = baseCSG.subtract(cutterCSG);
+                resMesh = resCSG.toMesh(`clad-${wallId}-panel-${panelIndex}-roofclip`, mat, scene, false);
+              } catch (e) {
+                resMesh = null;
               }
 
-              for (let wi = 0; wi < wedges.length; wi++) {
-                try { if (wedges[wi] && !wedges[wi].isDisposed()) wedges[wi].dispose(false, true); } catch (e) {}
+              if (resMesh) {
+                try { if (merged && !merged.isDisposed()) merged.dispose(false, true); } catch (e) {}
+                merged = resMesh;
               }
-            }
-          }
-
-          if (cutterCSG) {
-            let resMesh = null;
-            try {
-              const baseCSG = BABYLON.CSG.FromMesh(merged);
-              const resCSG = baseCSG.subtract(cutterCSG);
-              resMesh = resCSG.toMesh(`clad-${wallId}-panel-${panelIndex}-roofclip`, mat, scene, false);
-            } catch (e) {
-              resMesh = null;
-            }
-
-            if (resMesh) {
-              try { if (merged && !merged.isDisposed()) merged.dispose(false, true); } catch (e) {}
-              merged = resMesh;
             }
           }
         }
