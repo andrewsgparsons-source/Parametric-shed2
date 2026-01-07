@@ -818,6 +818,183 @@ export function build3D(state, ctx) {
       } catch (e) {}
       // ---- END openings cut-outs ----
 
+      // ---- NEW: clip cladding to roof underside (pent) / gable line (apex) ----
+      try {
+        const hasCSG =
+          typeof BABYLON !== "undefined" &&
+          BABYLON &&
+          BABYLON.CSG &&
+          typeof BABYLON.CSG.FromMesh === "function";
+
+        if (hasCSG && merged && isAlongX && (String(wallId) === "front" || String(wallId) === "back")) {
+          const roofStyle = state && state.roof ? String(state.roof.style || "") : "";
+
+          const CUT_EXTRA_ROOF = 120;
+          const cutDepthRoof = Math.max(1, Math.floor(CLAD_T + 2 * CUT_EXTRA_ROOF));
+
+          const wallOutsideFaceWorldZ = (outsidePlaneZ_mm !== null ? outsidePlaneZ_mm : (origin.z + wallThk));
+          const outwardNormalZ = outwardSignZ;
+
+          const cutMinOutRoof_mm = (outwardNormalZ === 1)
+            ? Math.floor(wallOutsideFaceWorldZ - CUT_EXTRA_ROOF)
+            : Math.floor(wallOutsideFaceWorldZ - (CLAD_T + CUT_EXTRA_ROOF));
+
+          const z0r = cutMinOutRoof_mm;
+          const z1r = cutMinOutRoof_mm + cutDepthRoof;
+
+          function mkWedgeAboveLineX(name, xa0_mm, xa1_mm, yLine0_mm, yLine1_mm) {
+            const x0 = Math.floor(Number(xa0_mm));
+            const x1 = Math.floor(Number(xa1_mm));
+            const y0 = Math.floor(Number(yLine0_mm));
+            const y1 = Math.floor(Number(yLine1_mm));
+
+            const yTop = Math.max(y0, y1) + 20000;
+
+            const positions = [
+              x0, y0, z0r,
+              x1, y1, z0r,
+              x1, y1, z1r,
+              x0, y0, z1r,
+
+              x0, yTop, z0r,
+              x1, yTop, z0r,
+              x1, yTop, z1r,
+              x0, yTop, z1r,
+            ].map((v) => v / 1000);
+
+            const indices = [
+              0, 1, 2, 0, 2, 3,
+              4, 6, 5, 4, 7, 6,
+              0, 4, 5, 0, 5, 1,
+              3, 2, 6, 3, 6, 7,
+              0, 3, 7, 0, 7, 4,
+              1, 5, 6, 1, 6, 2
+            ];
+
+            const normals = [];
+            BABYLON.VertexData.ComputeNormals(positions, indices, normals);
+
+            const vd = new BABYLON.VertexData();
+            vd.positions = positions;
+            vd.indices = indices;
+            vd.normals = normals;
+
+            const m = new BABYLON.Mesh(name, scene);
+            vd.applyToMesh(m, true);
+            return m;
+          }
+
+          let cutterCSG = null;
+
+          if (roofStyle === "pent") {
+            const xA0 = origin.x + Math.floor(Number(panelStart || 0));
+            const xA1 = xA0 + Math.floor(Number(panelLen || 0));
+
+            const yA0 = heightAtX(xA0);
+            const yA1 = heightAtX(xA1);
+
+            const wedge = mkWedgeAboveLineX(
+              `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-pent`,
+              xA0,
+              xA1,
+              yA0,
+              yA1
+            );
+
+            try { cutterCSG = BABYLON.CSG.FromMesh(wedge); } catch (e) { cutterCSG = null; }
+            try { if (wedge && !wedge.isDisposed()) wedge.dispose(false, true); } catch (e) {}
+          } else if (roofStyle === "apex") {
+            const baseRise_mm = resolveBaseRiseMm(state);
+            const apexH = resolveApexHeightsMm(state);
+
+            const eavesLocal_mm = (apexH && Number.isFinite(apexH.eaves_mm))
+              ? Math.floor(apexH.eaves_mm - baseRise_mm)
+              : Math.floor(height);
+
+            const crestLocalRaw_mm = (apexH && Number.isFinite(apexH.crest_mm))
+              ? Math.floor(apexH.crest_mm - baseRise_mm)
+              : null;
+
+            const crestLocal_mm = (crestLocalRaw_mm != null) ? Math.max(eavesLocal_mm, crestLocalRaw_mm) : null;
+
+            if (crestLocal_mm != null) {
+              const ridgeX = frameW / 2;
+
+              const gableYAtX = (x_mm) => {
+                const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
+                const dx = Math.abs(x - ridgeX);
+                const half = ridgeX > 0 ? ridgeX : 1;
+                const t = Math.max(0, Math.min(1, 1 - dx / half));
+                return Math.max(0, Math.floor(eavesLocal_mm + (crestLocal_mm - eavesLocal_mm) * t));
+              };
+
+              const xA0 = origin.x + Math.floor(Number(panelStart || 0));
+              const xA1 = xA0 + Math.floor(Number(panelLen || 0));
+
+              const wedges = [];
+
+              const lx0 = Math.max(xA0, 0);
+              const lx1 = Math.min(xA1, ridgeX);
+              if (lx1 > lx0) {
+                wedges.push(mkWedgeAboveLineX(
+                  `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexL`,
+                  lx0,
+                  lx1,
+                  gableYAtX(lx0),
+                  gableYAtX(lx1)
+                ));
+              }
+
+              const rx0 = Math.max(xA0, ridgeX);
+              const rx1 = Math.min(xA1, frameW);
+              if (rx1 > rx0) {
+                wedges.push(mkWedgeAboveLineX(
+                  `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexR`,
+                  rx0,
+                  rx1,
+                  gableYAtX(rx0),
+                  gableYAtX(rx1)
+                ));
+              }
+
+              if (wedges.length) {
+                try {
+                  cutterCSG = BABYLON.CSG.FromMesh(wedges[0]);
+                  for (let wi = 1; wi < wedges.length; wi++) {
+                    try {
+                      cutterCSG = cutterCSG.union(BABYLON.CSG.FromMesh(wedges[wi]));
+                    } catch (e) {}
+                  }
+                } catch (e) {
+                  cutterCSG = null;
+                }
+              }
+
+              for (let wi = 0; wi < wedges.length; wi++) {
+                try { if (wedges[wi] && !wedges[wi].isDisposed()) wedges[wi].dispose(false, true); } catch (e) {}
+              }
+            }
+          }
+
+          if (cutterCSG) {
+            let resMesh = null;
+            try {
+              const baseCSG = BABYLON.CSG.FromMesh(merged);
+              const resCSG = baseCSG.subtract(cutterCSG);
+              resMesh = resCSG.toMesh(`clad-${wallId}-panel-${panelIndex}-roofclip`, mat, scene, false);
+            } catch (e) {
+              resMesh = null;
+            }
+
+            if (resMesh) {
+              try { if (merged && !merged.isDisposed()) merged.dispose(false, true); } catch (e) {}
+              merged = resMesh;
+            }
+          }
+        }
+      } catch (e) {}
+      // ---- END roof clip ----
+
       merged.name = `clad-${wallId}-panel-${panelIndex}`;
       merged.material = mat;
       merged.metadata = Object.assign({ dynamic: true }, { wallId, panelIndex, type: "cladding" });
@@ -1478,11 +1655,28 @@ export function build3D(state, ctx) {
         }
         const pan = panels[p];
         let panelH = wallHeightFlat;
+
         if (isSlopeWall) {
           const h0 = heightAtX(origin.x + pan.start);
           const h1 = heightAtX(origin.x + pan.start + pan.len);
-          panelH = Math.min(h0, h1);
+          panelH = Math.max(h0, h1);
         }
+
+        if (
+          state &&
+          state.roof &&
+          String(state.roof.style || "") === "apex" &&
+          isAlongX &&
+          (String(wallId) === "front" || String(wallId) === "back")
+        ) {
+          const baseRise_mm = resolveBaseRiseMm(state);
+          const apexH = resolveApexHeightsMm(state);
+          if (apexH && Number.isFinite(apexH.crest_mm)) {
+            const crestLocal_mm = Math.floor(apexH.crest_mm - baseRise_mm);
+            if (Number.isFinite(crestLocal_mm)) panelH = Math.max(panelH, crestLocal_mm);
+          }
+        }
+
         claddingJobs.push({
           wallId,
           axis,
@@ -1547,7 +1741,22 @@ export function build3D(state, ctx) {
     if (isSlopeWall) {
       const h0 = heightAtX(origin.x);
       const h1 = heightAtX(origin.x + length);
-      panelH = Math.min(h0, h1);
+      panelH = Math.max(h0, h1);
+    }
+
+    if (
+      state &&
+      state.roof &&
+      String(state.roof.style || "") === "apex" &&
+      isAlongX &&
+      (String(wallId) === "front" || String(wallId) === "back")
+    ) {
+      const baseRise_mm = resolveBaseRiseMm(state);
+      const apexH = resolveApexHeightsMm(state);
+      if (apexH && Number.isFinite(apexH.crest_mm)) {
+        const crestLocal_mm = Math.floor(apexH.crest_mm - baseRise_mm);
+        if (Number.isFinite(crestLocal_mm)) panelH = Math.max(panelH, crestLocal_mm);
+      }
     }
 
     if (__DIAG_ONE_FRONT_ONE_BOARD) {
