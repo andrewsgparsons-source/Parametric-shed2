@@ -713,13 +713,10 @@ function buildApex(state, ctx) {
   const roofW_mm = Math.max(1, Math.floor(Number(dims?.roof?.w_mm ?? frameW_mm)));
   const roofD_mm = Math.max(1, Math.floor(Number(dims?.roof?.d_mm ?? frameD_mm)));
 
-  // Truss layout (rotation-invariant):
-  // A = span axis (shorter of roofW/roofD), B = ridge/run axis (longer)
-  const A_mm = Math.min(roofW_mm, roofD_mm);
-  const B_mm = Math.max(roofW_mm, roofD_mm);
-
-  // Ridge runs along B. If ROOF width is the long axis (incl. overhang), ridge should run along world X; otherwise along world Z.
-  const ridgeAlongWorldX = roofW_mm >= roofD_mm;
+  // Truss layout (fixed orientation):
+  // A = span axis across WIDTH (world X), B = ridge/run axis along DEPTH (world Z)
+  const A_mm = roofW_mm;
+  const B_mm = roofD_mm;
 
   // --- APEX HEIGHT CONTROLS (ground-referenced, mm) ---
   // UI intent:
@@ -892,8 +889,8 @@ function buildApex(state, ctx) {
   const spacing = 600;
   const trussPos = [];
 
-  const ridgeFrameLen_mm = ridgeAlongWorldX ? frameW_mm : frameD_mm;
-  const ridgeStart_mm = ridgeAlongWorldX ? l_mm : f_mm;
+  const ridgeFrameLen_mm = frameD_mm;
+  const ridgeStart_mm = f_mm;
 
   const minP = Math.max(0, Math.floor(ridgeStart_mm));
   const maxP = Math.max(minP, Math.floor(ridgeStart_mm + ridgeFrameLen_mm - memberW_mm));
@@ -1220,9 +1217,8 @@ function buildApex(state, ctx) {
   const targetMinX_m = (-l_mm) / 1000;
   const targetMinZ_m = (-f_mm) / 1000;
 
-  // Yaw so local Z (ridge axis) aligns to world X when width is long, else to world Z.
-  // local basis: X=span(A), Z=ridge(B)
-  const yaw = ridgeAlongWorldX ? (Math.PI / 2) : 0;
+  // Fixed apex orientation: ridge axis is world Z (no yaw).
+  const yaw = 0;
   roofRoot.rotationQuaternion = BABYLON.Quaternion.RotationAxis(new BABYLON.Vector3(0, 1, 0), yaw);
 
   // Corners of local roof rectangle (0..localW, 0..localD) in LOCAL XZ:
@@ -1295,7 +1291,7 @@ function buildApex(state, ctx) {
         spanA_mm: A_mm,
         runB_mm: B_mm,
         rise_mm: rise_mm,
-        ridgeAlongWorldX: ridgeAlongWorldX,
+        ridgeAlongWorldX: false,
         osbOffset_mm: (memberD_mm / 2) + (18 / 2)
       };
     }
@@ -1308,8 +1304,8 @@ function updateBOM_Apex(state, tbody) {
   const roofW_mm = Math.max(1, Math.floor(Number(dims?.roof?.w_mm ?? state?.w ?? 1)));
   const roofD_mm = Math.max(1, Math.floor(Number(dims?.roof?.d_mm ?? state?.d ?? 1)));
 
-  const A_mm = Math.min(roofW_mm, roofD_mm);
-  const B_mm = Math.max(roofW_mm, roofD_mm);
+  const A_mm = roofW_mm;
+  const B_mm = roofD_mm;
 
   const g = getRoofFrameGauge(state);
   const baseW = Math.max(1, Math.floor(Number(g.thickness_mm)));
@@ -1345,9 +1341,8 @@ function updateBOM_Apex(state, tbody) {
     const f_mm = Math.max(0, Math.floor(Number(ovh.f_mm || 0)));
     const b_mm = Math.max(0, Math.floor(Number(ovh.b_mm || 0)));
 
-    const ridgeAlongWorldX = roofW_mm >= roofD_mm;
-    const ridgeFrameLen_mm = ridgeAlongWorldX ? frameW_mm : frameD_mm;
-    const ridgeStart_mm = ridgeAlongWorldX ? l_mm : f_mm;
+    const ridgeFrameLen_mm = frameD_mm;
+    const ridgeStart_mm = f_mm;
 
     const spacing = 600;
     const pos = [];
