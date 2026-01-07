@@ -1,3 +1,5 @@
+import { CONFIG, resolveDims } from "../params.js";
+
 /**
  * Build four walls. Coordinates:
  * - Front/Back run along X, thickness extrudes +Z.
@@ -32,6 +34,11 @@
 export function build3D(state, ctx) {
   const { scene, materials } = ctx;
   const variant = state.walls?.variant || "insulated";
+
+  // Precompute apex roof underside model once per rebuild (used only for gable cladding trim + height).
+  const apexRoofModel = (state && state.roof && String(state.roof.style || "") === "apex")
+    ? computeApexRoofUndersideModelMm(state)
+    : null;
 
   // Wall height is normally driven by state.walls.height_mm.
   // APEX ONLY: "Height to Eaves" is a ground-referenced target for the roof eaves UNDERSIDE at the wall line.
@@ -515,6 +522,42 @@ export function build3D(state, ctx) {
     const panelMinAxis_mm = (axis === "x") ? xMin_mm : zMin_mm;
     const panelMaxAxis_mm = (axis === "x") ? xMax_mm : zMax_mm;
 
+    // APEX gable fix:
+    // Ensure the merged cladding mesh is tall enough to reach ABOVE the roof underside so the CSG roof-trim
+    // leaves a fully clad triangle (gable infill). Only for front/back (gable) walls.
+    if (
+      apexRoofModel &&
+      isAlongX &&
+      (String(wallId) === "front" || String(wallId) === "back")
+    ) {
+      try {
+        const xA0 = origin.x + Math.floor(Number(panelStart || 0));
+        const xA1 = xA0 + Math.floor(Number(panelLen || 0));
+
+        // Sample roof underside at endpoints and at ridge intersection (if within span)
+        let maxNeedY_mm = Math.max(
+          apexRoofModel.yUnderAtWorldX_mm(xA0),
+          apexRoofModel.yUnderAtWorldX_mm(xA1)
+        );
+
+        const rx = apexRoofModel.ridgeWorldX_mm;
+        if (Number.isFinite(rx) && rx > xA0 && rx < xA1) {
+          maxNeedY_mm = Math.max(maxNeedY_mm, apexRoofModel.yUnderAtWorldX_mm(rx));
+        }
+
+        // Add small pad so we never end up exactly coplanar with the cutter line.
+        const pad_mm = 10;
+        const requiredTop_mm = Math.floor(maxNeedY_mm + pad_mm);
+
+        // Approx top coverage: top ~= claddingAnchorY_mm + courses * CLAD_H
+        // (first course has an extra +125mm lift but we ignore it for a conservative lower bound).
+        const needCourses = Math.max(1, Math.ceil((requiredTop_mm - claddingAnchorY_mm) / CLAD_H) + 1);
+        if (Number.isFinite(needCourses) && needCourses > courses) courses = needCourses;
+      } catch (e) {}
+
+      if (courses < 1) return { created: 0, anchor: null, reason: "courses<1(apexAdjust)" };
+    }
+
     for (let i = 0; i < courses; i++) {
       const isFirst = i === 0;
       const firstCourseYOffsetMm = (isFirst ? 125 : 0);
@@ -904,70 +947,50 @@ export function build3D(state, ctx) {
             try { cutterCSG = BABYLON.CSG.FromMesh(wedge); } catch (e) { cutterCSG = null; }
             try { if (wedge && !wedge.isDisposed()) wedge.dispose(false, true); } catch (e) {}
           } else if (roofStyle === "apex") {
-            const baseRise_mm = resolveBaseRiseMm(state);
-            const apexH = resolveApexHeightsMm(state);
-
-            const eavesLocal_mm = (apexH && Number.isFinite(apexH.eaves_mm))
-              ? Math.floor(apexH.eaves_mm - baseRise_mm)
-              : Math.floor(height);
-
-            const crestLocalRaw_mm = (apexH && Number.isFinite(apexH.crest_mm))
-              ? Math.floor(apexH.crest_mm - baseRise_mm)
-              : null;
-
-            const crestLocal_mm = (crestLocalRaw_mm != null) ? Math.max(eavesLocal_mm, crestLocalRaw_mm) : null;
-
-            if (crestLocal_mm != null) {
-              const ridgeX = frameW / 2;
-
-              const gableYAtX = (x_mm) => {
-                const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
-                const dx = Math.abs(x - ridgeX);
-                const half = ridgeX > 0 ? ridgeX : 1;
-                const t = Math.max(0, Math.min(1, 1 - dx / half));
-                return Math.max(0, Math.floor(eavesLocal_mm + (crestLocal_mm - eavesLocal_mm) * t));
-              };
-
+            // APEX gable trim:
+            // Use the same rise + underside profile as roof.js so the gable triangle is filled and matches the roof.
+            if (apexRoofModel) {
               const xA0 = origin.x + Math.floor(Number(panelStart || 0));
               const xA1 = xA0 + Math.floor(Number(panelLen || 0));
 
               const wedges = [];
+              const ridgeX = Number(apexRoofModel.ridgeWorldX_mm);
 
-              const lx0 = Math.max(xA0, 0);
-              const lx1 = Math.min(xA1, ridgeX);
-              if (lx1 > lx0) {
-                wedges.push(mkWedgeAboveLineX(
-                  `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexL`,
-                  lx0,
-                  lx1,
-                  gableYAtX(lx0),
-                  gableYAtX(lx1)
-                ));
-              }
+              const yAt = (x_mm) => Math.floor(apexRoofModel.yUnderAtWorldX_mm(x_mm));
 
-              const rx0 = Math.max(xA0, ridgeX);
-              const rx1 = Math.min(xA1, frameW);
-              if (rx1 > rx0) {
-                wedges.push(mkWedgeAboveLineX(
-                  `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexR`,
-                  rx0,
-                  rx1,
-                  gableYAtX(rx0),
-                  gableYAtX(rx1)
-                ));
+              // Piecewise-linear: split at ridge if the span crosses it (slope flips).
+              if (Number.isFinite(ridgeX) && ridgeX > xA0 && ridgeX < xA1) {
+                wedges.push(
+                  mkWedgeAboveLineX(
+                    `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexL`,
+                    xA0, ridgeX,
+                    yAt(xA0), yAt(ridgeX)
+                  )
+                );
+                wedges.push(
+                  mkWedgeAboveLineX(
+                    `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apexR`,
+                    ridgeX, xA1,
+                    yAt(ridgeX), yAt(xA1)
+                  )
+                );
+              } else {
+                wedges.push(
+                  mkWedgeAboveLineX(
+                    `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-apex`,
+                    xA0, xA1,
+                    yAt(xA0), yAt(xA1)
+                  )
+                );
               }
 
               if (wedges.length) {
                 try {
                   cutterCSG = BABYLON.CSG.FromMesh(wedges[0]);
                   for (let wi = 1; wi < wedges.length; wi++) {
-                    try {
-                      cutterCSG = cutterCSG.union(BABYLON.CSG.FromMesh(wedges[wi]));
-                    } catch (e) {}
+                    try { cutterCSG = cutterCSG.union(BABYLON.CSG.FromMesh(wedges[wi])); } catch (e) {}
                   }
-                } catch (e) {
-                  cutterCSG = null;
-                }
+                } catch (e) { cutterCSG = null; }
               }
 
               for (let wi = 0; wi < wedges.length; wi++) {
@@ -2363,4 +2386,164 @@ function resolveApexHeightsMm(state) {
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
+}
+
+/* ---------------- APEX helpers (match roof.js maths for gable trim) ---------------- */
+
+function getRoofFrameGauge_Apex(state) {
+  const cfgW = Math.floor(Number(CONFIG && CONFIG.timber ? CONFIG.timber.w : 50));
+  const cfgD = Math.floor(Number(CONFIG && CONFIG.timber ? CONFIG.timber.d : 100));
+
+  let t = null;
+  let d = null;
+
+  try { t = (state && state.frame && state.frame.thickness_mm != null) ? Math.floor(Number(state.frame.thickness_mm)) : null; } catch (e0) { t = null; }
+  try { d = (state && state.frame && state.frame.depth_mm != null) ? Math.floor(Number(state.frame.depth_mm)) : null; } catch (e1) { d = null; }
+
+  const thickness_mm = (Number.isFinite(t) && t > 0) ? t : ((Number.isFinite(cfgW) && cfgW > 0) ? cfgW : 50);
+  const depth_mm = (Number.isFinite(d) && d > 0) ? d : ((Number.isFinite(cfgD) && cfgD > 0) ? cfgD : 100);
+  return { thickness_mm, depth_mm };
+}
+
+function computeApexRiseMm_likeRoofJs(state, spanA_mm) {
+  const A_mm = Math.max(1, Math.floor(Number(spanA_mm || 1)));
+
+  const OSB_THK_MM = 18;
+
+  function _numOrNull(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function _firstFinite() {
+    for (let i = 0; i < arguments.length; i++) {
+      const n = _numOrNull(arguments[i]);
+      if (n != null) return n;
+    }
+    return null;
+  }
+
+  const apex = (state && state.roof && state.roof.apex) ? state.roof.apex : null;
+
+  const eavesCtl_mm = _firstFinite(
+    apex && apex.eavesHeight_mm,
+    apex && apex.heightToEaves_mm,
+    apex && apex.eaves_mm,
+    apex && apex.minHeight_mm,
+    apex && apex.heightEaves_mm
+  );
+
+  const crestCtl_mm = _firstFinite(
+    apex && apex.crestHeight_mm,
+    apex && apex.heightToCrest_mm,
+    apex && apex.crest_mm,
+    apex && apex.maxHeight_mm,
+    apex && apex.ridgeHeight_mm,
+    apex && apex.heightCrest_mm
+  );
+
+  // Legacy default
+  let rise_mm = clamp(Math.floor(A_mm * 0.20), 200, 900);
+
+  if (eavesCtl_mm != null && crestCtl_mm != null) {
+    const e0 = Math.max(0, Math.floor(eavesCtl_mm));
+    let c0 = Math.max(0, Math.floor(crestCtl_mm));
+    if (c0 < e0) c0 = e0;
+    if (c0 < (e0 + OSB_THK_MM)) c0 = (e0 + OSB_THK_MM);
+
+    const halfSpan_mm = Math.max(1, Math.floor(A_mm / 2));
+    const delta_mm = Math.max(0, Math.floor(c0 - e0));
+
+    const solveRiseFromDelta = (delta, halfSpan, osbThk) => {
+      const target = Math.max(osbThk, Math.floor(delta));
+      const f = (r) => {
+        const rr = Math.max(0, Number(r));
+        const den = Math.sqrt(halfSpan * halfSpan + rr * rr);
+        const cosT = den > 1e-6 ? (halfSpan / den) : 1;
+        return rr + (cosT * osbThk);
+      };
+      let lo = 0;
+      let hi = Math.max(target + 2000, 1);
+      for (let it = 0; it < 32; it++) {
+        const mid = (lo + hi) / 2;
+        if (f(mid) >= target) hi = mid;
+        else lo = mid;
+      }
+      return Math.max(0, Math.floor(hi));
+    };
+
+    rise_mm = solveRiseFromDelta(delta_mm, halfSpan_mm, OSB_THK_MM);
+  }
+
+  return Math.max(0, Math.floor(rise_mm));
+}
+
+function computeApexRoofUndersideModelMm(state) {
+  // Returns an underside-height function for the APEX roof in WORLD mm, consistent with roof.js.
+  // Used to: (1) ensure cladding extends to roof line, (2) build the APEX gable CSG roof-trim cutter.
+  try {
+    const dims = resolveDims(state);
+    const ovh = (dims && dims.overhang) ? dims.overhang : { l_mm: 0, r_mm: 0, f_mm: 0, b_mm: 0 };
+    const l_mm = Math.max(0, Math.floor(Number(ovh.l_mm || 0)));
+
+    const roofW_mm = Math.max(1, Math.floor(Number(dims?.roof?.w_mm ?? 1)));
+    const A_mm = roofW_mm;
+    const halfSpan_mm = Math.max(1, Math.floor(A_mm / 2));
+
+    const rise_mm = computeApexRiseMm_likeRoofJs(state, A_mm);
+
+    const g = getRoofFrameGauge_Apex(state);
+    const baseW = Math.max(1, Math.floor(Number(g.thickness_mm)));
+    const baseD = Math.max(1, Math.floor(Number(g.depth_mm)));
+    const memberW_mm = baseD;
+    const memberD_mm = baseW;
+
+    const den = Math.sqrt(halfSpan_mm * halfSpan_mm + rise_mm * rise_mm);
+    const cosT = den > 1e-6 ? (halfSpan_mm / den) : 1;
+
+    const OSB_CLEAR_MM = 1;
+    const eavesUnderLocalY_mm = memberD_mm + cosT * (memberD_mm + OSB_CLEAR_MM);
+
+    // roof.js placement rule (APEX):
+    // - If BOTH eaves+crest controls provided => solve roofRootY so OSB underside at the roof edge hits eavesTargetAbs.
+    // - Else => roofRootY sits at wallH (state.walls.height_mm).
+    const apex = (state && state.roof && state.roof.apex) ? state.roof.apex : null;
+    const eCtl = Number(apex && (apex.eavesHeight_mm ?? apex.heightToEaves_mm ?? apex.eaves_mm ?? apex.minHeight_mm ?? apex.heightEaves_mm));
+    const cCtl = Number(apex && (apex.crestHeight_mm ?? apex.heightToCrest_mm ?? apex.crest_mm ?? apex.maxHeight_mm ?? apex.ridgeHeight_mm ?? apex.heightCrest_mm));
+    const hasControls = Number.isFinite(eCtl) && Number.isFinite(cCtl);
+
+    const wallH_mm = Math.max(100, Math.floor(Number(state && state.walls && state.walls.height_mm != null ? state.walls.height_mm : 2400)));
+
+    let roofRootY_mm = wallH_mm;
+    if (hasControls) {
+      // Use the same corrected eaves target as roof.js (crest correction handled inside rise solver).
+      const eavesTargetAbs_mm = Math.max(0, Math.floor(eCtl));
+      roofRootY_mm = Math.floor(eavesTargetAbs_mm - eavesUnderLocalY_mm);
+    }
+
+    // roofRoot X aligns local min corner to world -l (yaw=0), so: localX = worldX + l
+    const roofRootX_mm = -l_mm;
+    const ridgeLocalX_mm = halfSpan_mm;
+    const ridgeWorldX_mm = roofRootX_mm + ridgeLocalX_mm;
+
+    const yUnderAtLocalX_mm = (xLocal_mm) => {
+      const x = Math.max(0, Math.min(A_mm, Math.floor(Number(xLocal_mm))));
+      const dx = Math.abs(x - ridgeLocalX_mm);
+      const t = Math.max(0, Math.min(1, 1 - (dx / halfSpan_mm)));
+      const ySurf_mm = memberD_mm + Math.floor(rise_mm * t);
+      return ySurf_mm + cosT * (memberD_mm + OSB_CLEAR_MM);
+    };
+
+    const yUnderAtWorldX_mm = (xWorld_mm) => {
+      const xLocal_mm = Math.floor(Number(xWorld_mm)) - roofRootX_mm; // == xWorld + l
+      return roofRootY_mm + yUnderAtLocalX_mm(xLocal_mm);
+    };
+
+    return {
+      yUnderAtWorldX_mm,
+      ridgeWorldX_mm
+    };
+  } catch (e) {
+    return null;
+  }
 }
