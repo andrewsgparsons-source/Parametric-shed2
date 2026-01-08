@@ -867,11 +867,11 @@ export function build3D(state, ctx) {
             const y0Clamped = Math.min(y0Win, maxFeatureYWin);
             const y1Clamped = Math.min(yTopWin, maxFeatureYWin);
 
-            // The cladding aperture should be between:
-            // - Top of the sill timber (y0Clamped + prof.studH)
-            // - Bottom of the header timber (y1Clamped)
-            const cutY0 = y0Clamped + prof.studH;
-            const cutY1 = y1Clamped;
+            // The cladding aperture should expose the full window frame:
+            // - Bottom of the sill timber (y0Clamped) 
+            // - Top of the header timber (y1Clamped + prof.studH)
+            const cutY0 = y0Clamped;
+            const cutY1 = y1Clamped + prof.studH;
             addCutterSpan(w.x0, w.x1, cutY0, cutY1);
           }
 
