@@ -171,6 +171,9 @@ export function build3D(state, ctx) {
     : height;
 
   const frameW = Math.max(1, dims.w);
+  if (isPent) {
+    console.log('PENT_DEBUG:', { isPent, minH, maxH, height, frameW, stateMinH: state?.roof?.pent?.minHeight_mm, stateMaxH: state?.roof?.pent?.maxHeight_mm });
+  }
 
   function heightAtX(x_mm) {
     const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
