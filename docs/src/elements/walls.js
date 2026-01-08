@@ -855,15 +855,19 @@ export function build3D(state, ctx) {
 
           for (let i = 0; i < wins.length; i++) {
             const w = wins[i];
-            const y0Raw = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
-            const y1Raw = y0Raw + Math.max(1, Math.floor(Number(w.h || 0)));
-            
-            // Apply the same clamping as window framing to ensure alignment
-            const maxFeatureY = Math.max(plateY, panelHeightMm - prof.studH);
-            const y0 = Math.min(y0Raw, maxFeatureY);
-            const y1 = Math.min(y1Raw, maxFeatureY);
-            
-            addCutterSpan(w.x0, w.x1, y0, y1);
+            // Match window framing Y calculation exactly:
+            // Window framing uses wallTop which varies by position for sloped walls
+            const isSlopeWallClad = isPent && isAlongX && (String(wallId) === "front" || String(wallId) === "back");
+            const centerX = origin.x + Math.floor((w.x0 + w.x1) / 2);
+            const wallTopForWin = isSlopeWallClad ? heightAtX(centerX) : panelHeightMm;
+
+            const y0Win = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
+            const yTopWin = y0Win + Math.max(100, Math.floor(Number(w.h || 0)));
+            const maxFeatureYWin = Math.max(plateY, wallTopForWin - prof.studH);
+            const y0Clamped = Math.min(y0Win, maxFeatureYWin);
+            const y1Clamped = Math.min(yTopWin, maxFeatureYWin);
+
+            addCutterSpan(w.x0, w.x1, y0Clamped, y1Clamped);
           }
 
           if (cutters.length) {
