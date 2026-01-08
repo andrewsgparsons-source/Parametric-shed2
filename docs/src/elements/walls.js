@@ -861,17 +861,22 @@ export function build3D(state, ctx) {
             const centerX = origin.x + Math.floor((w.x0 + w.x1) / 2);
             const wallTopForWin = isSlopeWallClad ? heightAtX(centerX) : panelHeightMm;
 
-            const y0Win = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
-            const yTopWin = y0Win + Math.max(100, Math.floor(Number(w.h || 0)));
-            const maxFeatureYWin = Math.max(plateY, wallTopForWin - prof.studH);
-            const y0Clamped = Math.min(y0Win, maxFeatureYWin);
-            const y1Clamped = Math.min(yTopWin, maxFeatureYWin);
+            // Cladding is built in world coordinates (anchored to shifted plate mesh).
+            // Window y values are in local wall coordinates, so we need to add the wall shift.
+            const wallShiftY = wallBottomPlateBottomY_mm; // typically 168 (WALL_RISE_MM)
 
+            const y0WinLocal = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
+            const yTopWinLocal = y0WinLocal + Math.max(100, Math.floor(Number(w.h || 0)));
+            const maxFeatureYLocal = Math.max(plateY, wallTopForWin - prof.studH);
+            const y0ClampedLocal = Math.min(y0WinLocal, maxFeatureYLocal);
+            const y1ClampedLocal = Math.min(yTopWinLocal, maxFeatureYLocal);
+
+            // Convert to world coordinates for the cladding cutout
             // The cladding aperture should expose the full window frame:
-            // - Bottom of the sill timber (y0Clamped) 
+            // - Bottom of the sill timber (y0Clamped)
             // - Top of the header timber (y1Clamped + prof.studH)
-            const cutY0 = y0Clamped;
-            const cutY1 = y1Clamped + prof.studH;
+            const cutY0 = wallShiftY + y0ClampedLocal;
+            const cutY1 = wallShiftY + y1ClampedLocal + prof.studH;
             addCutterSpan(w.x0, w.x1, cutY0, cutY1);
           }
 
