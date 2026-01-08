@@ -854,8 +854,14 @@ export function build3D(state, ctx) {
 
           for (let i = 0; i < wins.length; i++) {
             const w = wins[i];
-            const y0 = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
-            const y1 = y0 + Math.max(1, Math.floor(Number(w.h || 0)));
+            const y0Raw = plateY + Math.max(0, Math.floor(Number(w.y || 0)));
+            const y1Raw = y0Raw + Math.max(1, Math.floor(Number(w.h || 0)));
+            
+            // Apply the same clamping as window framing to ensure alignment
+            const maxFeatureY = Math.max(plateY, panelHeightMm - prof.studH);
+            const y0 = Math.min(y0Raw, maxFeatureY);
+            const y1 = Math.min(y1Raw, maxFeatureY);
+            
             addCutterSpan(w.x0, w.x1, y0, y1);
           }
 
