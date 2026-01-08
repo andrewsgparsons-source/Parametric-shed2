@@ -399,6 +399,29 @@ export function build3D(state, ctx) {
       }
     } catch (e) {}
 
+    // FIX: If bbox lookup failed, use deterministic fallback based on wall geometry
+    // This ensures cladding is always generated even if plate mesh lookup fails
+    if (!Number.isFinite(xMin_mm) || !Number.isFinite(xMax_mm) || !Number.isFinite(zMin_mm) || !Number.isFinite(zMax_mm)) {
+      if (isAlongX) {
+        // Front/back walls run along X
+        xMin_mm = origin.x + panelStart;
+        xMax_mm = origin.x + panelStart + panelLen;
+        zMin_mm = origin.z;
+        zMax_mm = origin.z + wallThk;
+      } else {
+        // Left/right walls run along Z
+        xMin_mm = origin.x;
+        xMax_mm = origin.x + wallThk;
+        zMin_mm = origin.z + panelStart;
+        zMax_mm = origin.z + panelStart + panelLen;
+      }
+      // Use default Y anchoring
+      wallBottomPlateBottomY_mm = 0;
+      wallBottomPlateTopY_mm = plateY;
+      const desiredFirstBottomY_mm = wallBottomPlateBottomY_mm - CLAD_BOTTOM_DROP_MM;
+      claddingAnchorY_mm = desiredFirstBottomY_mm - 95;
+    }
+
     // Determine outside plane + outward sign per panel (bbox-derived), with deterministic fallback ONLY if bbox invalid
     let outsidePlaneZ_mm = null;
     let outwardSignZ = 1;
@@ -559,6 +582,15 @@ export function build3D(state, ctx) {
       if (courses < 1) return { created: 0, anchor: null, reason: "courses<1(apexAdjust)" };
     }
 
+    // FIX: PENT roof - ensure side walls (left/right) have enough courses to reach wall height
+    if (isPent && !isAlongX && (String(wallId) === "left" || String(wallId) === "right")) {
+      const targetH = (String(wallId) === "left") ? minH : maxH;
+      const pad_mm = 10;
+      const requiredTop_mm = Math.floor(targetH + pad_mm);
+      const needCourses = Math.max(1, Math.ceil((requiredTop_mm - claddingAnchorY_mm) / CLAD_H) + 1);
+      if (Number.isFinite(needCourses) && needCourses > courses) courses = needCourses;
+    }
+
     for (let i = 0; i < courses; i++) {
       const isFirst = i === 0;
       const firstCourseYOffsetMm = (isFirst ? 125 : 0);
@@ -648,6 +680,7 @@ export function build3D(state, ctx) {
           }
         }
       } else {
+        // LEFT/RIGHT walls (along Z axis)
         const wallOutsideFaceWorld = (outsidePlaneX_mm !== null ? outsidePlaneX_mm : (origin.x + wallThk));
         const outwardNormalX = outwardSignX;
 
@@ -657,8 +690,10 @@ export function build3D(state, ctx) {
         const boardCenterWorldX = wallOutsideFaceWorld + outwardNormalX * (CLAD_T / 2);
         const xBottomMin = boardCenterWorldX - (CLAD_T / 2);
 
-        const zStart_mm = (Number.isFinite(panelMinAxis_mm) ? panelMinAxis_mm : (origin.z + panelStart));
-        const panelLenAdj = Math.max(1, panelLen);
+        // FIX: Use the actual panel Z extents for cladding length
+        const zStart_mm = (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + panelStart));
+        const zEnd_mm = (Number.isFinite(zMax_mm) ? zMax_mm : (origin.z + panelStart + panelLen));
+        const panelLenAdj = Math.max(1, zEnd_mm - zStart_mm);
 
         const b0 = mkBox(
           `clad-${wallId}-panel-${panelIndex}-c${i}-bottom`,
@@ -1015,8 +1050,9 @@ export function build3D(state, ctx) {
                 // Left wall cuts at minH, right wall cuts at maxH
                 const cutHeight = (String(wallId) === "left") ? minH : maxH;
 
-                const zA0 = origin.z + Math.floor(Number(panelStart || 0));
-                const zA1 = zA0 + Math.floor(Number(panelLen || 0));
+                // FIX: Use the actual cladding Z extents
+                const zA0 = (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + Math.floor(Number(panelStart || 0))));
+                const zA1 = (Number.isFinite(zMax_mm) ? zMax_mm : (origin.z + Math.floor(Number(panelStart || 0)) + Math.floor(Number(panelLen || 0))));
 
                 // Create a box cutter above the cut height
                 const cutterHeight = 20000; // Tall enough to cut everything above
