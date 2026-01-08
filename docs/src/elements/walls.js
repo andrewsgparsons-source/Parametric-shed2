@@ -171,9 +171,6 @@ export function build3D(state, ctx) {
     : height;
 
   const frameW = Math.max(1, dims.w);
-  if (isPent) {
-    console.log('PENT_DEBUG:', { isPent, minH, maxH, height, frameW, stateMinH: state?.roof?.pent?.minHeight_mm, stateMaxH: state?.roof?.pent?.maxHeight_mm });
-  }
 
   function heightAtX(x_mm) {
     const x = Math.max(0, Math.min(frameW, Math.floor(Number(x_mm))));
@@ -976,8 +973,10 @@ export function build3D(state, ctx) {
                 const xA0 = origin.x + Math.floor(Number(panelStart || 0));
                 const xA1 = xA0 + Math.floor(Number(panelLen || 0));
 
-                const yA0 = heightAtX(xA0);
-                const yA1 = heightAtX(xA1);
+                // PENT: clip to underside line (not wall top). Drop by top-plate thickness.
+                const PENT_CLIP_DROP_MM = plateY; // 50mm typically
+                const yA0 = Math.max(0, heightAtX(xA0) - PENT_CLIP_DROP_MM);
+                const yA1 = Math.max(0, heightAtX(xA1) - PENT_CLIP_DROP_MM);
 
                 const wedge = mkWedgeAboveLineX_Fixed(
                   `cladroofcut-${String(wallId)}-panel-${String(panelIndex)}-pent`,
@@ -1051,7 +1050,10 @@ export function build3D(state, ctx) {
                 const cutMaxX_mm = Math.floor(wallOutsideFaceWorldX + CLAD_T + CUT_EXTRA_ROOF);
 
                 // Left wall cuts at minH, right wall cuts at maxH
-                const cutHeight = (String(wallId) === "left") ? minH : maxH;
+                // PENT: clip to underside line (not wall top). Drop by top-plate thickness.
+                const PENT_CLIP_DROP_MM = plateY;
+                const cutHeightRaw = (String(wallId) === "left") ? minH : maxH;
+                const cutHeight = Math.max(0, Math.floor(cutHeightRaw - PENT_CLIP_DROP_MM));
 
                 // FIX: Use the actual cladding Z extents
                 const zA0 = (Number.isFinite(zMin_mm) ? zMin_mm : (origin.z + Math.floor(Number(panelStart || 0))));
