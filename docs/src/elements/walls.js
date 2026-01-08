@@ -867,7 +867,12 @@ export function build3D(state, ctx) {
             const y0Clamped = Math.min(y0Win, maxFeatureYWin);
             const y1Clamped = Math.min(yTopWin, maxFeatureYWin);
 
-            addCutterSpan(w.x0, w.x1, y0Clamped, y1Clamped);
+            // The cladding aperture should be between:
+            // - Top of the sill timber (y0Clamped + prof.studH)
+            // - Bottom of the header timber (y1Clamped)
+            const cutY0 = y0Clamped + prof.studH;
+            const cutY1 = y1Clamped;
+            addCutterSpan(w.x0, w.x1, cutY0, cutY1);
           }
 
           if (cutters.length) {
