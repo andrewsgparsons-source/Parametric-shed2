@@ -1,5 +1,6 @@
 // FILE: docs/src/instances.js
 import { DEFAULTS } from "./params.js";
+import { getBuiltInPresets, getDefaultBuiltInPresetId, findBuiltInPresetById } from "../instances.js";
 
 export function initInstancesUI({ store, ids, dbg }) {
   function $(id) { return document.getElementById(id); }
@@ -15,6 +16,19 @@ export function initInstancesUI({ store, ids, dbg }) {
   // ---- Instances (Save/Load Presets) ----
   var LS_INSTANCES_KEY = "shedInstances_v1";
   var LS_ACTIVE_KEY = "shedInstancesActive_v1";
+
+  // ---- Built-in presets (repo shipped) ----
+  function getBuiltInDefaultStatePatch() {
+    try {
+      var defId = getDefaultBuiltInPresetId && getDefaultBuiltInPresetId();
+      var p = (findBuiltInPresetById && defId) ? findBuiltInPresetById(defId) : null;
+      if (p && p.state && typeof p.state === "object") return p.state;
+    } catch (e) {}
+    return null;
+  }
+
+  // Prevent repeated auto-load loops during initialization.
+  var _didAutoLoadOnInit = false;
 
   var _instProvider = null;
   var _instUsingFallback = false;
@@ -250,6 +264,12 @@ export function initInstancesUI({ store, ids, dbg }) {
     }
   }
 
+  function applyLoadedState(stateObj) {
+    var baseline = cloneJson(DEFAULTS);
+    var merged = deepMerge(baseline, cloneJson(stateObj || {}));
+    store.setState(merged);
+  }
+
   function loadFrom(name) {
     var nm = String(name || "").trim();
     if (!nm) return;
@@ -264,9 +284,7 @@ export function initInstancesUI({ store, ids, dbg }) {
         return;
       }
 
-      var baseline = cloneJson(DEFAULTS);
-      var merged = deepMerge(baseline, cloneJson(saved));
-      store.setState(merged);
+      applyLoadedState(saved);
 
       writeActiveName(nm);
       rebuildInstanceSelect(nm);
@@ -424,7 +442,35 @@ export function initInstancesUI({ store, ids, dbg }) {
       hintStorageStatusIfNeeded(null);
     }
 
-    rebuildInstanceSelect(null);
+    var sel = rebuildInstanceSelect(null);
+
+    // Auto-load behavior:
+    // 1) If an active saved design exists and is valid, load it immediately (no need to click Load).
+    // 2) Otherwise, load the built-in default preset (door + window) for a realistic first view.
+    if (!_didAutoLoadOnInit) {
+      _didAutoLoadOnInit = true;
+
+      try {
+        var map = sel && sel.map ? sel.map : readInstances();
+        var activeName = readActiveName();
+        var hasActive = !!(activeName && map && typeof map === "object" && map[activeName] && typeof map[activeName] === "object");
+
+        if (hasActive) {
+          applyLoadedState(map[activeName]);
+          if (_instProbe.persistentOk) setInstancesHint("Auto-loaded: " + activeName);
+          else setInstancesHint("Auto-loaded: " + activeName + " (session only)");
+        } else {
+          var built = getBuiltInDefaultStatePatch();
+          if (built) {
+            applyLoadedState(built);
+            if (_instProbe.persistentOk) setInstancesHint("Loaded default preset.");
+            else setInstancesHint("Loaded default preset. (session only)");
+          }
+        }
+      } catch (e) {
+        // No hard failure; fall back to whatever state is already present.
+      }
+    }
   }
 
   // Keep lifecycle identical: init immediately when called.
