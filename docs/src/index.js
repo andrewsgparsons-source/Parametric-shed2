@@ -1,4 +1,34 @@
-// FILE: docs/src/index.js
+/**
+ * @fileoverview Main Application Entry Point
+ * 
+ * This is the primary orchestrator for the Parametric Shed Configurator.
+ * It handles:
+ * - Babylon.js scene initialization
+ * - State management and reactive updates
+ * - UI panel generation and event binding
+ * - Profile system for different user modes (admin/customer/viewer)
+ * - URL state encoding/decoding for shareable designs
+ * - BOM (Bill of Materials) calculation and display
+ * 
+ * ## Application Flow
+ * 1. Load profile definitions from profiles.json
+ * 2. Initialize Babylon.js scene with materials
+ * 3. Create state store with defaults (or from URL)
+ * 4. Generate UI controls based on active profile
+ * 5. Subscribe to state changes → trigger rebuild()
+ * 6. On any state change: dispose old geometry, build new, update BOM
+ * 
+ * ## Debug Access
+ * Global `window.__dbg` object exposes:
+ * - `engine` - Babylon.js engine instance
+ * - `scene` - Babylon.js scene
+ * - `camera` - Active camera
+ * - `frames` - Frame counter
+ * - `buildCalls` - Rebuild counter
+ * - `lastError` - Last caught error
+ * 
+ * @module index
+ */
 
 window.__dbg = window.__dbg || {};
 window.__dbg.initStarted = true;

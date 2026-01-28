@@ -1,9 +1,42 @@
-// FILE: docs/src/elements/attachments.js
-//
-// Attachment Builder - Builds complete sub-buildings attached to the main structure
-// Each attachment has its own base, floor, walls (3 of 4 with sloped tops for pent), and roof
-// The pent roof is constructed properly with rafters, OSB, covering, and fascia
-// Following the same construction approach as the main building's roof.js
+/**
+ * @fileoverview Attachment Builder - Creates sub-buildings attached to the main structure
+ * 
+ * Attachments are secondary buildings that share one wall with the main building.
+ * Each attachment has its own:
+ * - Base (ground supports)
+ * - Floor (joists and OSB)
+ * - Walls (3 of 4, with the 4th being the main building's wall)
+ * - Roof (pent or apex style)
+ * 
+ * ## Coordinate System
+ * Attachments use the same coordinate system as the main building:
+ * - X = width (left to right)
+ * - Y = height (up)
+ * - Z = depth (front to back)
+ * 
+ * ## Attachment Walls
+ * The `attachTo.wall` parameter determines which wall of the main building
+ * the attachment connects to:
+ * - "left"  → attachment extends in +X direction
+ * - "right" → attachment extends in -X direction  
+ * - "front" → attachment extends in -Z direction
+ * - "back"  → attachment extends in +Z direction
+ * 
+ * ## Dimension Mapping
+ * For left/right attachments:
+ * - `width_mm` = dimension along the attached wall (Z direction)
+ * - `depth_mm` = dimension outward from main building (X direction)
+ * 
+ * For front/back attachments:
+ * - `width_mm` = dimension along the attached wall (X direction)
+ * - `depth_mm` = dimension outward from main building (Z direction)
+ * 
+ * ## Roof Types
+ * - **Pent**: Single slope, high edge at main building, low edge outward
+ * - **Apex**: Gabled roof with ridge running perpendicular to attached wall
+ * 
+ * @module elements/attachments
+ */
 
 import { CONFIG } from '../params.js';
 

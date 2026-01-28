@@ -1,12 +1,41 @@
-// FILE: docs/src/elements/roof.js
 /**
- * Roof:
- * - PENT: existing logic unchanged.
- * - APEX: adds gable roof with repeated trusses + ridge + purlins + simple sheathing.
- *
- * All roof meshes:
- * - name prefix `${meshPrefix}roof-`
- * - metadata.dynamic === true
+ * @fileoverview Roof Builder - Creates pent and apex roof structures
+ * 
+ * Supports two roof styles:
+ * - **Pent (lean-to)**: Single slope from high edge to low edge
+ * - **Apex (gabled)**: Two slopes meeting at a central ridge
+ * 
+ * ## Pent Roof Components
+ * - Rafters running down the slope
+ * - Rim joists at front and back
+ * - OSB sheathing on top of rafters
+ * - Felt covering with fold-down edges
+ * - Fascia boards at all edges
+ * 
+ * ## Apex Roof Components
+ * - Trusses at regular intervals (default 600mm)
+ *   - Two rafters meeting at peak
+ *   - Tie beam at eaves level (or raised option)
+ *   - Optional kingpost
+ * - Purlins running along the roof at 609mm centres (OSB edge support)
+ * - OSB sheathing in individual 8×4ft sheets
+ * - Felt covering with fold-down edges
+ * - Ridge cap at peak
+ * - Fascia boards at eaves and verges
+ * 
+ * ## Mesh Naming Convention
+ * All roof meshes use the pattern: `${meshPrefix}roof-${part}-${index}`
+ * Where meshPrefix includes section ID for multi-section buildings.
+ * 
+ * ## Key Measurements
+ * - Rafter section: 100mm × 50mm (W × D)
+ * - Purlin spacing: 609mm (half of 1220mm OSB width)
+ * - Truss spacing: 600mm (configurable via trussCount)
+ * - OSB thickness: 18mm
+ * - Covering thickness: 2mm
+ * - Fascia: 20mm × 135mm
+ * 
+ * @module elements/roof
  */
 
 import { CONFIG, resolveDims } from "../params.js";

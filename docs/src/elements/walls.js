@@ -1,3 +1,42 @@
+/**
+ * @fileoverview Wall Builder - Creates timber-framed wall structures
+ * 
+ * Builds the four walls of the main building with proper framing:
+ * - Bottom and top plates
+ * - Studs at regular intervals (400mm centres)
+ * - Door and window framing with headers, sills, and cripple studs
+ * - External cladding (lapped boards)
+ * - Optional insulation (PIR) and internal plywood lining
+ * 
+ * ## Wall Orientation
+ * - **Front/Back**: Run along X axis, thickness extends in ±Z
+ * - **Left/Right**: Run along Z axis, thickness extends in ±X
+ * 
+ * ## Corner Construction
+ * - Front/Back walls are full building width
+ * - Left/Right walls fit BETWEEN front/back (no overlap)
+ * - Creates proper corner posts for structural integrity
+ * 
+ * ## Variants
+ * - **Basic**: 75mm wall thickness (50×75mm studs)
+ * - **Insulated**: 100mm wall thickness (50×100mm studs) + PIR insulation + ply lining
+ * 
+ * ## Roof Integration
+ * - **Pent roof**: Wall heights vary along X (sloped top plates)
+ * - **Apex roof**: Constant wall height to eaves, gable infill above on front/back
+ * 
+ * ## Key Measurements
+ * - Stud width: 50mm
+ * - Stud depth: 75mm (basic) or 100mm (insulated)
+ * - Stud spacing: 400mm centres
+ * - Plate height: 50mm
+ * - Cladding: 140mm boards × 20mm thick
+ * - Insulation: 50mm PIR (Celotex)
+ * - Internal lining: 12mm plywood
+ * 
+ * @module elements/walls
+ */
+
 import { CONFIG, resolveDims } from "../params.js";
 
 /**
